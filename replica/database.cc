@@ -32,6 +32,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
 #include "db/system_keyspace.hh"
+#include "db/object_storage_page_cache_table.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -276,6 +277,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
         semaphore_dump("streaming", _streaming_concurrency_sem);
         semaphore_dump("system", _system_read_concurrency_sem);
         semaphore_dump("compaction", _compaction_concurrency_sem);
+        semaphore_dump("object_storage_page_cache", _object_storage_page_cache_sem);
         _reader_concurrency_semaphores_group.foreach_semaphore([&semaphore_dump] (scheduling_group sg, reader_concurrency_semaphore& sem) {
              semaphore_dump(sg.name(), sem);
         });
@@ -451,6 +453,9 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             reader_concurrency_semaphore_shared_pool::empty_pool())
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)
+    // No limits, just for accounting.
+    , _object_storage_page_cache_sem(reader_concurrency_semaphore::no_limits{}, "object_storage_page_cache",
+            reader_concurrency_semaphore::register_metrics::no)
     , _system_read_concurrency_sem(
             // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
             max_count_concurrent_reads,
@@ -1231,7 +1236,11 @@ future<> database::create_local_system_table(
         schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
     auto ks_name = table->ks_name();
     if (!has_keyspace(ks_name)) {
-        bool durable = _cfg.data_file_directories().size() > 0;
+        // Local system keyspaces use durable writes (the commitlog), except
+        // system_cache, the keyspace of the object-storage disk cache: losing
+        // the most recently cached pages in a crash is acceptable, so it does
+        // not need the commitlog.
+        bool durable = _cfg.data_file_directories().size() > 0 && ks_name != db::object_storage_page_cache_table::SYSTEM_CACHE;
         auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
                 "org.apache.cassandra.locator.LocalStrategy",
                 locator::replication_strategy_config_options{},
@@ -2162,6 +2171,7 @@ future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const ch
 bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) const {
     return &semaphore != &_streaming_concurrency_sem
         && &semaphore != &_compaction_concurrency_sem
+        && &semaphore != &_object_storage_page_cache_sem
         && &semaphore != &_system_read_concurrency_sem;
 }
 
@@ -2173,7 +2183,7 @@ future<> database::clear_inactive_reads_for_tablet(table_id table, dht::token_ra
 }
 
 future<> database::foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func) {
-    for (auto* sem : {&_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
+    for (auto* sem : {&_streaming_concurrency_sem, &_compaction_concurrency_sem, &_object_storage_page_cache_sem, &_system_read_concurrency_sem}) {
         co_await func(*sem);
     }
     co_await _reader_concurrency_semaphores_group.foreach_semaphore_async([&] (scheduling_group sg, reader_concurrency_semaphore& sem) -> future<> {
@@ -3048,6 +3058,11 @@ future<> database::stop() {
     co_await _querier_cache.stop();
     dblog.info("Closing user sstables manager");
     co_await _user_sstables_manager->close();
+    if (_object_storage_page_cache) {
+        dblog.info("Stopping the object storage page cache");
+        co_await _object_storage_page_cache->stop();
+        _object_storage_page_cache.reset();
+    }
     dblog.info("Closing system sstables manager");
     co_await _system_sstables_manager->close();
     dblog.info("Stopping concurrency semaphores");
@@ -3055,6 +3070,7 @@ future<> database::stop() {
     co_await _view_update_read_concurrency_semaphores_group.stop();
     co_await _streaming_concurrency_sem.stop();
     co_await _compaction_concurrency_sem.stop();
+    co_await _object_storage_page_cache_sem.stop();
     co_await _system_read_concurrency_sem.stop();
     dblog.info("Joining memtable update action");
     co_await _update_memtable_flush_static_shares_action.join();
@@ -3907,9 +3923,24 @@ void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
     _large_data_handler->plug_system_keyspace(sys_ks);
     _corrupt_data_handler->plug_system_keyspace(sys_ks);
     _user_sstables_manager->plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(sys_ks));
+    if (_cfg.check_experimental(db::experimental_features_t::feature::OBJECT_STORAGE_PAGE_CACHE)) {
+        _object_storage_page_cache = std::make_unique<db::object_storage_page_cache_table>(*this, sys_ks.query_processor(),
+                utils::updateable_value<uint64_t>(_cfg.object_storage_page_cache_size_in_mb),
+                utils::updateable_value<uint64_t>(_cfg.object_storage_page_cache_max_remembered_hits),
+                utils::updateable_value<bool>(_cfg.object_storage_page_cache_populate_on_flush));
+        _object_storage_page_cache->start(_user_sstables_manager->maintenance_sg());
+        _user_sstables_manager->plug_object_storage_page_cache(*_object_storage_page_cache);
+    }
 }
 
 future<> database::unplug_system_keyspace() noexcept {
+    // New readers don't use the cache, but those which already do may keep
+    // using it until their sstables are released - so it is only drained
+    // here, before the query processor stops, and stopped in stop().
+    _user_sstables_manager->unplug_object_storage_page_cache();
+    if (_object_storage_page_cache) {
+        co_await _object_storage_page_cache->drain();
+    }
     _user_sstables_manager->unplug_sstables_registry();
     co_await _compaction_manager.unplug_system_keyspace();
     co_await _large_data_handler->unplug_system_keyspace();

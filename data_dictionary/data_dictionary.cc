@@ -28,6 +28,13 @@
 
 namespace data_dictionary {
 
+using namespace std::string_view_literals;
+
+// The STORAGE option choosing a storage_options::disk_cache_mode, and its values.
+static constexpr auto disk_cache_option = "disk_cache"sv;
+static constexpr auto disk_cache_none = "none"sv;
+static constexpr auto disk_cache_pages = "pages"sv;
+
 schema_ptr
 table::schema() const {
     return _ops->get_table_schema(*this);
@@ -263,6 +270,19 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     if (params.consistency && *params.consistency == data_dictionary::consistency_config_option::local) {
         throw exceptions::configuration_exception("Local consistency is not supported yet");
     }
+    auto* os = std::get_if<storage_options::object_storage>(&get_storage_options().value);
+    if (os && os->disk_cache != storage_options::disk_cache_mode::none) {
+        if (!fs.object_storage_page_cache) {
+            throw exceptions::configuration_exception(fmt::format("STORAGE option '{}' requires the experimental feature "
+                    "'object-storage-page-cache' to be enabled on all nodes", disk_cache_option));
+        }
+        // With tablets, whole sstables move between nodes and shards, so the
+        // page cache can follow its sstables or be dropped along with them.
+        if (!params.initial_tablets) {
+            throw exceptions::configuration_exception(fmt::format("STORAGE option '{}' is only supported in keyspaces with tablets",
+                    disk_cache_option));
+        }
+    }
 }
 
 locator::replication_strategy_config_options keyspace_metadata::strategy_options_v1() const {
@@ -346,18 +366,33 @@ static storage_options::object_storage object_storage_from_map(std::string_view 
             throw std::runtime_error(fmt::format("Missing {} option: {}", type, option.first));
         }
     }
-    if (values.size() > allowed_options.size()) {
-        throw std::runtime_error(fmt::format("Extraneous options for {}: {}; allowed: {}",
+    size_t known_options = allowed_options.size();
+    if (auto it = values.find(sstring(disk_cache_option)); it != values.end()) {
+        if (it->second == disk_cache_pages) {
+            options.disk_cache = storage_options::disk_cache_mode::pages;
+        } else if (it->second != disk_cache_none) {
+            throw std::runtime_error(fmt::format("Unknown {} value '{}'; allowed: {},{}", disk_cache_option, it->second,
+                    disk_cache_none, disk_cache_pages));
+        }
+        ++known_options;
+    }
+    if (values.size() > known_options) {
+        throw std::runtime_error(fmt::format("Extraneous options for {}: {}; allowed: {},{}",
             type, fmt::join(values | std::views::keys, ","),
-            fmt::join(allowed_options | std::views::keys, ",")));
+            fmt::join(allowed_options | std::views::keys, ","), disk_cache_option));
     }
     options.type = std::string(type);
     return options;
 }
 
 std::map<sstring, sstring> storage_options::object_storage::to_map() const {
-    return {{"bucket", bucket},
-            {"endpoint", endpoint}};
+    std::map<sstring, sstring> ret{{"bucket", bucket},
+                                   {"endpoint", endpoint}};
+    // Without a disk cache, the map stays as it was before the option existed.
+    if (disk_cache == disk_cache_mode::pages) {
+        ret.emplace(disk_cache_option, disk_cache_pages);
+    }
+    return ret;
 }
 
 std::string_view storage_options::object_storage::name() const {
@@ -406,6 +441,32 @@ std::map<sstring, sstring> storage_options::to_map() const {
 
 bool storage_options::can_update_to(const storage_options& new_options) {
     return value == new_options.value;
+}
+
+static std::string_view disk_cache_mode_name(storage_options::disk_cache_mode mode) {
+    return mode == storage_options::disk_cache_mode::pages ? disk_cache_pages : disk_cache_none;
+}
+
+sstring storage_options::cannot_update_message(const storage_options& new_options) const {
+    auto old_storage = std::get_if<object_storage>(&value);
+    auto new_storage = std::get_if<object_storage>(&new_options.value);
+    if (old_storage && new_storage && old_storage->type == new_storage->type) {
+        // Name the options which changed: the type, which didn't, doesn't
+        // say what can't be changed.
+        std::vector<sstring> changes;
+        auto check = [&] (std::string_view option, std::string_view from, std::string_view to) {
+            if (from != to) {
+                changes.push_back(fmt::format("'{}' from '{}' to '{}'", option, from, to));
+            }
+        };
+        check("bucket", old_storage->bucket, new_storage->bucket);
+        check("endpoint", old_storage->endpoint, new_storage->endpoint);
+        check(disk_cache_option, disk_cache_mode_name(old_storage->disk_cache), disk_cache_mode_name(new_storage->disk_cache));
+        if (!changes.empty()) {
+            return fmt::format("Cannot alter storage options: changing {} is not supported", fmt::join(changes, " and "));
+        }
+    }
+    return fmt::format("Cannot alter storage options: {} to {} is not supported", type_string(), new_options.type_string());
 }
 
 storage_options storage_options::append_to_object_storage_prefix(const sstring& s) const {

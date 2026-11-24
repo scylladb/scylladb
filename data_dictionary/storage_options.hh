@@ -45,6 +45,18 @@ struct storage_options {
         foreign,
     };
 
+    // How an object-storage keyspace caches on the node's disk what it reads
+    // from the object store, chosen by the 'disk_cache' option of the
+    // keyspace's STORAGE clause. Either way, the object store holds every
+    // byte of every sstable.
+    enum class disk_cache_mode {
+        // Every read goes to the object store.
+        none,
+        // Byte ranges read from the object store are cached on disk, in a
+        // page cache.
+        pages,
+    };
+
     struct object_storage {
         std::string bucket;
         std::string endpoint;
@@ -53,6 +65,7 @@ struct storage_options {
 
         std::string type;
         object_storage_layout layout = object_storage_layout::unified;
+        disk_cache_mode disk_cache = disk_cache_mode::none;
 
         std::map<sstring, sstring> to_map() const;
         std::string_view name() const;
@@ -76,6 +89,9 @@ struct storage_options {
     std::map<sstring, sstring> to_map() const;
 
     bool can_update_to(const storage_options& new_options);
+    // The error message which explains why can_update_to(new_options) is
+    // false: which options were changed, and how.
+    sstring cannot_update_message(const storage_options& new_options) const;
 
     static value_type from_map(std::string_view type, const std::map<sstring, sstring>& values);
 

@@ -428,6 +428,7 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_range_query) {
                         mutation_reader::forwarding::yes,
                         default_read_monitor(),
                         sstables::integrity_check::no,
+                        sstables::populate_disk_cache::no,
                         std::make_unique<inexact_partition_index>(ncs, partition_positions, ck_positions, present_dks, cks, table.schema()),
                         static_cast<utils::hashed_key*>(nullptr)
                     ));
@@ -514,6 +515,7 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_singular_query) {
                 mutation_reader::forwarding::yes,
                 default_read_monitor(),
                 sstables::integrity_check::no,
+                sstables::populate_disk_cache::no,
                 std::make_unique<inexact_partition_index>(
                     ncs,
                     partition_positions,

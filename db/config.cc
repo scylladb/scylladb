@@ -1841,6 +1841,21 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "the caps itself.")
     , object_storage_clients_memory_fraction(this, "object_storage_clients_memory_fraction", value_status::Unused, 0.01,
         "Fraction of shard memory used as the buffer budget shared by all object storage clients.")
+    , object_storage_page_cache_size_in_mb(this, "object_storage_page_cache_size_in_mb", liveness::LiveUpdate, value_status::Used, 10240,
+        "The size, in MiB, of the node's object storage page cache - the cache, on the node's local disk, of the pages of sstables "
+        "on object storage, of keyspaces with the 'disk_cache': 'pages' storage option. Each shard's cache is limited to its share "
+        "of this size; when it grows beyond it, the pages which were used least recently are evicted. The size counts the cached "
+        "pages, but the cache takes more disk space than that - about 1.5 times as much, and more for short periods - so choose a "
+        "size well below the free disk space. 0 means no limit. Requires the experimental feature 'object-storage-page-cache'.")
+    , object_storage_page_cache_max_remembered_hits(this, "object_storage_page_cache_max_remembered_hits", liveness::LiveUpdate, value_status::Used, 10000000,
+        "The object storage page cache records the hits of its pages, for choosing which pages to evict. To save writes, "
+        "each shard records a page's hits only once in each round of eviction: it remembers the pages whose hits it recorded "
+        "in a Bloom filter, of about 1.2 bytes per page, sized for as many pages as its cache can hold - but for at most "
+        "this many pages. The hits of the pages beyond it are recorded every time. 0 means to record every hit.")
+    , object_storage_page_cache_populate_on_flush(this, "object_storage_page_cache_populate_on_flush", liveness::LiveUpdate, value_status::Used, true,
+        "Whether the object storage page cache caches the pages of the sstables which memtable flushes write, as they are "
+        "written, so recently written data is read from the cache rather than from the object store. The flushed pages are "
+        "cached as if they were last hit a while ago, so they are evicted soon unless they are read.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
     , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces. (deprecated)")
@@ -2210,7 +2225,8 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"tablets", feature::UNUSED},
         {"views-with-tablets", feature::UNUSED},
         {"strongly-consistent-tables", feature::STRONGLY_CONSISTENT_TABLES},
-        {"logstor", feature::LOGSTOR}
+        {"logstor", feature::LOGSTOR},
+        {"object-storage-page-cache", feature::OBJECT_STORAGE_PAGE_CACHE},
     };
 }
 

@@ -47,7 +47,7 @@ public:
     // If the partition has a intra-partition index in Rows.db,
     // `file_pos` is the bit-negated position of the relevant entry in Rows.db.
     // Otherwise, `file_pos` is the position of the partition in Data.db.
-    void add(const schema&, dht::decorated_key, const utils::hashed_key&, int64_t pos_payload);
+    void add(const schema&, dht::decorated_key, const utils::hashed_key&, int64_t pos_payload, uint32_t mark);
     std::optional<bti_partitions_db_footer> finish(
         const sstables::key& first_key,
         const sstables::key& last_key);
@@ -89,6 +89,9 @@ private:
     // determined how much `_last_key` can be trimmed.
     int64_t _last_pos_payload;
     uint8_t _last_hash_bits;
+    // The marks of _last_key, and of the key before it (see add()).
+    uint32_t _last_mark = 0;
+    uint32_t _mark_before_last = 0;
 };
 
 bti_partition_index_writer_impl::bti_partition_index_writer_impl(sstable_version_types sst_ver, bti_node_sink& out)
@@ -151,7 +154,7 @@ void bti_partition_index_writer_impl::write_last_key(size_t needed_prefix) {
                 payload_bits,
                 std::span(payload_bytes.data(), payload_bytes_it)
             );
-            _wr.add(i, frag.subspan(0, needed_prefix - i), payload);
+            _wr.add(i, frag.subspan(0, needed_prefix - i), payload, std::max(_last_mark, _mark_before_last));
             break;
         }
 
@@ -159,7 +162,7 @@ void bti_partition_index_writer_impl::write_last_key(size_t needed_prefix) {
     }
 }
 
-void bti_partition_index_writer_impl::add(const schema& s, dht::decorated_key dk, const utils::hashed_key& murmur_hash, int64_t pos_payload) {
+void bti_partition_index_writer_impl::add(const schema& s, dht::decorated_key dk, const utils::hashed_key& murmur_hash, int64_t pos_payload, uint32_t mark) {
     uint8_t hash_bits = static_cast<uint8_t>(murmur_hash.hash()[1]);
     expensive_log("partition_index_writer_impl::add: this={} key={}, pos_payload={}", fmt::ptr(this), dk, pos_payload);
     (*_tmp_key).emplace(_sst_ver, s, dk);
@@ -180,6 +183,8 @@ void bti_partition_index_writer_impl::add(const schema& s, dht::decorated_key dk
     std::swap(_last_key, _tmp_key);
     _last_pos_payload = pos_payload;
     _last_hash_bits = hash_bits;
+    _mark_before_last = _last_mark;
+    _last_mark = mark;
 }
 
 std::optional<bti_partitions_db_footer> bti_partition_index_writer_impl::finish(
@@ -227,8 +232,12 @@ bti_partition_index_writer::~bti_partition_index_writer() noexcept = default;
 bti_partition_index_writer::bti_partition_index_writer(sstable_version_types sst_ver, sstables::file_writer& fw)
     : _impl(std::make_unique<impl>(sst_ver, fw))
 {}
-void bti_partition_index_writer::add(const schema& s, dht::decorated_key dk, const utils::hashed_key& murmur_hash, int64_t data_or_rowsdb_file_pos) {
-    _impl->add(s, std::move(dk), murmur_hash, data_or_rowsdb_file_pos);
+void bti_partition_index_writer::add(const schema& s, dht::decorated_key dk, const utils::hashed_key& murmur_hash, int64_t data_or_rowsdb_file_pos,
+        uint32_t mark) {
+    _impl->add(s, std::move(dk), murmur_hash, data_or_rowsdb_file_pos, mark);
+}
+void bti_partition_index_writer::set_mark_observer(std::function<void(uint64_t pos, uint32_t mark)> observer) {
+    _impl->set_mark_observer(std::move(observer));
 }
 std::optional<bti_partitions_db_footer> bti_partition_index_writer::finish(
     const sstables::key& first_key,

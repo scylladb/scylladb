@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import time
 import pytest
 import shutil
@@ -293,6 +294,33 @@ async def test_storage_type_endpoint_mismatch(manager: ScyllaClusterManager, s3_
     with pytest.raises(ConfigurationException):
         cql.execute((f"CREATE KEYSPACE test_ks_gs_on_s3 WITH"
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+
+
+# ALTER KEYSPACE can't change the bucket or endpoint of a keyspace on object
+# storage, and its error message says which of them the statement tried to
+# change.
+async def test_alter_keyspace_storage_bucket_and_endpoint(manager: ScyllaClusterManager, object_storage):
+    await manager.server_add(config={'object_storage_endpoints': object_storage.create_endpoint_conf()})
+    cql = manager.get_cql()
+    storage_type = object_storage.type
+    bucket = object_storage.bucket_name
+    endpoint = object_storage.address
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        # Check that ALTER KEYSPACE with unchanged storage options succeeds.
+        same_options = format_tuples(type=storage_type, endpoint=endpoint, bucket=bucket)
+        await cql.run_async(f'ALTER KEYSPACE {ks} WITH STORAGE = {same_options}')
+        # Check that changing the bucket is refused, and the error says so.
+        bucket_options = format_tuples(type=storage_type, endpoint=endpoint, bucket='other-bucket')
+        message = f"changing 'bucket' from '{bucket}' to 'other-bucket' is not supported"
+        with pytest.raises(InvalidRequest, match=re.escape(message)):
+            await cql.run_async(f'ALTER KEYSPACE {ks} WITH STORAGE = {bucket_options}')
+        # Check that changing both the bucket and the endpoint is refused,
+        # and the error names both.
+        both_options = format_tuples(type=storage_type, endpoint='other-endpoint', bucket='other-bucket')
+        message = (f"changing 'bucket' from '{bucket}' to 'other-bucket'"
+                   f" and 'endpoint' from '{endpoint}' to 'other-endpoint' is not supported")
+        with pytest.raises(InvalidRequest, match=re.escape(message)):
+            await cql.run_async(f'ALTER KEYSPACE {ks} WITH STORAGE = {both_options}')
 
 
 async def test_memtable_flush_retries(manager: ScyllaClusterManager, tmpdir, object_storage):
