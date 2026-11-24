@@ -113,6 +113,11 @@ ninja build/<mode>/scylla
   when asked for, and then as separate patches (see "Patch organization" in
   `docs/dev/review-checklist.md`).
 - Adding or updating comments that explain the change is welcome.
+- Keep nodetool (`tools/scylla-nodetool.cc`) in step with the REST API (`api/api-doc/*.json`,
+  `api/*.cc`). When a change touches an endpoint that nodetool uses, update the nodetool command
+  and its documentation in the same series. When it touches an endpoint that nodetool does not
+  use, decide whether operators need it: add nodetool support or say why not in the patch
+  description.
 
 ## Test Philosophy
 - Performance matters. Tests should run as quickly as possible. Sleeps in the code are highly discouraged and should be avoided, to reduce run time and flakiness.
