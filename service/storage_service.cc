@@ -4348,6 +4348,19 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     auto& raft_server = _group0->group0_server();
+
+    // Refuse until this node, during its boot, publishes the mode it runs in as its
+    // current_storage_mode. Without this check, a finalization would compare the new
+    // intended mode with a stale current mode.
+    if (_feature_service.topology_current_storage_mode) {
+        const auto booted = _db.local().get_node_storage_mode();
+        const auto* rs = _topology_state_machine._topology.find(raft_server.id());
+        if (booted && rs && rs->second.current_storage_mode != booted) {
+            throw std::runtime_error(::format("Cannot set intended storage mode to {}: this node is still starting up"
+                    " after a storage mode switch. Please wait for it to finish and retry.", mode));
+        }
+    }
+
     auto holder = _group0->hold_group0_gate();
 
     slogger.info("Setting intended storage mode for node {} to {}", raft_server.id(), mode);
