@@ -21,6 +21,7 @@ namespace service {
 
 class status_helper;
 class storage_service;
+namespace paxos { class paxos_store; }
 
 class tablet_virtual_task : public tasks::task_manager::virtual_task::impl {
 private:
@@ -155,6 +156,11 @@ public:
     task_manager_module(tasks::task_manager& tm, service::storage_service& ss) noexcept;
 
     std::set<locator::host_id> get_nodes() const override;
+
+    // Starts the pending Paxos state copy of `store` as a node-scoped "paxos_state_copy" task,
+    // which reports its progress in percent. The task has no parent: the copy covers the
+    // tables of all the keyspaces under migration at once.
+    future<tasks::task_manager::task_ptr> start_paxos_state_copy(paxos::paxos_store& store);
 };
 
 }

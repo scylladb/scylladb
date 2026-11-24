@@ -1834,9 +1834,8 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         // Perform the Paxos state copy.
         // Do it before the node publishes its new storage mode, so that a crash in the middle
         // copies again, and forward finalization waits for the copy.
-        co_await utils::get_local_injector().inject("pause_paxos_state_copy",
-                utils::wait_for_message(std::chrono::minutes(5)));
-        co_await paxos_store.copy_pending_state();
+        auto task = co_await _vnodes_to_tablets_migration_module->start_paxos_state_copy(paxos_store);
+        co_await task->done();
         co_await mark_service_ready(gms::service_paxos);
         slogger.info("Copied the Paxos state after the storage mode switch, the node is ready to serve Paxos RPCs");
     }

@@ -9,6 +9,7 @@
 #include "locator/tablets.hh"
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
+#include "service/paxos/paxos_state.hh"
 #include "service/storage_service.hh"
 #include "repair/row_level.hh"
 #include "gms/gossiper.hh"
@@ -17,6 +18,7 @@
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 #include <cmath>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -1033,6 +1035,25 @@ task_manager_module::task_manager_module(tasks::task_manager& tm, service::stora
 
 std::set<locator::host_id> task_manager_module::get_nodes() const {
     return get_task_manager().get_nodes(_ss);
+}
+
+future<tasks::task_manager::task_ptr> task_manager_module::start_paxos_state_copy(paxos::paxos_store& store) {
+    tasks::task_manager::task_builder task_builder{shared_from_this(), "paxos_state_copy"};
+    task_builder.set_sequence_number(new_sequence_number())
+            .set_scope("node")
+            .set_is_abortable(tasks::is_abortable::no)
+            .set_is_user_task(tasks::is_user_task::no)
+            .set_progress_units("percent")
+            .set_progress_fn([&store = store.container()] (const tasks::task_manager::task::impl& self)
+                    -> future<tasks::task_manager::task::progress> {
+                const double completed = self.is_done() ? 100 : co_await store.local().get_copy_progress();
+                co_return tasks::task_manager::task::progress{.completed = std::round(completed * 100) / 100, .total = 100};
+            });
+    co_return co_await std::move(task_builder).build([&store] (tasks::task_manager::task::impl&) -> future<> {
+        co_await utils::get_local_injector().inject("pause_paxos_state_copy",
+                utils::wait_for_message(std::chrono::minutes(5)));
+        co_await store.copy_pending_state();
+    });
 }
 
 }
