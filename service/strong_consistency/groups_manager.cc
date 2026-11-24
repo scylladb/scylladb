@@ -805,8 +805,11 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                 continue;
             }
 
-            // Reached once per led term.
-            maybe_reset_priority_members(state, gid);
+            // Reached once per led term. The leader of a child of a resize has to stay with the
+            // leader of its parent, so we never withdraw the child's priority members.
+            if (!_resize_tracker.get_parent_group(gid)) {
+                maybe_reset_priority_members(state, gid);
+            }
             logger.debug("leader_info_updater({}, group_id={}): current term {}, running read_barrier()",
                 tablet, gid,
                 current_term);

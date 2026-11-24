@@ -701,3 +701,7 @@ change of the Raft state is certain to follow:
 A replica which only follows both groups gets no update until the token metadata changes, so
 its list can hold an earlier leader of the parent. That list only decides which election slot
 the replica itself takes, never where the leadership goes.
+
+The guard which withdraws the list of a group whose leadership keeps moving back and forth
+skips the children. A child without a list stays wherever it is, and the hand-off of requests
+to it will wait for its leader to join the parent's.
