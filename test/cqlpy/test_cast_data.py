@@ -282,4 +282,16 @@ def test_cast_float_to_integer_types(cql, table3, column):
         assert [(tinyint, smallint, int_, bigint)] == list(cql.execute(
             f'SELECT CAST({column} AS tinyint), CAST({column} AS smallint), CAST({column} AS int), CAST({column} AS bigint) FROM {table3} WHERE p={p}')), value
 
+# Casting NaN or an infinity to varint gives Cassandra's result. Cassandra
+# converts a float or double to varint through a long, so NaN becomes 0 and an
+# infinity the long's maximum or minimum. Scylla used to fail with a server
+# error instead. (Scylla converts a finite value exactly, where Cassandra
+# saturates it to a long, so finite values are not checked here.)
+@pytest.mark.parametrize('column', ['f', 'db'])
+def test_cast_nan_and_infinity_to_varint(cql, table3, column):
+    p = unique_key_int()
+    for value, expected in [('NaN', 0), ('Infinity', 2**63 - 1), ('-Infinity', -2**63)]:
+        cql.execute(f'INSERT INTO {table3} (p, {column}) VALUES ({p}, {value})')
+        assert [(expected,)] == list(cql.execute(f'SELECT CAST({column} AS varint) FROM {table3} WHERE p={p}')), value
+
 # TODO: test casts from more types.
