@@ -57,9 +57,14 @@ void set_value(atomic_cell_value_mutable_view b, unsigned value_offset, const Bu
 
 template <typename T, FragmentedView Input>
 requires std::is_trivial_v<T>
-T get_field(Input in, unsigned offset = 0) {
-    in.remove_prefix(offset);
-    return read_simple<T>(in);
+T get_field(const Input& in, unsigned offset = 0) {
+    auto frag = in.current_fragment();
+    if (frag.size() >= offset + sizeof(T)) [[likely]] {
+        return net::ntoh(read_unaligned<T>(frag.data() + offset));
+    }
+    auto v = in;
+    v.remove_prefix(offset);
+    return read_simple<T>(v);
 }
 
 /*
@@ -86,20 +91,20 @@ private:
     static constexpr unsigned ttl_size = 4;
     friend class counter_cell_builder;
 private:
-    static bool is_counter_update(atomic_cell_value_view cell) {
+    static bool is_counter_update(const atomic_cell_value_view& cell) {
         return cell.front() & COUNTER_UPDATE_FLAG;
     }
-    static bool is_live(atomic_cell_value_view cell) {
+    static bool is_live(const atomic_cell_value_view& cell) {
         return cell.front() & LIVE_FLAG;
     }
-    static bool is_live_and_has_ttl(atomic_cell_value_view cell) {
+    static bool is_live_and_has_ttl(const atomic_cell_value_view& cell) {
         return cell.front() & EXPIRY_FLAG;
     }
-    static bool is_dead(atomic_cell_value_view cell) {
+    static bool is_dead(const atomic_cell_value_view& cell) {
         return !is_live(cell);
     }
     // Can be called on live and dead cells
-    static api::timestamp_type timestamp(atomic_cell_value_view cell) {
+    static api::timestamp_type timestamp(const atomic_cell_value_view& cell) {
         return get_field<api::timestamp_type>(cell, timestamp_offset);
     }
     static void set_timestamp(atomic_cell_value_mutable_view& cell, api::timestamp_type ts) {
@@ -122,22 +127,22 @@ public:
         return do_get_value(cell);
     }
     // Can be called on live counter update cells only
-    static int64_t counter_update_value(atomic_cell_value_view cell) {
+    static int64_t counter_update_value(const atomic_cell_value_view& cell) {
         return get_field<int64_t>(cell, flags_size + timestamp_size);
     }
     // Can be called only when is_dead() is true.
-    static gc_clock::time_point deletion_time(atomic_cell_value_view cell) {
+    static gc_clock::time_point deletion_time(const atomic_cell_value_view& cell) {
         SCYLLA_ASSERT(is_dead(cell));
         return gc_clock::time_point(gc_clock::duration(get_field<int64_t>(cell, deletion_time_offset)));
     }
     // Can be called only when is_live_and_has_ttl() is true.
-    static gc_clock::time_point expiry(atomic_cell_value_view cell) {
+    static gc_clock::time_point expiry(const atomic_cell_value_view& cell) {
         SCYLLA_ASSERT(is_live_and_has_ttl(cell));
         auto expiry = get_field<int64_t>(cell, expiry_offset);
         return gc_clock::time_point(gc_clock::duration(expiry));
     }
     // Can be called only when is_live_and_has_ttl() is true.
-    static gc_clock::duration ttl(atomic_cell_value_view cell) {
+    static gc_clock::duration ttl(const atomic_cell_value_view& cell) {
         SCYLLA_ASSERT(is_live_and_has_ttl(cell));
         return gc_clock::duration(get_field<int32_t>(cell, ttl_offset));
     }
