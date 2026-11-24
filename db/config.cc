@@ -1852,6 +1852,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "each shard records a page's hits only once in each round of eviction: it remembers the pages whose hits it recorded "
         "in a Bloom filter, of about 1.2 bytes per page, sized for as many pages as its cache can hold - but for at most "
         "this many pages. The hits of the pages beyond it are recorded every time. 0 means to record every hit.")
+    , object_storage_page_cache_populate_on_flush(this, "object_storage_page_cache_populate_on_flush", liveness::LiveUpdate, value_status::Used, true,
+        "Whether the object storage page cache caches the pages of the sstables which memtable flushes write, as they are "
+        "written, so recently written data is read from the cache rather than from the object store. The flushed pages are "
+        "cached as if they were last hit a while ago, so they are evicted soon unless they are read.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
     , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces. (deprecated)")

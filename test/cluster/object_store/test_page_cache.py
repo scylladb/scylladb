@@ -25,18 +25,24 @@ from test.pylib.tablets import get_tablet_count, get_tablet_replica
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
-def page_cache_config(object_storage, exact_hits=False):
+def page_cache_config(object_storage, exact_hits=False, cache_flushes=True):
     '''The configuration of a node with the page cache. With exact_hits, the
     node records every hit of a page. Otherwise, as by default, a page's hit
     is recorded only once in each pass of the hand which evicts pages: the
     pages whose hits were recorded in the pass are remembered in a Bloom
     filter, which by chance misjudges a few pages - which ones depends on the
     sstables' ids, which are random. So a test whose result depends on which
-    pages were hit, which could otherwise fail by chance, uses exact_hits.'''
+    pages were hit, which could otherwise fail by chance, uses exact_hits.
+
+    Without cache_flushes, memtable flushes cache nothing - as by default,
+    they cache all the pages of the sstables which they write - for the tests
+    which check what reads, or compactions, cache.'''
     config = {'object_storage_endpoints': object_storage.create_endpoint_conf(),
               'experimental_features': ['object-storage-page-cache']}
     if exact_hits:
         config['object_storage_page_cache_max_remembered_hits'] = 0
+    if not cache_flushes:
+        config['object_storage_page_cache_populate_on_flush'] = False
     return config
 
 
@@ -243,7 +249,9 @@ async def test_scan_reads_each_sstable_in_one_request(manager: ScyllaClusterMana
     '''A scan which misses the page cache reads each sstable's Data from the
     object store in a single request (on S3), even though the sstable is
     larger than the sstable reader's read buffer.'''
-    server = await manager.server_add(config=page_cache_config(object_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # the requests of reads which miss the cache.
+    server = await manager.server_add(config=page_cache_config(object_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(object_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -328,7 +336,9 @@ async def test_point_read_populates_cache(manager: ScyllaClusterManager, s3_stor
     '''A point read caches the pages it reads - only some of the pages of the
     sstable - so that reading the same row again sends no request to the
     object store.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # which pages reads cache.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -375,7 +385,9 @@ async def test_restart_evicts_orphan_pages(manager: ScyllaClusterManager, s3_sto
     cache, while the pages of the existing sstables stay. The test adds
     orphan pages to the cache table directly: of an sstable which doesn't
     exist, and of a shard which doesn't exist.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # which pages a scan caches, and that they have no hits.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -461,7 +473,9 @@ async def test_encrypted_sstables(manager: ScyllaClusterManager, s3_storage, tmp
     sstables which are not encrypted. The Data of a compressed table is
     compressed before it is encrypted, so its compressed chunks are not
     aligned to the encryption's blocks.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage) | encryption_config(tmp_path))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # the requests of reads which miss the cache.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False) | encryption_config(tmp_path))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         table_options = "WITH compression = {'sstable_compression': ''}" if compression == 'uncompressed' else ''
@@ -552,7 +566,9 @@ async def test_point_read_then_scan(manager: ScyllaClusterManager, s3_storage, t
     index which is not yet cached. An encrypted sstable, whose pages are the
     encryption's 4 KiB blocks rather than its compressed chunks, needs exactly
     the same requests.'''
-    config = page_cache_config(s3_storage)
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # the requests of reads which miss the cache.
+    config = page_cache_config(s3_storage, cache_flushes=False)
     if encryption == 'encrypted':
         config |= encryption_config(tmp_path)
     server = await manager.server_add(config=config)
@@ -582,7 +598,9 @@ async def test_bypass_cache(manager: ScyllaClusterManager, s3_storage):
     '''A read with BYPASS CACHE doesn't populate the page cache - neither with
     the Data nor with the index - but does read the pages which are already
     cached - both for a scan and for a point read.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # which pages reads cache.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -669,7 +687,9 @@ async def test_wide_partition_read_then_row_reads(manager: ScyllaClusterManager,
     '''A read of a whole wide partition reads its Data in a single request,
     and caches it in many pages. Reading each of its rows separately then
     finds everything it needs in the cache.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # which pages reads cache, and what they request.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         rows = await create_wide_partition(manager, server, ks)
@@ -732,7 +752,9 @@ async def test_wide_partition_rows_far_apart(manager: ScyllaClusterManager, s3_s
     them. The reader reads the first row, and then skips to the second, and
     a skip that long closes the request to the object store rather than read
     through the pages it skips.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # which pages reads cache, and what they request.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         # About 3 MB of rows.
@@ -750,7 +772,9 @@ async def test_reversed_read(manager: ScyllaClusterManager, s3_storage):
     '''A reversed read of a partition, which reads the Data in a different
     way than a forward read, also reads it through the page cache, which it
     populates - unless it is a read with BYPASS CACHE.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # which pages reads cache.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         reversed_data = list(reversed(await create_wide_partition(manager, server, ks)))
@@ -812,7 +836,9 @@ async def test_compaction_does_not_populate_cache(manager: ScyllaClusterManager,
     store without populating the page cache. The sstable it writes - with the
     rows which a later sstable overwrote or deleted merged correctly - is
     cached when the user reads it.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # that compaction caches no pages.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -843,7 +869,9 @@ async def test_compaction_reads_cache(manager: ScyllaClusterManager, s3_storage)
     pages which are already cached: compacting sstables which a scan cached
     needs fewer requests to the object store than compacting the same
     sstables when they are not cached.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # that compaction reads the pages which reads cached.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
 
     async def compaction_requests(scan_first):
@@ -882,7 +910,9 @@ async def test_opening_sstables_does_not_populate_cache(manager: ScyllaClusterMa
     '''Opening an sstable, which reads the footer of its Partitions component,
     doesn't populate the page cache: after a restart, which opens all the
     sstables again, nothing is cached.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # that opening sstables caches no pages.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -899,7 +929,9 @@ async def test_generating_summary_does_not_populate_cache(manager: ScyllaCluster
     missing generates the Summary, by reading the whole Index component -
     which, like the rest of opening an sstable, doesn't populate the page
     cache.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': 'me'})
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # that generating a summary caches no pages.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False) | {'sstable_format': 'me'})
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -983,9 +1015,11 @@ async def test_compaction_keeps_cached_data(manager: ScyllaClusterManager, s3_st
     data stays cached after the compacted sstables, and their pages, are
     deleted - and only that data: compaction copies only a few pages. The
     copied pages have the last hit of the pages which they were copied from.'''
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # which pages compaction copies, of the data which reads cached.
     # The test checks the hits of the Data pages, so they are recorded exactly
     # (see page_cache_config()).
-    server = await manager.server_add(config=page_cache_config(s3_storage, exact_hits=True))
+    server = await manager.server_add(config=page_cache_config(s3_storage, exact_hits=True, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await write_two_sstables(manager, server, ks)
@@ -1289,7 +1323,9 @@ async def test_compaction_resistant_caching_many_pages(manager: ScyllaClusterMan
     sizes, which the output finds as it writes them; uncompressed Data, in
     4 KiB pages; and encrypted Data, in 4 KiB pages of the compressed data,
     each of which holds parts of several chunks.'''
-    config = page_cache_config(s3_storage) | {'sstable_format': sstable_format}
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # how few pages compaction copies, of the data which reads cached.
+    config = page_cache_config(s3_storage, cache_flushes=False) | {'sstable_format': sstable_format}
     if encryption == 'encrypted':
         config |= encryption_config(tmp_path)
     server = await manager.server_add(config=config)
@@ -1393,7 +1429,9 @@ async def test_compaction_resistant_caching_many_index_blocks(manager: ScyllaClu
     of "me" sstables - which span a dozen pages or more: the reads after the
     compaction need no request, and the compaction copied only a few of the
     pages (see above).'''
-    config = page_cache_config(s3_storage) | {'sstable_format': sstable_format, 'column_index_size_in_kb': 1}
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # how few pages compaction copies, of the data which reads cached.
+    config = page_cache_config(s3_storage, cache_flushes=False) | {'sstable_format': sstable_format, 'column_index_size_in_kb': 1}
     if encryption == 'encrypted':
         config |= encryption_config(tmp_path)
     server = await manager.server_add(config=config)
@@ -1525,7 +1563,9 @@ async def test_compaction_resistant_caching_default_index_blocks(manager: Scylla
     read, but not much more: reads of the rows after the compaction send no
     request, and the copied pages of the Data are about those of one block
     for each row.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format})
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # how few pages compaction copies, of the data which reads cached.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False) | {'sstable_format': sstable_format})
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
         rows = await write_wide_partition(manager, server, ks, rows=12000)
@@ -1806,7 +1846,9 @@ async def test_compaction_resistant_caching_reads_during_compaction(manager: Scy
 async def test_drop_table_evicts_its_sstables(manager: ScyllaClusterManager, s3_storage):
     '''Dropping a table evicts the cached pages of all its sstables from the
     page cache - but not the cached pages of another table.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test tells
+    # the two tables' pages apart by what each scan caches.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks1, \
                new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks2:
@@ -1928,10 +1970,12 @@ async def test_hits(manager: ScyllaClusterManager, s3_storage):
     was read only once looks old. A read with BYPASS CACHE reads the cached
     pages, but doesn't record their hits: a scan with BYPASS CACHE would
     otherwise make all of a table's pages look recently used.'''
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # which pages reads cache, and their hits.
     # The test can't fail by chance with the filter of the pages whose hits
     # were recorded in a pass (see page_cache_config()): it holds only the
     # pages which the test checks, and is empty until they are hit.
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -2045,12 +2089,47 @@ async def test_cache_size_lowered(manager: ScyllaClusterManager, s3_storage):
         await wait_for(within_limit(1), time.time() + 10)
 
 
+async def test_flush_caches_pages(manager: ScyllaClusterManager, s3_storage):
+    '''A memtable flush caches the pages of the sstable which it writes, as it
+    writes them, so data which is read soon after it is written is read from
+    the cache - unless object_storage_page_cache_populate_on_flush is
+    disabled.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        # create_table() writes the data, and flushes it.
+        data = await create_table(manager, server, ks)
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+
+        # Check that the flush cached the new sstable's pages - as never hit,
+        # because the cache had no pages which were hit - so reading the data
+        # sends no request to the object store.
+        pages = cached_pages(cql)
+        assert pages
+        assert page_hits(cql) == {page: None for page in pages}
+        assert await page_cache_metric(manager, server, 'flush_copies') == len(pages)
+        def read():
+            assert scan(cql, ks) == data
+            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        await check_no_requests(manager, server, s3_storage, read)
+
+        # Check that with the option disabled, a flush caches nothing.
+        await manager.server_update_config(server.server_id, 'object_storage_page_cache_populate_on_flush', False)
+        insert = cql.prepare(f'INSERT INTO {ks}.test (p, v) VALUES (?, ?)')
+        for p in range(1000, 1100):
+            await cql.run_async(insert, [p, f'new {p}'])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        assert cached_pages(cql) == pages
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cache_errors(manager: ScyllaClusterManager, s3_storage):
     '''A failure to write or read the page cache - for example, because the
     node's disk is full, or broken - doesn't fail the read, which reads from
     the object store instead.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # what reads cache when the cache fails.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -2087,7 +2166,9 @@ async def test_metrics(manager: ScyllaClusterManager, s3_storage):
     '''The page cache's metrics count its hits and misses - separately for
     reads which may populate the cache, and reads which must not - the bytes
     in it, its requests to the object store, and its evictions.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # the metrics of reads which miss the cache.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
@@ -2133,7 +2214,9 @@ async def test_table_metrics(manager: ScyllaClusterManager, s3_storage):
     '''With per-table metrics enabled, each table reports the hits and misses
     of its reads through the page cache, and its requests to the object
     store.'''
-    config = page_cache_config(s3_storage) | {'enable_keyspace_column_family_metrics': True}
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # the metrics of reads which miss the cache.
+    config = page_cache_config(s3_storage, cache_flushes=False) | {'enable_keyspace_column_family_metrics': True}
     server = await manager.server_add(config=config)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks1, \
@@ -2199,7 +2282,9 @@ async def test_point_read_requests_few_bytes(manager: ScyllaClusterManager, s3_s
     '''A point read which misses the cache requests from the object store
     only the pages of the partition which it reads, and of the index which
     leads to it - not the rest of the sstable after them.'''
-    server = await manager.server_add(config=page_cache_config(s3_storage))
+    # Memtable flushes cache nothing (see page_cache_config()): the test checks
+    # what a point read which misses the cache requests.
+    server = await manager.server_add(config=page_cache_config(s3_storage, cache_flushes=False))
     cql = manager.get_cql()
     table_options = "WITH caching = {'enabled': 'false'}"
     if compression == 'uncompressed':

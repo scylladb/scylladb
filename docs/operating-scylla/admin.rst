@@ -521,7 +521,7 @@ so a crash may lose recently cached pages, but never data.
 Configuration
 -------------
 
-Both options are live-updateable.
+All of these options are live-updateable.
 
 * ``object_storage_page_cache_size_in_mb`` (default 10240, i.e., 10 GiB): the size
   of the node's cache. Each shard's cache is limited to its share of this size,
@@ -535,6 +535,12 @@ Both options are live-updateable.
   eviction. For that, it remembers the pages in memory, in about 1.2 bytes per
   page, for as many pages as its cache can hold - but for at most this many
   pages (about 12 MB per shard). ``0`` records every read.
+* ``object_storage_page_cache_populate_on_flush`` (default true): whether the
+  cache caches the pages of the SSTables which memtable flushes write, as they
+  are written, so that data which is read soon after it is written is read from
+  the cache rather than from the object store. The flushed pages are cached as
+  if they were last read a while ago, so they are evicted soon unless they are
+  read.
 
 When a read misses the cache, it reads the rest of the range it needs from the
 object store with a single request - for a scan, often a whole SSTable -
@@ -641,13 +647,18 @@ The object storage page cache reports these metrics, per shard:
      - Failures of the cache, which didn't fail any read or compaction, by
        ``operation``: ``read``, ``write``, ``record_hits``, ``evict`` and
        ``compaction`` (failures to find which data of the compacted SSTables
-       was cached, or to copy pages to the cache).
+       was cached, or to copy pages to the cache), and ``flush`` (failures of
+       memtable flushes to copy pages to the cache).
    * - ``scylla_object_storage_page_cache_compaction_copies``,
        ``scylla_object_storage_page_cache_compaction_copied_bytes``
      - Pages, and their bytes, which compaction copied to the cache, because
        the data they hold was cached in the SSTables it compacted. The cache
        holds these copies besides the compacted SSTables' pages until those
        SSTables are deleted.
+   * - ``scylla_object_storage_page_cache_flush_copies``,
+       ``scylla_object_storage_page_cache_flush_copied_bytes``
+     - Pages, and their bytes, which memtable flushes copied to the cache, as
+       they wrote them.
    * - ``scylla_object_storage_page_cache_unrecorded_hits``
      - Hits of pages which weren't recorded, because too many recordings of
        hits were in progress. Unrecorded hits make the choice of pages to evict

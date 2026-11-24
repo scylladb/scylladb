@@ -251,11 +251,13 @@ static mutation page_deletion(schema_ptr s, int16_t shard, utils::UUID sstable, 
 }
 
 object_storage_page_cache_table::object_storage_page_cache_table(replica::database& db, cql3::query_processor& qp,
-        utils::updateable_value<uint64_t> size_in_mb, utils::updateable_value<uint64_t> max_remembered_hits)
+        utils::updateable_value<uint64_t> size_in_mb, utils::updateable_value<uint64_t> max_remembered_hits,
+        utils::updateable_value<bool> cache_flushes)
     : _db(db)
     , _qp(qp)
     , _size_in_mb(std::move(size_in_mb))
     , _max_remembered_hits(std::move(max_remembered_hits))
+    , _cache_flushes(std::move(cache_flushes))
     , _size_observer(_size_in_mb.observe([this] (uint64_t) { _eviction_needed.signal(); }))
 {
     // Before the hand's first pass, which may come long after the cache
@@ -1117,6 +1119,14 @@ future<> object_storage_page_cache_table::recount_cache() {
     _ages = std::move(ages);
 }
 
+std::optional<db_clock::time_point> object_storage_page_cache_table::flushed_page_last_hit() const {
+    auto cutoff = eviction_cutoff(_bytes / 4);
+    if (cutoff == db_clock::time_point::min()) {
+        return std::nullopt;
+    }
+    return cutoff;
+}
+
 db_clock::time_point object_storage_page_cache_table::eviction_cutoff(uint64_t to_free) const {
     // Evicting only the pages which were never hit is enough - or there is
     // no histogram yet, so evict only them, and the hand builds one.
@@ -1197,6 +1207,12 @@ void object_storage_page_cache_table::register_metrics() {
                 sm::description("Bytes of the pages which compaction wrote and copied to the object storage page cache")),
         sm::make_counter("page_cache_errors", [this] { return _stats.compaction_errors; },
                 sm::description("Failures of compaction to find which data of its input sstables was in the object storage page cache, or to copy pages to it"), {operation("compaction")}),
+        sm::make_counter("page_cache_flush_copies", [this] { return _stats.flush_copied_pages; },
+                sm::description("Pages which memtable flushes wrote and copied to the object storage page cache")),
+        sm::make_counter("page_cache_flush_copied_bytes", [this] { return _stats.flush_copied_bytes; },
+                sm::description("Bytes of the pages which memtable flushes wrote and copied to the object storage page cache")),
+        sm::make_counter("page_cache_errors", [this] { return _stats.flush_errors; },
+                sm::description("Failures of memtable flushes to copy pages to the object storage page cache"), {operation("flush")}),
     });
 }
 

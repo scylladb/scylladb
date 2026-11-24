@@ -269,7 +269,25 @@ lw_shared_ptr<page_cache_compaction> make_page_cache_compaction(const std::vecto
     return make_lw_shared<page_cache_compaction>(*cache, std::move(schema));
 }
 
+shared_ptr<page_cache_compaction_output> make_page_cache_flush_output(const sstable& sst, schema_ptr schema) {
+    if (!sst.get_storage().caches_pages() || !sst.sstable_identifier()) {
+        return nullptr;
+    }
+    // The cache is not plugged if its experimental feature was disabled
+    // after the keyspace was created.
+    auto* cache = sst.manager().get_object_storage_page_cache();
+    if (!cache || !cache->caches_flushes()) {
+        return nullptr;
+    }
+    auto flush = make_lw_shared<page_cache_compaction>(*cache, std::move(schema));
+    flush->set_all_hot(cache->flushed_page_last_hit());
+    return flush->make_output(sst);
+}
+
 page_cache_hotness page_cache_compaction::hotness_at(const dht::decorated_key& key, position_in_partition_view pos) {
+    if (_all_hot) {
+        return *_all_hot;
+    }
     page_cache_hotness ret;
     for (auto& input : _inputs) {
         ret.merge(input->hotness_at(key, pos));
@@ -796,20 +814,22 @@ private:
                 out = std::copy(b.begin(), b.end(), out);
             }
             auto& cache = _output->cache();
+            auto& stats = cache.get_stats();
+            bool flush = _output->is_flush();
             try {
                 // Lets tests stop a compaction while it copies pages.
                 co_await utils::get_local_injector().inject("object_storage_page_cache_compaction_copy",
                         utils::wait_for_message(std::chrono::minutes(5)), false);
                 co_await cache.put_copied_page(_sst, _type, page.start, std::move(data), hotness.last_hit);
-                cache.get_stats().compaction_copied_pages++;
-                cache.get_stats().compaction_copied_bytes += size;
+                (flush ? stats.flush_copied_pages : stats.compaction_copied_pages)++;
+                (flush ? stats.flush_copied_bytes : stats.compaction_copied_bytes) += size;
             } catch (...) {
                 _failed = true;
                 _written.clear();
-                cache.get_stats().compaction_errors++;
+                (flush ? stats.flush_errors : stats.compaction_errors)++;
                 sstlog.log(log_level::warn, compaction_error_rate_limit,
-                        "Failed to copy pages of the {} component of sstable {}, written by compaction, to the object storage page cache: {}",
-                        _type, _sst, std::current_exception());
+                        "Failed to copy pages of the {} component of sstable {}, written by {}, to the object storage page cache: {}",
+                        _type, _sst, flush ? "a memtable flush" : "compaction", std::current_exception());
             }
         }
     }

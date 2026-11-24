@@ -193,6 +193,9 @@ class object_storage_page_cache_table : public sstables::object_storage_page_cac
     // The most pages which the filter remembers, to limit its memory. 0
     // means to record every hit.
     utils::updateable_value<uint64_t> _max_remembered_hits;
+    // Whether the pages which memtable flushes write are cached (see
+    // caches_flushes()).
+    utils::updateable_value<bool> _cache_flushes;
 
     // The keys of the pages which put_page() is writing, with how many writes
     // of each are in progress, and the key of the page which the hand is
@@ -262,7 +265,8 @@ public:
     static constexpr auto flush_period = std::chrono::minutes(1);
 
     object_storage_page_cache_table(replica::database& db, cql3::query_processor& qp, utils::updateable_value<uint64_t> size_in_mb,
-            utils::updateable_value<uint64_t> max_remembered_hits);
+            utils::updateable_value<uint64_t> max_remembered_hits,
+            utils::updateable_value<bool> cache_flushes = utils::updateable_value<bool>(true));
 
     // The cache's life cycle: start() starts the background fiber which
     // evicts pages when this shard's cache is too large, which runs in the
@@ -309,6 +313,16 @@ public:
     virtual future<> evict_sstable(sstables::sstable_id sst) override;
     virtual future<> evict_other_sstables(const std::unordered_set<sstables::sstable_id>& live) override;
     virtual future<> copy_sstable_from_shard(sstables::sstable_id sst, shard_id from) override;
+    virtual bool caches_flushes() const noexcept override {
+        return _cache_flushes();
+    }
+    // In the middle of the order in which pages are evicted, nearer to its
+    // end: just after the pages which were never hit, or last hit longest
+    // ago, which make up a quarter of the cache - so the hand evicts the
+    // flushed pages soon, unless they are hit, but not before the pages which
+    // were never hit (see sweep()). If the pages which were never hit are a
+    // quarter of the cache, the flushed pages join them.
+    virtual std::optional<db_clock::time_point> flushed_page_last_hit() const override;
 
     // The number of bytes in this shard's cache.
     uint64_t cached_bytes() const noexcept {

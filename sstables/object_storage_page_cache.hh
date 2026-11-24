@@ -143,6 +143,14 @@ public:
     // sstable_id (see sstables_manager::copy_cached_pages()).
     virtual future<> copy_sstable_from_shard(sstable_id sst, shard_id from) = 0;
 
+    // Whether the pages of the sstables which memtable flushes write are
+    // cached as they are written (see make_page_cache_flush_output()).
+    virtual bool caches_flushes() const noexcept = 0;
+    // The last hit with which the pages which a memtable flush writes are
+    // cached, which places them in the order in which pages are evicted -
+    // or nothing, to cache them as never hit, which are evicted first.
+    virtual std::optional<db_clock::time_point> flushed_page_last_hit() const = 0;
+
     // The cache's statistics (see object_storage_page_cache_stats.hh).
     object_storage_page_cache_stats& get_stats() noexcept {
         return _stats;

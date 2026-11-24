@@ -98,6 +98,13 @@
 // it is - and with incremental compaction, only briefly: each output sstable
 // replaces the input sstables which the compaction exhausted once it is
 // written, and reads then cache, and hit, its pages directly.
+//
+// The same machinery does caching on flush: it caches the sstables which
+// memtable flushes write (see make_page_cache_flush_output()), as if all of a
+// flush's data were hot - a workload which reads data soon after writing it
+// would otherwise read it from the object store after every flush. Every page of a flushed sstable
+// is copied, with the same last hit (see
+// object_storage_page_cache::flushed_page_last_hit()).
 
 #pragma once
 
@@ -250,6 +257,9 @@ class page_cache_compaction : public enable_lw_shared_from_this<page_cache_compa
     schema_ptr _schema;
     std::vector<std::unique_ptr<page_cache_compaction_input>> _inputs;
     bool _nothing_cached = false;
+    // The hotness of all of the data, for a memtable flush (see
+    // make_page_cache_flush_output()), whose data has no inputs.
+    std::optional<page_cache_hotness> _all_hot;
 public:
     page_cache_compaction(object_storage_page_cache& cache, schema_ptr schema);
     object_storage_page_cache& cache() noexcept {
@@ -275,8 +285,15 @@ public:
     shared_ptr<page_cache_compaction_output> make_output(sstable_id sst);
     // The same, for an output sstable, or null if it has no id.
     shared_ptr<page_cache_compaction_output> make_output(const sstable& sst);
+    // Makes all the data hot, with the given last hit, for a memtable flush.
+    void set_all_hot(std::optional<db_clock::time_point> last_hit) noexcept {
+        _all_hot = page_cache_hotness{.hot = true, .last_hit = last_hit};
+    }
+    bool is_flush() const noexcept {
+        return bool(_all_hot);
+    }
     // The hotness at the given key: hot if a fragment there is hot in any
-    // input.
+    // input - or everywhere, for a memtable flush.
     page_cache_hotness hotness_at(const dht::decorated_key& key, position_in_partition_view pos);
 };
 
@@ -425,6 +442,11 @@ public:
     sstable_id sstable() const noexcept {
         return _sst;
     }
+    // Whether the sstable is written by a memtable flush, rather than by a
+    // compaction.
+    bool is_flush() const noexcept {
+        return _compaction->is_flush();
+    }
     // Called by the writer before it writes, with the compression of the
     // Data component, or null if it isn't compressed.
     void set_data_compression(const compression* compression) noexcept;
@@ -487,6 +509,13 @@ public:
 // Returns what a compaction of the given input sstables needs to keep their
 // cache, or null if they don't use the object storage page cache.
 lw_shared_ptr<page_cache_compaction> make_page_cache_compaction(const std::vector<shared_sstable>& inputs, schema_ptr schema);
+
+// For a memtable flush which writes the given sstable: an output which copies
+// all of its pages to the cache, with the last hit which the cache chooses
+// for them (see object_storage_page_cache::flushed_page_last_hit()) - or null
+// if the sstable doesn't use the cache, or the cache doesn't cache flushes.
+// The writer finds it through its write monitor, as a compaction's output.
+shared_ptr<page_cache_compaction_output> make_page_cache_flush_output(const sstable& sst, schema_ptr schema);
 
 // A data_source which reads the given input stream - the Data component of
 // an input sstable, before compression, from the given data offset - and
