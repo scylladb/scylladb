@@ -334,13 +334,16 @@ def test_one_row(scylla_only, cql):
 #############################################################################
 
 # Test that system.token_ring lists a keyspace (with a table, as needed with
-# tablets) while it exists, and stops listing it when it is dropped.
+# tablets) while it exists, and stops listing it when it is dropped. The
+# table is dropped with the keyspace: with tablets, token_ring lists a
+# keyspace only through its tables, so dropping the table first would empty
+# the listing before the keyspace's drop.
 # Translated from scylla-dtest's system_tables_test.py::TestTokenRingTable::test_content_one_node_create_and_drop_keyspace.
 def test_token_ring_drop_keyspace(scylla_only, cql):
     select = 'SELECT DISTINCT keyspace_name FROM system.token_ring'
     with util.new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        with util.new_test_table(cql, ks, 'p int PRIMARY KEY'):
-            assert ks in [r.keyspace_name for r in cql.execute(select)]
+        cql.execute(f'CREATE TABLE {ks}.t (p int PRIMARY KEY)')
+        assert ks in [r.keyspace_name for r in cql.execute(select)]
     assert ks not in [r.keyspace_name for r in cql.execute(select)]
 
 # Test the content of system.versions: its version is the one the REST API
