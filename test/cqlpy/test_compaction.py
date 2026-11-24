@@ -905,16 +905,15 @@ def test_twcs_compaction_after_deleting_first_window(scylla_only, cql, test_keys
         assert time_series_cks(cql, table) == list(range(60, 300))
 
 # Test that major compaction drops rows of an old time window which a newer
-# sstable deletes, keeps the row tombstones until gc_grace_seconds pass, and
-# then purges them.
+# sstable deletes, keeps the row tombstones within gc_grace_seconds, and
+# purges them once gc_grace_seconds is lowered with ALTER TABLE: compaction
+# uses the table's current gc_grace_seconds, not the one the tombstones were
+# written with.
 # Translated from scylla-dtest's compaction_additional_test.py::TestTimeWindowDataSegregation::test_compaction_remove_deleted_rows_in_previous_time_window.
 # The dtest checked the sstables for clustering rows of the deleted keys,
-# which didn't distinguish between live rows and row tombstones, and waited
-# 15 seconds for gc_grace_seconds to pass; this test moves the server's
-# clock instead.
-def test_twcs_compaction_of_deleted_rows_in_old_window(scylla_only, cql, test_keyspace, clock):
-    gc_grace_seconds = 15
-    with new_time_series_table(cql, test_keyspace, gc_grace_seconds) as table:
+# which didn't distinguish between live rows and row tombstones.
+def test_twcs_compaction_of_deleted_rows_in_old_window(scylla_only, cql, test_keyspace):
+    with new_time_series_table(cql, test_keyspace, 3600) as table:
         def sstable_rows():
             live, deleted = set(), set()
             for r in cql.execute(f'SELECT ck, mutation_source, mutation_fragment_kind, metadata FROM mutation_fragments({table})'):
@@ -928,14 +927,18 @@ def test_twcs_compaction_of_deleted_rows_in_old_window(scylla_only, cql, test_ke
         assert sstable_count(cql, table) == 2
         assert sstable_rows() == (set(range(60)), set(range(20)))
         # Check that compaction drops the deleted rows, but keeps the
-        # tombstones before gc_grace_seconds pass
-        nodetool.compact(cql, table)
+        # tombstones within gc_grace_seconds. Flush all tables first, so
+        # that only gc_grace_seconds can keep the tombstones.
+        compact_purging_expired_tombstones(cql, table)
         check_sstable_windows(cql, table)
         assert sstable_count(cql, table) == 2
         assert sstable_rows() == (set(range(20, 60)), set(range(20)))
         assert time_series_cks(cql, table) == list(range(20, 60))
-        # Check that compaction after gc_grace_seconds pass purges the tombstones
-        clock.jump(gc_grace_seconds + 1)
+        # Check that compaction after gc_grace_seconds is lowered to 0, and a
+        # second passes, purges the tombstones. Deletion times are in whole
+        # seconds, so a one second wait is enough.
+        cql.execute(f'ALTER TABLE {table} WITH gc_grace_seconds = 0')
+        time.sleep(1)
         compact_purging_expired_tombstones(cql, table)
         assert sstable_count(cql, table) == 1
         assert sstable_rows() == (set(range(20, 60)), set())
