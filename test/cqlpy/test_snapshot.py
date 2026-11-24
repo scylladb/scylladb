@@ -565,22 +565,31 @@ def test_snapshot_restore_cdc(cql, scylla_data_dir, temp_workdir, scylla_only, c
         assert list(cql.execute(f'SELECT * FROM {log}')) == log_rows
 
 # Test that a snapshot request which doesn't list keyspaces takes a snapshot
-# of every keyspace which has tables, including the system keyspaces, and
-# that each table's snapshot has a manifest file. The test then deletes the
+# of every table (which has a directory) of every keyspace, including the
+# system keyspaces, and that each table's snapshot has a manifest file. The test then deletes the
 # snapshot, and checks that a second snapshot of all keyspaces works too.
 # Translated from scylla-dtest's snapshot_test.py::TestSnapshotOptions::test_snapshot_defaults_to_all_keyspaces,
 # and from scylla-dtest's nodetool_additional_test.py::TestNodetool tests
 # test_global_snapshot, test_snapshot_tag and test_global_create_after_clean.
 def test_snapshot_all_keyspaces(cql, test_keyspace, scylla_data_dir, scylla_only):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val text') as table:
-        keyspaces = {row.keyspace_name for row in cql.execute('SELECT keyspace_name FROM system_schema.tables')}
+        rows = list(cql.execute('SELECT keyspace_name, table_name, id FROM system_schema.tables'))
+        keyspaces = {row.keyspace_name for row in rows}
+        # The directory of each table which has one. Virtual tables, like
+        # system.config, have none, and no snapshot.
+        table_dirs = {(row.keyspace_name, row.table_name): os.path.join(scylla_data_dir, row.keyspace_name, f'{row.table_name}-{row.id.hex}')
+                      for row in rows}
+        table_dirs = {t: d for t, d in table_dirs.items() if os.path.isdir(d)}
         for _ in range(2):
             tag = unique_name()
             rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag)
             try:
                 entries = has_snapshot(nodetool.list_snapshots(cql), tag)
                 assert {e['ks'] for e in entries} == keyspaces
-                assert split_table(table) in {(e['ks'], e['cf']) for e in entries}
+                assert split_table(table) in table_dirs
+                assert set(table_dirs) <= {(e['ks'], e['cf']) for e in entries}
+                for d in table_dirs.values():
+                    assert os.path.isdir(os.path.join(d, 'snapshots', tag))
                 for e in entries:
                     [snapshot_dir] = glob.glob(os.path.join(scylla_data_dir, e['ks'], f"{e['cf']}-*", 'snapshots', tag))
                     assert os.path.isfile(os.path.join(snapshot_dir, 'manifest.json'))
