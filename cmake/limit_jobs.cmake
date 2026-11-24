@@ -1,30 +1,27 @@
+# Link jobs share one memory budget. A ninja job takes one pool slot whatever it
+# costs, so the ThinLTO link runs in a pool of its own, one at a time, and its
+# memory is set aside first; every other link shares what is left.
+# Peak memory measured with and without full debug info, with headroom: the
+# ThinLTO link of scylla peaked at 35-39GiB with 32 back-end threads; every
+# other link (tests, non-LTO scylla) stayed under 6.3GiB.
+set(Scylla_RAM_PER_LINK_JOB 8192 CACHE STRING
+  "Memory budget for each link job without LTO (in MiB)")
+set(Scylla_RAM_PER_LTO_LINK_JOB 45056 CACHE STRING
+  "Memory budget for the ThinLTO link job (in MiB)")
+
 if(NOT DEFINED Scylla_PARALLEL_LINK_JOBS)
-  if(NOT DEFINED Scylla_RAM_PER_LINK_JOB)
-    # preserve user-provided value
-    set(_default_ram_value 4096)
-    if(Scylla_ENABLE_LTO)
-      # When ThinLTO optimization is enabled, the linker uses all available CPU threads.
-      # To prevent excessive memory usage, we limit parallel link jobs based on available RAM,
-      # as each link job requires significant memory during optimization.
-      set(_default_ram_value 16384)
-    endif()
-    set(Scylla_RAM_PER_LINK_JOB ${_default_ram_value} CACHE STRING
-      "Maximum amount of memory used by each link job (in MiB)")
-  endif()
   cmake_host_system_information(
     RESULT _total_mem_mb
     QUERY AVAILABLE_PHYSICAL_MEMORY)
-  math(EXPR _link_pool_depth "${_total_mem_mb} / ${Scylla_RAM_PER_LINK_JOB}")
-  # Use 2 parallel link jobs to optimize build throughput. The main executable requires
-  # LTO (slower link phase) while tests are linked without LTO (faster link phase).
-  # This allows simultaneous linking of LTO and non-LTO targets, enabling better CPU
-  # utilization by overlapping the slower LTO link with faster test links.
-  if(_link_pool_depth LESS 2)
-    set(_link_pool_depth 2)
+  if(Scylla_ENABLE_LTO)
+    math(EXPR _total_mem_mb "${_total_mem_mb} - ${Scylla_RAM_PER_LTO_LINK_JOB}")
   endif()
-
+  math(EXPR _link_pool_depth "${_total_mem_mb} / ${Scylla_RAM_PER_LINK_JOB}")
+  if(_link_pool_depth LESS 1)
+    set(_link_pool_depth 1)
+  endif()
   set(Scylla_PARALLEL_LINK_JOBS "${_link_pool_depth}" CACHE STRING
-    "Maximum number of concurrent link jobs")
+    "Maximum number of concurrent link jobs without LTO")
 endif()
 
 set_property(
@@ -32,5 +29,6 @@ set_property(
   APPEND
   PROPERTY JOB_POOLS
     link_pool=${Scylla_PARALLEL_LINK_JOBS}
+    lto_link_pool=1
     submodule_pool=1)
 set(CMAKE_JOB_POOL_LINK link_pool)

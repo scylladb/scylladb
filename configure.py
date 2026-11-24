@@ -2013,14 +2013,24 @@ defines = ' '.join(['-D' + d for d in defines])
 globals().update(vars(args))
 
 total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-# assuming each link job takes around 7GiB of memory without LTO
-link_pool_depth = max(int(total_memory / 7e9), 1)
-if args.lto:
-    # ThinLTO provides its own parallel linking, use 16GiB for RAM size used
-    # by each link job
-    depth_with_lto = max(int(total_memory / 16e9), 2)
-    if depth_with_lto < link_pool_depth:
-        link_pool_depth = depth_with_lto
+# Peak memory of one link, measured with and without full debug info, with
+# headroom. The ThinLTO link of release/scylla peaked at 35-39GiB with 32
+# back-end threads; every other link (tests in any mode, dev and debug scylla)
+# stayed under 6.3GiB.
+lto_link_memory = 44 * 2**30
+link_memory = 8 * 2**30
+
+
+def link_pool_depths(build_modes):
+    """Depths of link_pool and lto_link_pool, sharing one memory budget.
+
+    A ninja job takes one pool slot whatever it costs, so the ThinLTO link runs
+    in a pool of its own, one at a time, and its memory is set aside first;
+    every other link shares what is left.
+    """
+    has_lto_link = any(modes[mode]['has_lto'] for mode in build_modes)
+    left = total_memory - (lto_link_memory if has_lto_link else 0)
+    return max(int(left / link_memory), 1), 1
 
 selected_modes = args.selected_modes or modes.keys()
 default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items() if mode_cfg["default"]]
@@ -3154,6 +3164,7 @@ def write_build_file(f,
                      compiler_cache,
                      args):
     use_precompiled_header = not args.disable_precompiled_header
+    link_pool_depth, lto_link_pool_depth = link_pool_depths(build_modes)
     warnings = get_warning_options(args.cxx)
     rustc_target = pick_rustc_target('wasm32-wasi', 'wasm32-wasip1')
     # If a compiler cache is available, compilations are run through it as a
@@ -3175,6 +3186,8 @@ def write_build_file(f,
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
+        pool lto_link_pool
+            depth = {lto_link_pool_depth}
         pool submodule_pool
             depth = 1
         rule gen
@@ -3257,6 +3270,7 @@ def write_build_file(f,
                     rustc_target=rustc_target,
                     rustc_wrapper=rustc_wrapper,
                     link_pool_depth=link_pool_depth,
+                    lto_link_pool_depth=lto_link_pool_depth,
                     seastar_path=args.seastar_path,
                     ninja=ninja,
                     ragel_exec=args.ragel_exec))
@@ -3455,6 +3469,8 @@ def write_build_file(f,
                     local_libs += f' {seastar_testing_libs}'
                 f.write('build $builddir/{}/{}: {}.{} {} | {} {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep, fmt_dep))
                 f.write('   libs = {}\n'.format(local_libs))
+                if do_lto:
+                    f.write('   pool = lto_link_pool\n')
                 f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
                 f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
             for src in srcs:

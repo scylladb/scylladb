@@ -15,6 +15,10 @@ function(enable_lto name)
     if(type MATCHES "SHARED_LIBRARY|EXECUTABLE")
       target_link_options(${name}
         PRIVATE $<$<CONFIG:RelWithDebInfo>:-ffat-lto-objects>)
+      # The ThinLTO link has its own memory budget, see limit_jobs.cmake.
+      # JOB_POOL_LINK cannot depend on the configuration, so this target's
+      # links in the other configurations also take this pool's slot.
+      set_property(TARGET ${name} PROPERTY JOB_POOL_LINK lto_link_pool)
     endif()
   elseif(type STREQUAL "INTERFACE_LIBRARY")
     if (name MATCHES "^scylla_(.*)$")
