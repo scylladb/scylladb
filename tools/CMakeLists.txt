@@ -29,7 +29,6 @@ if (Scylla_USE_PRECOMPILED_HEADER_USE)
 endif()
 
 include(build_submodule)
-build_submodule(cqlsh cqlsh)
 
 execute_process(
   COMMAND "${CMAKE_SOURCE_DIR}/install-dependencies.sh" --print-python3-runtime-packages

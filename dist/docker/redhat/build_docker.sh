@@ -70,12 +70,42 @@ bcp() { buildah copy "$container" "$@"; }
 run() { buildah run "$container" -- "$@"; }
 bconfig() { buildah config "$@" "$container"; }
 
+# cqlsh is released on its own (scylladb/scylla-cqlsh), take its newest rpm from its
+# release path: the scylla repo of a new release branch doesn't exist yet at this point
+# (a listing returns at most 1000 keys, so follow its continuation tokens; only take the
+# main package, not e.g. scylla-cqlsh-debuginfo, and compare file names, not their paths)
+cqlsh_keys=""
+cqlsh_token=""
+# don't trace the loop: -x would dump every listing page into the log
+{ set +x; } 2>/dev/null
+while :; do
+    cqlsh_list_args=(-G --data-urlencode "list-type=2" --data-urlencode "prefix=downloads/scylla/cqlsh/rpm/")
+    if [ -n "$cqlsh_token" ]; then
+        cqlsh_list_args+=(--data-urlencode "continuation-token=$cqlsh_token")
+    fi
+    cqlsh_listing=$(curl -fsSL "${cqlsh_list_args[@]}" "https://s3.amazonaws.com/downloads.scylladb.com")
+    cqlsh_keys+=$(grep -o "<Key>[^<]*/scylla-cqlsh-[0-9][^</]*\.$arch\.rpm</Key>" <<<"$cqlsh_listing" | sed -e 's/<[^>]*>//g')$'\n'
+    cqlsh_token=$(grep -o "<NextContinuationToken>[^<]*" <<<"$cqlsh_listing" | sed -e 's/<[^>]*>//')
+    if [ -z "$cqlsh_token" ]; then
+        break
+    fi
+done
+cqlsh_key=$(awk -F/ 'NF { print $NF "\t" $0 }' <<<"$cqlsh_keys" | sort -t$'\t' -k1,1V | tail -n1 | cut -f2)
+set -x
+if [ -z "$cqlsh_key" ]; then
+    echo "could not find a scylla-cqlsh $arch rpm in downloads.scylladb.com/downloads/scylla/cqlsh/rpm/"
+    exit 1
+fi
+cqlsh_rpm="build/docker-cqlsh-$arch/$(basename "$cqlsh_key")"
+rm -rf "build/docker-cqlsh-$arch"
+curl -fsSL --create-dirs --output "$cqlsh_rpm" "https://downloads.scylladb.com/$cqlsh_key"
+
 container="$(buildah from --pull=always docker.io/redhat/ubi9-minimal:latest)"
 
 packages=(
     "build/dist/$config/redhat/RPMS/$arch/$product-server-$version-$release.$arch.rpm"
     "build/dist/$config/redhat/RPMS/$arch/$product-conf-$version-$release.$arch.rpm"
-    "tools/cqlsh/build/redhat/RPMS/$arch/$product-cqlsh-$version-$release.$arch.rpm"
+    "$cqlsh_rpm"
     "tools/python3/build/redhat/RPMS/$arch/$product-python3-$version-$release.$arch.rpm"
 )
 

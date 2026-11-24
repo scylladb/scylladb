@@ -13,7 +13,7 @@ Requires:       %{product}-python3 = %{version}-%{release}
 Requires:       %{product}-kernel-conf = %{version}-%{release}
 Recommends:     %{product}-perf-collector = %{version}-%{release}
 Requires:       scylla-node-exporter
-Requires:       %{product}-cqlsh = %{version}-%{release}
+Requires:       scylla-cqlsh
 Provides:       scylla-enterprise = %{version}-%{release}
 Obsoletes:      scylla-enterprise < 2025.1.0
 

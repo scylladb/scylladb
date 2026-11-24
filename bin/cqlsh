@@ -5,6 +5,12 @@
 
 trap 'echo "error $? in $0 line $LINENO"' ERR
 
-here=$(dirname "$0")
-exec "$here/../tools/cqlsh/bin/cqlsh.py" "$@"
+top=$(cd "$(dirname "$0")/.." && pwd)
+# cqlsh is released on its own (scylladb/scylla-cqlsh), run the one test.py uses,
+# from the venv test.py uses (see _ensure_running_under_uv() in test.py)
+export UV_PROJECT="$top/test"
+python=$(cd "$top" && uv python find)
+soabi=$("$python" -c "import sysconfig; print(sysconfig.get_config_var('SOABI'))")
+export UV_PROJECT_ENVIRONMENT="$top/build/test-dependencies/$soabi"
+exec uv run --quiet --locked cqlsh "$@"
 

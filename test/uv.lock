@@ -1,6 +1,10 @@
 version = 1
 revision = 5
 requires-python = ">=3.14"
+resolution-markers = [
+    "sys_platform == 'win32'",
+    "sys_platform != 'win32'",
+]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -614,6 +618,22 @@ wheels = [
 ]
 
 [[package]]
+name = "lz4"
+version = "4.4.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/51/f1b86d93029f418033dddf9b9f79c8d2641e7454080478ee2aab5123173e/lz4-4.4.5.tar.gz", hash = "sha256:5f0b9e53c1e82e88c10d7c180069363980136b9d7a8306c4dca4f760d60c39f0", size = 172886, upload-time = "2025-11-03T13:02:36.061Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/9c/70bdbdb9f54053a308b200b4678afd13efd0eafb6ddcbb7f00077213c2e5/lz4-4.4.5-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:c216b6d5275fc060c6280936bb3bb0e0be6126afb08abccde27eed23dead135f", size = 207586, upload-time = "2025-11-03T13:02:18.263Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/cb/bfead8f437741ce51e14b3c7d404e3a1f6b409c440bad9b8f3945d4c40a7/lz4-4.4.5-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:c8e71b14938082ebaf78144f3b3917ac715f72d14c076f384a4c062df96f9df6", size = 207161, upload-time = "2025-11-03T13:02:19.286Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/18/b192b2ce465dfbeabc4fc957ece7a1d34aded0d95a588862f1c8a86ac448/lz4-4.4.5-cp314-cp314-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:9b5e6abca8df9f9bdc5c3085f33ff32cdc86ed04c65e0355506d46a5ac19b6e9", size = 1292415, upload-time = "2025-11-03T13:02:20.829Z" },
+    { url = "https://files.pythonhosted.org/packages/67/79/a4e91872ab60f5e89bfad3e996ea7dc74a30f27253faf95865771225ccba/lz4-4.4.5-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3b84a42da86e8ad8537aabef062e7f661f4a877d1c74d65606c49d835d36d668", size = 1279920, upload-time = "2025-11-03T13:02:22.013Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/01/d52c7b11eaa286d49dae619c0eec4aabc0bf3cda7a7467eb77c62c4471f3/lz4-4.4.5-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0bba042ec5a61fa77c7e380351a61cb768277801240249841defd2ff0a10742f", size = 1368661, upload-time = "2025-11-03T13:02:23.208Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/da/137ddeea14c2cb86864838277b2607d09f8253f152156a07f84e11768a28/lz4-4.4.5-cp314-cp314-win32.whl", hash = "sha256:bd85d118316b53ed73956435bee1997bd06cc66dd2fa74073e3b1322bd520a67", size = 90139, upload-time = "2025-11-03T13:02:24.301Z" },
+    { url = "https://files.pythonhosted.org/packages/18/2c/8332080fd293f8337779a440b3a143f85e374311705d243439a3349b81ad/lz4-4.4.5-cp314-cp314-win_amd64.whl", hash = "sha256:92159782a4502858a21e0079d77cdcaade23e8a5d252ddf46b0652604300d7be", size = 101497, upload-time = "2025-11-03T13:02:25.187Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/28/2635a8141c9a4f4bc23f5135a92bbcf48d928d8ca094088c962df1879d64/lz4-4.4.5-cp314-cp314-win_arm64.whl", hash = "sha256:d994b87abaa7a88ceb7a37c90f547b8284ff9da694e6afcfaa8568d739faf3f7", size = 93812, upload-time = "2025-11-03T13:02:26.133Z" },
+]
+
+[[package]]
 name = "multidict"
 version = "6.9.1"
 source = { registry = "https://pypi.org/simple" }
@@ -999,6 +1019,50 @@ wheels = [
 ]
 
 [[package]]
+name = "scylla-cqlsh"
+version = "6.0.41"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lz4" },
+    { name = "scylla-driver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2a/ae/a2b3d872fa57fd34966c53b30a7d7b31c605e217d6ac374f7e0331e67a06/scylla_cqlsh-6.0.41.tar.gz", hash = "sha256:3bea97519b818bec4282b8a4cf308b6e39e84599b954afa3fd677a1a8b598e16", size = 928990, upload-time = "2026-11-03T14:04:11.002Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/0a/4c185b591c2f633ce4e2fece0b4d8f52a38ec135dae4987128f363ed9636/scylla_cqlsh-6.0.41-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:bebac5bf8db6606a8136c74feb1a3b440e148428ad99105d078d8475e02ad649", size = 566747, upload-time = "2026-11-03T14:03:20.048Z" },
+    { url = "https://files.pythonhosted.org/packages/05/ce/26ca70fec2c5a3c5cc222bc219e7cea9097351ce496a51424b6beb9944b1/scylla_cqlsh-6.0.41-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:ee234299424490cdce3a361087319a83fd11bfbd9ec01c581fa5ef4cfd53e940", size = 507358, upload-time = "2026-11-03T14:03:21.628Z" },
+    { url = "https://files.pythonhosted.org/packages/00/ba/10021c90a36b21f0e555f656973b3ff0fe5e94f296b2beadb0b10418c6f0/scylla_cqlsh-6.0.41-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:d117651223aa8a057be95194d7c42d45d8381db75f7800500e459f7a93b42c28", size = 3198468, upload-time = "2026-11-03T14:03:23.184Z" },
+    { url = "https://files.pythonhosted.org/packages/78/ae/8c5377b5179edaa92f08e2b7171ce9b9bda3cf62cf3d1c1d7761e61718e2/scylla_cqlsh-6.0.41-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9a4706f6f7a953a977a0976e40f961bd4bda887be7d4debf51463816654e7fbb", size = 3141735, upload-time = "2026-11-03T14:03:24.653Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/c7/fd4fe990d87014e372151eb39f72ff0075f793b6234c1c0d5c8b22e4fe63/scylla_cqlsh-6.0.41-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:0c78a6f2a31a2fc5fb18742e51530bf94cdb8b2d96a9511cbd2c4761af0ead87", size = 3020002, upload-time = "2026-11-03T14:03:26.231Z" },
+    { url = "https://files.pythonhosted.org/packages/98/d0/0691a28be3d4e72cd7b682bb32fae0dc8690752eb0a8cdfac56e19f3f0d6/scylla_cqlsh-6.0.41-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:3e2f058bbe61288866117ed7c34ac746943759e8f4298325de99cd6dd282b615", size = 3139255, upload-time = "2026-11-03T14:03:27.829Z" },
+    { url = "https://files.pythonhosted.org/packages/09/43/aadd73b8be909624758b0b987c0ed612c801a2b6e0f69315f21fbbabb02c/scylla_cqlsh-6.0.41-cp314-cp314-win32.whl", hash = "sha256:5f1e1e4f9d9aaca8ff76c62b36e86e749c3a7c38bd0d6cc464306f031a79c6a8", size = 413402, upload-time = "2026-11-03T14:03:29.305Z" },
+    { url = "https://files.pythonhosted.org/packages/64/90/7d728f1849d9fdae41faba11421a5fc122b46d2517abc86f1adb83de1559/scylla_cqlsh-6.0.41-cp314-cp314-win_amd64.whl", hash = "sha256:c351ea18079e1b2940917654fc9ec53e9b82e8bdcd13e6f0b09f3f9ab8ffbabd", size = 472881, upload-time = "2026-11-03T14:03:30.575Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/b8/839e0e6681dea703c72dbf3a153bd5e21a33cb106b52e6a5107377f875a3/scylla_cqlsh-6.0.41-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:4b8898f32ab621c9b0942a09b955e3b3001b3be10551f2762ccb7b10c45a6f0f", size = 615011, upload-time = "2026-11-03T14:03:31.758Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/af/ed588b40a4c5e0f4a6446edc2b851f94e92ece07cf52743dc228af61cb36/scylla_cqlsh-6.0.41-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:82da1bc4cf22f8419b629430a7645cdc42938e0d654fd32b737a6e4b91934de2", size = 556043, upload-time = "2026-11-03T14:03:33.066Z" },
+    { url = "https://files.pythonhosted.org/packages/17/a7/aaaebb781b2de125a8892822296b3bf4d96863b9157c3bc3b6a5df3fe69a/scylla_cqlsh-6.0.41-cp314-cp314t-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:8b1da2aa9dcff1e4f43c1a50ac78ab1866b076ed229d31b62c0466736c077da0", size = 3208030, upload-time = "2026-11-03T14:03:34.317Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/32/a03448a3b88b40867836ab4b9e76f003bc370f51c54cc2897f8adba11d0f/scylla_cqlsh-6.0.41-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7104f80f30487e50a332fd42dd04259a36935dcf748052d166d42eea137d2270", size = 3303538, upload-time = "2026-11-03T14:03:36.085Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/0f/97a7de662a60a9aab9ed94aa697337a2ab1be3deb925204edd65ab838d43/scylla_cqlsh-6.0.41-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:598367618a9e1abeab9408d52a2f4bd320642df7d0d8ea60929115dbac80b67c", size = 3121161, upload-time = "2026-11-03T14:03:37.484Z" },
+    { url = "https://files.pythonhosted.org/packages/65/eb/92b0f032ce77931420c576bcc31e078024a221a7293259ac17ceca9e4108/scylla_cqlsh-6.0.41-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:e930d2411e65475b1ca595e05c5ae4f775cb571aadbba465fcd36138fbde25ea", size = 3120424, upload-time = "2026-11-03T14:03:39.122Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/3b/ecd1958894e43977e755a194cc059bff444755c7d60c4d8a38a17f6e2251/scylla_cqlsh-6.0.41-cp314-cp314t-win32.whl", hash = "sha256:977e652960efba2a43fbc2d9aaa4c595d1ebb944ca3de6cc5ed075d4ce4d48bd", size = 449409, upload-time = "2026-11-03T14:03:40.371Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/03/460f9ee1c2a36d272a7987409f4e65964d944fb7331a5c06409e5b1046b1/scylla_cqlsh-6.0.41-cp314-cp314t-win_amd64.whl", hash = "sha256:a26805e5eb607233b214be4b8f9c1ab94f94f8550790254ab212b4068d1ec4d6", size = 508013, upload-time = "2026-11-03T14:03:41.488Z" },
+    { url = "https://files.pythonhosted.org/packages/15/2e/7c554bde9e0ff13443fa3c95a6f652cd73c9fb72febfbd64223295ce19b9/scylla_cqlsh-6.0.41-cp315-cp315-macosx_10_15_x86_64.whl", hash = "sha256:25629c502819c7fd3a5dbcd5ff0be5da1d1a50b3a785e1557ed8a485ef202e31", size = 568589, upload-time = "2026-11-03T14:03:42.626Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/9b/e43f0f72345896485613d6b226b32735bf21fe5a52ea99d30203a7b50d2f/scylla_cqlsh-6.0.41-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:e8327be2188ed8f7344374bc717fdd53a86a3224dca8347ec1e28c5f654cd741", size = 508749, upload-time = "2026-11-03T14:03:43.952Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/ca/7abbecad1a1b6b0a71edd8086137f9760e78af04a6017c68b7c2590c8fba/scylla_cqlsh-6.0.41-cp315-cp315-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:400157078423387dbaf8db7b6748d791ad54f375688536c4e7be7c1e692863a1", size = 3224784, upload-time = "2026-11-03T14:03:45.804Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/db/3776227c94cc4230dbc08ae14683ff61ee75ba918eb4f641a20934e29923/scylla_cqlsh-6.0.41-cp315-cp315-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b01bd045085de7ff2e599259f71f13e3f1e158c4c4c9b62b424240fdfcc4cf43", size = 3147317, upload-time = "2026-11-03T14:03:47.294Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/ce/4bca2fd6e61d4ce2a1c62f6b36b2e5ccbc50a2f563431ab9b38c61eb4b1b/scylla_cqlsh-6.0.41-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:cc04cff75dbffeb699d6774d4f76bf7166b126676ada653e6264bb68dad18e6f", size = 3027189, upload-time = "2026-11-03T14:03:49.028Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/ce/04ba909ea959064934710f31238970c954b55d9d89e31381fdd30d62c74c/scylla_cqlsh-6.0.41-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:34e63e255f654e3929b2069094148c912b91f96cb44f2799a92e436bf7b07110", size = 3166061, upload-time = "2026-11-03T14:03:50.6Z" },
+    { url = "https://files.pythonhosted.org/packages/03/4d/333ac49850a6cc33ba08b625368802b93b6d1683afdcf068c067fa88efb4/scylla_cqlsh-6.0.41-cp315-cp315-win32.whl", hash = "sha256:8a7d8628678c3a67465cab6add92fca2d84a5743243d5cc3a0737ebe9bb749ed", size = 414152, upload-time = "2026-11-03T14:03:55.9Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/2e/bc895f6a57d922f3fb68c52100fb1badf9a25bffd08b74f4899396169ba0/scylla_cqlsh-6.0.41-cp315-cp315-win_amd64.whl", hash = "sha256:9c46cabff08ef36dfe243a3f24ba74c8ff5d5cd85cc327bc0bc678d158e9f596", size = 475498, upload-time = "2026-11-03T14:03:57.258Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/8d/f048c4f2a8400a0196926f5d278a2559581485021240c5644033ca9ed28c/scylla_cqlsh-6.0.41-cp315-cp315t-macosx_10_15_x86_64.whl", hash = "sha256:f3dd5fcf8b275a164127778e49dd161c2f7930460b781392879d1470dbd44ff4", size = 616768, upload-time = "2026-11-03T14:03:58.386Z" },
+    { url = "https://files.pythonhosted.org/packages/21/95/8f06bc96f0186ea2e9059783730f3b0b9b0376132e4b1c4e008afd209973/scylla_cqlsh-6.0.41-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:2d3680481d3606df557098ae73c27054b541a9005bcfc54c24b55e5d44f4656e", size = 557778, upload-time = "2026-11-03T14:03:59.811Z" },
+    { url = "https://files.pythonhosted.org/packages/af/08/62e28a4be7852cc2980bde7445ff675feff4f86e4bfe8229f5f1708642a0/scylla_cqlsh-6.0.41-cp315-cp315t-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:8fcab0bd9f7cab6d91454f2d38b4e95f517cbbae79965cda073c0a15b5325cb3", size = 3309879, upload-time = "2026-11-03T14:04:01.196Z" },
+    { url = "https://files.pythonhosted.org/packages/37/a8/a57b8ea9e96bf1efed2bfef9aaa387e46d3ebba5ddf118b20b93ebae319c/scylla_cqlsh-6.0.41-cp315-cp315t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a773d5bf3760d090205e025e27a8f2bbb593102659f93722c011ec522c2eb7b2", size = 3315566, upload-time = "2026-11-03T14:04:03.265Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/e3/7bf094dacefc455796934f3e7eaddca226c1181db790ed042236e70be932/scylla_cqlsh-6.0.41-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:85182ee9d6177324729c311b6bfc14a6ff4a8537c6bff12bfa7127ad20950f7f", size = 3134242, upload-time = "2026-11-03T14:04:04.761Z" },
+    { url = "https://files.pythonhosted.org/packages/94/52/3f85be0d4d2d80620b9cb6fce935e0a5ae80b88956ef745af8ad5b1d9d8d/scylla_cqlsh-6.0.41-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:9b35747cdc071e770e8530324b6c9406bd7c27abcc33a452c6eda2038ef223d7", size = 3214105, upload-time = "2026-11-03T14:04:07.05Z" },
+    { url = "https://files.pythonhosted.org/packages/09/aa/33e52dd3e0b3ac994f6179d5acc6a8a128c4d00907ec82a943a4a5ef5364/scylla_cqlsh-6.0.41-cp315-cp315t-win32.whl", hash = "sha256:42462470b3d33d3f76a3d1330b4912726dacb2af7606bdb490efd1c5222a2e2d", size = 449645, upload-time = "2026-11-03T14:04:08.614Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/4f/d08654e1548a44974c7db931bb764d136fec785f6e9ac6b5c6e1178176bb/scylla_cqlsh-6.0.41-cp315-cp315t-win_amd64.whl", hash = "sha256:390177669663932fd9a3640e42e911a0eaa91f1c2f53d5bca96fc9df006740fe", size = 510678, upload-time = "2026-11-03T14:04:09.864Z" },
+]
+
+[[package]]
 name = "scylla-driver"
 version = "3.29.13"
 source = { registry = "https://pypi.org/simple" }
@@ -1044,6 +1108,7 @@ dependencies = [
     { name = "pyudev" },
     { name = "pyyaml" },
     { name = "requests" },
+    { name = "scylla-cqlsh" },
     { name = "scylla-driver" },
     { name = "setuptools-scm" },
     { name = "sqlalchemy" },
@@ -1081,6 +1146,7 @@ requires-dist = [
     { name = "pyudev", specifier = "==0.24.3" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "requests", specifier = "==2.34.2" },
+    { name = "scylla-cqlsh", specifier = "==6.0.41" },
     { name = "scylla-driver", specifier = "==3.29.13" },
     { name = "setuptools-scm", specifier = "==10.2.3" },
     { name = "sqlalchemy", specifier = "==2.0.52" },
