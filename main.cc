@@ -2061,6 +2061,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 cluster_config_db_config_bridge.stop().get();
             });
 
+            db.invoke_on_all([] (replica::database& db) {
+                db.plug_cluster_config(cluster_config_manager.local());
+            }).get();
+            auto unplug_cluster_config = defer_verbose_shutdown("database's cluster config", [&db] {
+                db.invoke_on_all(&replica::database::unplug_cluster_config).get();
+            });
+
             static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> scrub_period_registrations;
             scrub_period_registrations.start(std::nullopt).get();
             auto stop_scrub_period_registrations = defer_verbose_shutdown("auto scrub config callbacks", [] {

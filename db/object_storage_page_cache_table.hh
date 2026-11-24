@@ -26,6 +26,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/shared_mutex.hh>
+#include "db/cluster_config_manager.hh"
 #include "db_clock.hh"
 #include "mutation/timestamp.hh"
 #include "schema/schema_fwd.hh"
@@ -193,6 +194,15 @@ class object_storage_page_cache_table : public sstables::object_storage_page_cac
     // The most pages which the filter remembers, to limit its memory. 0
     // means to record every hit.
     utils::updateable_value<uint64_t> _max_remembered_hits;
+    // The cluster config manager, from which caches_flushes() reads the
+    // object_storage_page_cache_populate_on_flush option of each table, while
+    // it is plugged in (see plug_cluster_config()).
+    cluster_config_manager* _cluster_config = nullptr;
+    // Logs each table's changes of the option, on shard 0: the tables for
+    // which it is true, by keyspace and name - so that a table which never
+    // set it, as most don't, isn't logged.
+    std::optional<cluster_config_manager::config_callback_registration> _populate_on_flush_logger;
+    std::set<std::pair<sstring, sstring>> _tables_caching_flushes;
 
     // The keys of the pages which put_page() is writing, with how many writes
     // of each are in progress, and the key of the page which the hand is
@@ -309,6 +319,22 @@ public:
     virtual future<> evict_sstable(sstables::sstable_id sst) override;
     virtual future<> evict_other_sstables(const std::unordered_set<sstables::sstable_id>& live) override;
     virtual future<> copy_sstable_from_shard(sstables::sstable_id sst, shard_id from) override;
+    // Whether the table's object_storage_page_cache_populate_on_flush option,
+    // which may be set for the table, its keyspace or the cluster, is true.
+    // False while the cluster config manager isn't plugged in - while the
+    // node starts, before the manager does, and while it stops.
+    virtual bool caches_flushes(const ::schema& s) const noexcept override;
+    // Plugs in the cluster config manager, after it starts, and unplugs it,
+    // before it stops.
+    void plug_cluster_config(cluster_config_manager& ccm);
+    future<> unplug_cluster_config() noexcept;
+    // In the middle of the order in which pages are evicted, nearer to its
+    // end: just after the pages which were never hit, or last hit longest
+    // ago, which make up a quarter of the cache - so the hand evicts the
+    // flushed pages soon, unless they are hit, but not before the pages which
+    // were never hit (see sweep()). If the pages which were never hit are a
+    // quarter of the cache, the flushed pages join them.
+    virtual std::optional<db_clock::time_point> flushed_page_last_hit() const override;
 
     // The number of bytes in this shard's cache.
     uint64_t cached_bytes() const noexcept {

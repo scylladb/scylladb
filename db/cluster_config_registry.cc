@@ -118,6 +118,20 @@ constexpr std::array registry_options = {
         // overflow.
         .valid_range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
     },
+    // Read by the object storage page cache on each memtable flush of a table
+    // whose keyspace caches pages ('disk_cache': 'pages').
+    option{
+        .name = option_name::object_storage_page_cache_populate_on_flush,
+        .description = "Whether the object storage page cache caches the pages of the sstables which memtable flushes write, as they are "
+                "written, so recently written data is read from the cache rather than from the object store. The flushed pages are "
+                "cached as if they were last hit a while ago, so they are evicted soon unless they are read. This multiplies the "
+                "writes to the local disk - the cache then also copies the output of the compactions of the flushed data, and its "
+                "own table writes each page several times - so enable it only for tables which mostly read recently written "
+                "data, not for write-heavy workloads or bulk loads. When disabled, compaction still copies the pages which reads "
+                "cached",
+        .scopes = table_oriented_scopes,
+        .default_value = false,
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {

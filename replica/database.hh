@@ -163,6 +163,7 @@ class system_table_corrupt_data_handler;
 class nop_corrupt_data_handler;
 class system_keyspace;
 class object_storage_page_cache_table;
+class cluster_config_manager;
 
 struct snapshot_entries;
 
@@ -1960,6 +1961,10 @@ public:
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     future<> unplug_system_keyspace() noexcept;
+    // Lets the object storage page cache read the per-table options of the
+    // cluster config, after the manager starts and until it stops.
+    void plug_cluster_config(db::cluster_config_manager& ccm);
+    future<> unplug_cluster_config() noexcept;
 
     void plug_view_update_generator(db::view::view_update_generator& generator) noexcept;
     void unplug_view_update_generator() noexcept;

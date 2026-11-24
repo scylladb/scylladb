@@ -3932,6 +3932,18 @@ void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
     }
 }
 
+void database::plug_cluster_config(db::cluster_config_manager& ccm) {
+    if (_object_storage_page_cache) {
+        _object_storage_page_cache->plug_cluster_config(ccm);
+    }
+}
+
+future<> database::unplug_cluster_config() noexcept {
+    if (_object_storage_page_cache) {
+        co_await _object_storage_page_cache->unplug_cluster_config();
+    }
+}
+
 future<> database::unplug_system_keyspace() noexcept {
     // New readers don't use the cache, but those which already do may keep
     // using it until their sstables are released - so it is only drained

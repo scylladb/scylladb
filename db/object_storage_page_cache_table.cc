@@ -23,6 +23,7 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics.hh>
 #include "db/object_storage_page_cache_table.hh"
+#include "db/cluster_config_registry.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db_clock.hh"
@@ -261,6 +262,54 @@ object_storage_page_cache_table::object_storage_page_cache_table(replica::databa
     // Before the hand's first pass, which may come long after the cache
     // started filling. Without yielding, but only once, as the node starts.
     reset_hit_filter_now();
+}
+
+bool object_storage_page_cache_table::caches_flushes(const ::schema& s) const noexcept {
+    if (!_cluster_config) {
+        return false;
+    }
+    try {
+        const auto* opt = cluster_config_registry::find(cluster_config_registry::option_name::object_storage_page_cache_populate_on_flush);
+        return _cluster_config->resolve_boolean_config(*opt, cluster_config_manager::lookup_context{
+                .keyspace_name = s.ks_name(),
+                .table_name = s.cf_name(),
+        });
+    } catch (...) {
+        // Not caching a flush is harmless.
+        pclogger.warn("Failed to read the object_storage_page_cache_populate_on_flush option of {}.{}: {}",
+                s.ks_name(), s.cf_name(), std::current_exception());
+        return false;
+    }
+}
+
+void object_storage_page_cache_table::plug_cluster_config(cluster_config_manager& ccm) {
+    _cluster_config = &ccm;
+    // The manager delivers each table's value of the option when it starts,
+    // and then whenever it changes - after it installed the new value, which
+    // caches_flushes() then reads. Logged on one shard, but each shard gets
+    // its own delivery.
+    if (this_shard_id() == 0) {
+        const auto* opt = cluster_config_registry::find(cluster_config_registry::option_name::object_storage_page_cache_populate_on_flush);
+        _populate_on_flush_logger = ccm.register_config_callback(sstring(opt->name),
+                [this, opt] (const cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+            auto table = std::make_pair(ctx.keyspace_name.value_or(""), ctx.table_name.value_or(""));
+            bool enabled = cluster_config_registry::to_boolean(*opt, value);
+            if (enabled ? _tables_caching_flushes.insert(table).second : _tables_caching_flushes.erase(table) > 0) {
+                pclogger.info("Caching on flush to the object storage page cache is {} for {}.{}",
+                        enabled ? "enabled" : "disabled", table.first, table.second);
+            }
+            return make_ready_future<>();
+        });
+    }
+}
+
+future<> object_storage_page_cache_table::unplug_cluster_config() noexcept {
+    if (_populate_on_flush_logger) {
+        co_await _populate_on_flush_logger->stop();
+        _populate_on_flush_logger.reset();
+        _tables_caching_flushes.clear();
+    }
+    _cluster_config = nullptr;
 }
 
 size_t object_storage_page_cache_table::hand_position_hash::operator()(const hand_position& k) const noexcept {
@@ -1125,6 +1174,14 @@ future<> object_storage_page_cache_table::recount_cache() {
             _bytes, rows, std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 
+std::optional<db_clock::time_point> object_storage_page_cache_table::flushed_page_last_hit() const {
+    auto cutoff = eviction_cutoff(_bytes / 4);
+    if (cutoff == db_clock::time_point::min()) {
+        return std::nullopt;
+    }
+    return cutoff;
+}
+
 db_clock::time_point object_storage_page_cache_table::eviction_cutoff(uint64_t to_free) const {
     // Evicting only the pages which were never hit is enough - or there is
     // no histogram yet, so evict only them, and the hand builds one.
@@ -1205,6 +1262,12 @@ void object_storage_page_cache_table::register_metrics() {
                 sm::description("Bytes of the pages which compaction wrote and copied to the object storage page cache")),
         sm::make_counter("page_cache_errors", [this] { return _stats.compaction_errors; },
                 sm::description("Failures of compaction to find which data of its input sstables was in the object storage page cache, or to copy pages to it"), {operation("compaction")}),
+        sm::make_counter("page_cache_flush_copies", [this] { return _stats.flush_copied_pages; },
+                sm::description("Pages which memtable flushes wrote and copied to the object storage page cache")),
+        sm::make_counter("page_cache_flush_copied_bytes", [this] { return _stats.flush_copied_bytes; },
+                sm::description("Bytes of the pages which memtable flushes wrote and copied to the object storage page cache")),
+        sm::make_counter("page_cache_errors", [this] { return _stats.flush_errors; },
+                sm::description("Failures of memtable flushes to copy pages to the object storage page cache"), {operation("flush")}),
     });
 }
 

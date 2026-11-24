@@ -30,6 +30,7 @@
 #include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/types.hh"
 #include "replica/query_state.hh"
+#include "sstables/object_storage_page_cache_compaction.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
@@ -2079,6 +2080,9 @@ class database_sstable_write_monitor : public permit_monitor, public compaction:
     const sstables::writer_offset_tracker* _tracker = nullptr;
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
+    // Copies the pages of the sstable to the object storage page cache as
+    // they are written, if it uses the cache (see make_page_cache_flush_output()).
+    shared_ptr<sstables::page_cache_compaction_output> _page_cache_output;
 public:
     database_sstable_write_monitor(lw_shared_ptr<sstable_write_permit> permit, sstables::shared_sstable sst,
         compaction_group& cg, api::timestamp_type max_timestamp)
@@ -2123,6 +2127,14 @@ public:
 
     unsigned level() const override {
         return 0;
+    }
+
+    void set_page_cache_output(shared_ptr<sstables::page_cache_compaction_output> output) noexcept {
+        _page_cache_output = std::move(output);
+    }
+
+    virtual sstables::page_cache_compaction_output* page_cache_output() noexcept override {
+        return _page_cache_output.get();
     }
 };
 
@@ -2320,6 +2332,9 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
 
         auto monitor = database_sstable_write_monitor(permit, newtab, cg,
             old->get_max_timestamp());
+        // Recently written data is often read soon, so the new sstable's pages
+        // are cached as they are written.
+        monitor.set_page_cache_output(sstables::make_page_cache_flush_output(*newtab, old->schema()));
 
         co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg);
       } catch (...) {

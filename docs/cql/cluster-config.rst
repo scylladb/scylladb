@@ -228,6 +228,14 @@ Available options
        the default, for example after a node stayed down for a long time. Must be between ``1``
        and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
        that knows the option.
+   * - ``object_storage_page_cache_populate_on_flush``
+     - boolean
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Whether memtable flushes of a table whose keyspace uses the experimental object storage
+       page cache (``'disk_cache': 'pages'``) cache the pages of the SSTables which they write.
+       This multiplies the writes to the local disk, so enable it only for tables which mostly
+       read recently written data. Default: ``false``. See
+       :ref:`Object storage page cache <admin-object-storage-disk-cache>`.
 
 .. _cql-cluster-config-yaml-options:
 

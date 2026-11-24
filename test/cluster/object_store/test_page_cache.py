@@ -2050,6 +2050,75 @@ async def test_cache_size_lowered(manager: ScyllaClusterManager, s3_storage):
         await wait_for(within_limit(1), time.time() + 10)
 
 
+async def test_flush_caches_pages(manager: ScyllaClusterManager, s3_storage):
+    '''A memtable flush caches the pages of the sstable which it writes, as it
+    writes them, so data which is read soon after it is written is read from
+    the cache - if the object_storage_page_cache_populate_on_flush option,
+    which a table may take from its own setting, its keyspace's or the
+    cluster's, is true for the table. It is false by default.'''
+    # One shard: the line which the cache logs when the option of a table
+    # changes is logged by shard 0, so that every shard has the new value
+    # after it is logged.
+    server = await manager.server_add(config=page_cache_config(s3_storage), cmdline=['--smp', '1'])
+    cql = manager.get_cql()
+    log = await manager.server_open_log(server.server_id)
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        for table in ['test', 'other']:
+            await cql.run_async(f'CREATE TABLE {ks}.{table} (p int PRIMARY KEY, v text)')
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+
+        async def set_option(target, value, table, enabled):
+            mark = await log.mark()
+            await cql.run_async(f'ALTER {target} WITH object_storage_page_cache_populate_on_flush = {value}')
+            state = 'enabled' if enabled else 'disabled'
+            await log.wait_for(f'Caching on flush to the object storage page cache is {state} for {ks}.{table}',
+                               from_mark=mark, timeout=60)
+
+        rand = random.Random(1)
+        data = {table: {} for table in ['test', 'other']}
+        async def write_and_flush(table):
+            insert = cql.prepare(f'INSERT INTO {ks}.{table} (p, v) VALUES (?, ?)')
+            new_data = {len(data[table]) + p: rand.randbytes(500).hex() for p in range(100)}
+            await asyncio.gather(*[cql.run_async(insert, [p, v]) for p, v in new_data.items()])
+            data[table] |= new_data
+            await manager.api.keyspace_flush(server.ip_addr, ks, table)
+
+        # Check that by default, a flush caches nothing.
+        await write_and_flush('other')
+        assert cached_pages(cql) == []
+
+        # Check that with the option set for the table, a flush of the table
+        # caches the new sstable's pages - as never hit, because the cache had
+        # no pages which were hit - so reading the data sends no request to
+        # the object store, while a flush of another table of the keyspace
+        # still caches nothing.
+        await set_option(f'TABLE {ks}.test', 'true', 'test', True)
+        await write_and_flush('other')
+        assert cached_pages(cql) == []
+        await write_and_flush('test')
+        pages = cached_pages(cql)
+        assert pages
+        assert page_hits(cql) == {page: None for page in pages}
+        assert await page_cache_metric(manager, server, 'flush_copies') == len(pages)
+        def read():
+            assert {row.p: row.v for row in cql.execute(f'SELECT p, v FROM {ks}.test')} == data['test']
+            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data['test'][17]
+        await check_no_requests(manager, server, s3_storage, read)
+
+        # Check that with the option set for the keyspace, a flush of the
+        # other table caches its new sstable's pages too.
+        await set_option(f'KEYSPACE {ks}', 'true', 'other', True)
+        await write_and_flush('other')
+        assert len(cached_pages(cql)) > len(pages)
+        pages = cached_pages(cql)
+
+        # Check that once the option is false for the keyspace, a flush of the
+        # other table caches nothing again.
+        await set_option(f'KEYSPACE {ks}', 'false', 'other', False)
+        await write_and_flush('other')
+        assert cached_pages(cql) == pages
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cache_errors(manager: ScyllaClusterManager, s3_storage):
     '''A failure to write or read the page cache - for example, because the

@@ -504,8 +504,68 @@ The copying is approximate, so the cache doesn't keep exactly what it held:
   which the compaction exhausted, and reads then cache, and hit, its pages
   directly. A compaction which replaces its inputs only when it ends, such as
   a major compaction of a large table, may lose more.
-* sstables which aren't written by compaction - by repair, streaming, or a
-  tablet's migration to another node - start with nothing cached.
+* sstables which aren't written by compaction, or by a memtable flush with
+  caching on flush enabled (see "Caching on flush" below) - by repair,
+  streaming, or a tablet's migration to another node - start with nothing
+  cached.
+
+### Caching on flush
+
+A workload which reads data soon after writing it would read it from the
+object store after every memtable flush: memtables are flushed directly to
+the object store. So with caching on flush, which is disabled by default, a
+flush caches all the pages of
+the sstable which it writes, as it writes them, with the same machinery as
+compaction-resistant caching: `make_page_cache_flush_output()` makes an output, which the flush's
+write monitor gives the sstable writer, whose data is all hot.
+
+The flushed pages are cached in the middle of the order in which the hand
+evicts pages, nearer to its end: as if they were last hit just after the pages
+which were never hit, or last hit longest ago, which make up a quarter of the
+cache (`flushed_page_last_hit()`, from the histogram of the pages' ages). So the hand evicts them soon - early in its next pass -
+unless they are read, but not before the pages which were never hit, such as
+those which a scan cached; and if those are a quarter of the cache, the
+flushed pages join them. Caching them as just hit would let a write-heavy
+workload push out the pages which reads use; caching them as never hit would
+let them be evicted before the reads which follow the writes come.
+
+It is enabled per table, by the `object_storage_page_cache_populate_on_flush`
+cluster config option (default false), which a table may take from its own
+setting, its keyspace's or the cluster's (see [cluster config](cluster_config.md)).
+Each flush reads the option of its table, through the cluster config manager,
+which is plugged into the cache after it starts and unplugged before it stops
+(`object_storage_page_cache_table::caches_flushes()`); while it isn't plugged
+in - while the node starts and stops - flushes aren't cached. The cache logs,
+on shard 0, when the option becomes true for a table, and when it becomes
+false again.
+
+The cost of caching on flush is local disk writes, which is why it is
+disabled by default. The cache copies all the
+data which flushes write, and since all the pages of the flushed sstables are
+cached, compaction-resistant caching then copies the output of each compaction
+of them as well. The cache's table is itself an LSM table, which writes each
+byte it caches several times: when its memtable is flushed, and in its own
+compactions, which rewrite it as evictions replace the cache's contents (see
+its compaction strategy). So a keyspace on object storage writes to the local
+disk several times as much as it would if it were on the local disk - in a
+benchmark of a bulk load, about 2.6 times as much, and the load, until its
+compactions finished, took more than twice as long. When the local disk can't
+keep up, the cache slows the writes down, as it would a keyspace on the local
+disk: copying a page waits for the cache's write, so a cache which falls behind
+slows the flushes and compactions which copy pages to it, and with them the
+writes. Moreover, much of what is copied is wasted when the data written is
+more than the cache holds: in a benchmark of a bulk load of 1.3 times as much
+data as the cache held, of the pages copied to the cache, most were evicted
+again when their sstable was compacted away, a quarter were evicted for room
+before any read, and only a quarter were left in the cache. Without caching
+on flush, compaction still copies the pages which reads cached, so the cost
+of the cache grows with what reads cache, rather than with all that is written.
+
+So caching on flush suits workloads which mostly read data written recently -
+such as time series which read the last hours - and workloads which can't
+tolerate the reads from the object store, and the slow warm-up, of data
+right after it was loaded; it doesn't suit write-heavy workloads, bulk loads,
+and workloads which write much more than they read back.
 
 ### Migrating tablets
 

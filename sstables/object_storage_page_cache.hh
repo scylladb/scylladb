@@ -22,6 +22,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include "schema/schema_fwd.hh"
 #include "sstables/component_type.hh"
 #include "sstables/object_storage_page_cache_stats.hh"
 #include "sstables/types.hh"
@@ -142,6 +143,14 @@ public:
     // the sstable - which moved from that shard to this one, keeping its
     // sstable_id (see sstables_manager::copy_cached_pages()).
     virtual future<> copy_sstable_from_shard(sstable_id sst, shard_id from) = 0;
+
+    // Whether the pages of the sstables of the table which memtable flushes
+    // write are cached as they are written (see make_page_cache_flush_output()).
+    virtual bool caches_flushes(const schema& s) const noexcept = 0;
+    // The last hit with which the pages which a memtable flush writes are
+    // cached, which places them in the order in which pages are evicted -
+    // or nothing, to cache them as never hit, which are evicted first.
+    virtual std::optional<db_clock::time_point> flushed_page_last_hit() const = 0;
 
     // The cache's statistics (see object_storage_page_cache_stats.hh).
     object_storage_page_cache_stats& get_stats() noexcept {

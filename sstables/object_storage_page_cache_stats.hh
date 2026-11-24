@@ -72,6 +72,12 @@ struct object_storage_page_cache_stats {
     uint64_t compaction_copied_pages = 0;
     uint64_t compaction_copied_bytes = 0;
     uint64_t compaction_errors = 0;
+    // The same, for the pages which memtable flushes copied to the cache as
+    // they wrote them (see make_page_cache_flush_output()), and the failures
+    // to copy them, which don't fail the flush.
+    uint64_t flush_copied_pages = 0;
+    uint64_t flush_copied_bytes = 0;
+    uint64_t flush_errors = 0;
 };
 
 // The statistics of the reads of one table through the cache, which its

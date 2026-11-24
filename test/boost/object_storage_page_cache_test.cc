@@ -1128,6 +1128,44 @@ SEASTAR_TEST_CASE(test_page_cache_first_eviction_keeps_hit_pages) {
     }, page_cache_config());
 }
 
+// The pages which a memtable flush writes are cached in the middle of the
+// order in which pages are evicted, nearer to its end: as if they were hit
+// just after the pages which were last hit longest ago and make up a quarter
+// of the cache - or as never hit, if the pages which were never hit are a
+// quarter of the cache. The pages are cached with explicit last hits, far
+// apart, so the test doesn't depend on timing.
+SEASTAR_TEST_CASE(test_page_cache_flushed_page_last_hit) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
+        // Check that a flushed page of an empty cache is never hit.
+        cache.recount_cache().get();
+        BOOST_REQUIRE(!cache.flushed_page_last_hit());
+
+        auto sst = new_sstable_id();
+        auto now = db_clock::now();
+        auto old_hit = now - std::chrono::days(10);
+        auto recent_hit = now - std::chrono::hours(1);
+        cache.put_copied_page(sst, Data, 0, make_page('a'), old_hit).get();
+        for (int i = 1; i < 4; i++) {
+            cache.put_copied_page(sst, Data, i * 4096, make_page('b'), recent_hit).get();
+        }
+        cache.recount_cache().get();
+        // Check that a flushed page is evicted after the page which was hit
+        // longest ago, a quarter of the cache, and before the other pages.
+        auto last_hit = cache.flushed_page_last_hit();
+        BOOST_REQUIRE(last_hit);
+        BOOST_REQUIRE(*last_hit > old_hit);
+        BOOST_REQUIRE(*last_hit <= recent_hit);
+
+        // Check that when the pages which were never hit are at least a
+        // quarter of the cache, a flushed page is never hit too.
+        cache.put_page(sst, Data, 4 * 4096, make_page('c')).get();
+        cache.put_page(sst, Data, 5 * 4096, make_page('c')).get();
+        cache.recount_cache().get();
+        BOOST_REQUIRE(!cache.flushed_page_last_hit());
+    }, page_cache_config());
+}
+
 // The buckets of the histogram of the ages of pages cover all ages, each
 // age is in the bucket which starts at it or before it, and the buckets of
 // large ages are at most about 19% wide (4 buckets for each doubling).
@@ -2023,6 +2061,15 @@ public:
     }
     virtual future<> copy_sstable_from_shard(sstables::sstable_id, shard_id) override {
         throw std::logic_error("unsupported operation on fake_page_cache");
+    }
+    // Whether memtable flushes are cached, and with which last hit.
+    bool flushes = true;
+    std::optional<db_clock::time_point> flush_last_hit;
+    virtual bool caches_flushes(const schema&) const noexcept override {
+        return flushes;
+    }
+    virtual std::optional<db_clock::time_point> flushed_page_last_hit() const override {
+        return flush_last_hit;
     }
 };
 
@@ -3397,6 +3444,47 @@ SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_output_registry) {
     BOOST_REQUIRE(!sstables::page_cache_compaction_output::find(new_sstable_id()));
     output = nullptr;
     BOOST_REQUIRE(!sstables::page_cache_compaction_output::find(sst));
+}
+
+// A memtable flush copies all the pages of the sstable it writes to the
+// cache, with the last hit which the cache chooses for flushed pages - and
+// counts them as copied by a flush, not by a compaction.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_flush_copies_all_pages) {
+    auto s = compaction_test_schema();
+    auto keys = sorted_keys(*s, 2);
+    auto bytes = test_bytes(10000);
+    fake_page_cache cache;
+    auto flush = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    flush->set_all_hot(hit1);
+    auto output = flush->make_output(new_sstable_id());
+    BOOST_REQUIRE(output->is_flush());
+    // An uncompressed Data component, cached in 4 KiB pages.
+    output->set_data_compression(nullptr);
+    auto start = position_in_partition::for_partition_start();
+    auto end = position_in_partition::after_all_clustered_rows();
+    output->on_data_fragment(keys[0], start, 0);
+    output->on_data_fragment(keys[0], row(*s, 1), 100);
+    output->on_data_fragment(keys[0], end, 9000);
+    output->on_data_fragment(keys[1], start, 9100);
+    output->on_data_fragment(keys[1], end, 9900);
+    output->on_data_end(10000);
+    std::vector<temporary_buffer<char>> written;
+    write_and_close(sstables::make_page_cache_compaction_sink(data_sink(std::make_unique<seastar::util::memory_data_sink>(written)),
+            output, Data, nullptr, [] { return false; }), bytes);
+
+    // Check that all the bytes were written, and that every page was copied,
+    // with the flush's last hit, without looking up anything in the cache.
+    BOOST_REQUIRE(joined(written) == bytes);
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 3);
+    for (uint64_t offset : {0, 4096, 8192}) {
+        BOOST_REQUIRE(cache.data_page(offset) == bytes.substr(offset, 4096));
+        BOOST_REQUIRE(cache.data_last_hit(offset) == hit1);
+    }
+    BOOST_REQUIRE_EQUAL(cache.reads, 0);
+    // Check that the copies are counted as a flush's.
+    BOOST_REQUIRE_EQUAL(cache.get_stats().flush_copied_pages, 3);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().flush_copied_bytes, 10000);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().compaction_copied_pages, 0);
 }
 
 // The sink copies a page only when the writer decided whether its data is
