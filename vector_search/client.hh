@@ -37,7 +37,7 @@ public:
         seastar::net::inet_address ip;
     };
 
-    using request_error = std::variant<aborted_error, service_unavailable_error>;
+    using request_error = std::variant<aborted_error, service_unavailable_error, index_building_error>;
     using request_result = std::expected<response, request_error>;
 
     explicit client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,

@@ -29,7 +29,7 @@ class clients {
 public:
     using refresh_trigger_callback = std::function<void()>;
 
-    using request_error = std::variant<aborted_error, addr_unavailable_error, service_unavailable_error>;
+    using request_error = std::variant<aborted_error, addr_unavailable_error, service_unavailable_error, index_building_error>;
     using request_result = std::expected<client::response, request_error>;
 
     using clients_vec = std::vector<seastar::lw_shared_ptr<client>>;

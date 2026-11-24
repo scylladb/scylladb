@@ -76,17 +76,26 @@ future<clients::request_result> clients::request(
             co_return make_unexpected<clients::request_error>(clients.error());
         }
 
+        std::optional<index_building_error> index_building_err;
         load_balancer lb(std::move(*clients), random_engine);
         while (auto client = lb.next()) {
             auto result = co_await client->request(method, path, content, as);
             if (result) {
                 co_return std::move(result.value());
             }
+            if (auto* err = std::get_if<index_building_error>(&result.error())) {
+                index_building_err = std::move(*err);
+                continue;
+            }
             if (!result && std::holds_alternative<service_unavailable_error>(result.error())) {
                 // try next client
                 continue;
             }
             co_return make_unexpected<clients::request_error>(result.error());
+        }
+        // A DNS refresh and a retry will not help while the index is being built.
+        if (index_building_err) {
+            co_return std::unexpected{std::move(*index_building_err)};
         }
         _trigger_refresh();
     }

@@ -17,10 +17,26 @@ This document describes the component-level architecture behind CQL `ORDER BY <v
 | **CQL client and coordinator** | The client sends CQL over the native protocol. The coordinator parses, prepares, and executes the statement. |
 | **Query processor** | Detects `ANN OF`, validates the vector column, builds filters, calls the Vector Store client, fetches authoritative rows, and optionally rescores results. |
 | **Vector index metadata** | The custom index (`USING 'vector_index'`) stores only vector index metadata in ScyllaDB. No materialized view is created. |
-| **Vector Store client** | A per-shard HTTP/HTTPS client configured via `vector_store_primary_uri` and `vector_store_secondary_uri`. Load balancing uses uniform-random selection across DNS-resolved endpoints. Each request retries up to 3 rounds; within a round the client tries every resolved endpoint in random order, moving to the next endpoint immediately on failure (no timeout between endpoints). DNS is refreshed between rounds. Falls back to the secondary URI when all primary rounds fail. |
+| **Vector Store client** | A per-shard HTTP/HTTPS client configured via `vector_store_primary_uri` and `vector_store_secondary_uri`. Load balancing uses uniform-random selection across DNS-resolved endpoints. A request goes to the primary URI first and to the secondary URI when the primary one cannot serve it (see [Vector Store client failover](#vector-store-client-failover)). |
 | **Storage proxy and replicas** | Executes reads and writes against the base table and CDC log tables, enforcing the requested consistency level. |
 | **CDC service** | Provides the CDC feed that the Vector Store consumes for vector-indexed tables. |
 | **External Vector Store indexing pipeline** | Lives outside ScyllaDB. Discovers vector indexes, performs the initial full-table scan while CDC readers capture concurrent changes, and then continues consuming CDC to keep the index up to date. |
+
+### Vector Store client failover
+
+Within one URI the client tries every DNS-resolved endpoint in random order. It moves to the next endpoint immediately (no timeout between endpoints). What happens next depends on why an endpoint cannot serve the request.
+
+**The node is unavailable**: a connection error, a TLS verification error, a timeout, or `503 Service Unavailable` with reason `NODE_BOOTSTRAPPING`.
+
+- The node is marked as down and gets no requests. In the background the client polls `GET /api/v1/status` on the node and marks it as up again when the answer is `SERVING`.
+- When all endpoints of the URI are unavailable, the client refreshes DNS and starts a new round, up to 3 rounds.
+- When all primary rounds fail, the request goes to the secondary URI.
+
+**The index is still being built on the node**: `503 Service Unavailable` with reason `INDEX_BUILDING`.
+
+- The node stays up and there is no status check, because it still serves other indexes.
+- After the last endpoint of the primary URI, the request goes to the secondary URI without a new round.
+- If the secondary URI cannot serve the request either, the `503` from the primary URI is returned.
 
 ---
 

@@ -140,7 +140,7 @@ SEASTAR_TEST_CASE(becomes_down_after_service_unavailable_when_body_has_node_boot
     co_await server->stop();
 }
 
-SEASTAR_TEST_CASE(returns_response_and_stays_up_on_service_unavailable_when_body_has_index_building_reason) {
+SEASTAR_TEST_CASE(returns_index_building_error_and_stays_up_on_service_unavailable_when_body_has_index_building_reason) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(
@@ -149,8 +149,8 @@ SEASTAR_TEST_CASE(returns_response_and_stays_up_on_service_unavailable_when_body
     client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
-    BOOST_REQUIRE(res);
-    BOOST_CHECK_EQUAL(res.value().status, seastar::http::reply::status_type::service_unavailable);
+    BOOST_REQUIRE(!res);
+    BOOST_CHECK(std::holds_alternative<index_building_error>(res.error()));
     BOOST_CHECK(client.is_up());
 
     co_await client.close();

@@ -687,6 +687,11 @@ struct vector_store_client::impl {
             if (success_or_aborted(result) || _secondary_uris.empty()) {
                 co_return result;
             }
+            if (std::holds_alternative<index_building_error>(result.error())) {
+                // The index is still being built on primary nodes, try secondary then.
+                auto secondary_result = co_await _secondary_clients.request(method, path, content, as);
+                co_return success_or_aborted(secondary_result) ? std::move(secondary_result) : std::move(result);
+            }
         }
 
         if (!_secondary_uris.empty()) {
