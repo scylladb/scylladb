@@ -9,6 +9,7 @@
 #include "service_level_statement.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 

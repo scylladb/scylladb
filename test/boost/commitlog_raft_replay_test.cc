@@ -26,7 +26,6 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
-#include "cql3/query_processor.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "utils/UUID_gen.hh"

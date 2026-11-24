@@ -15,7 +15,6 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/strong_consistency/table_metrics.hh"
 #include "service/topology_guard.hh"
-#include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "utils/hash.hh"
 
@@ -25,6 +24,10 @@
 
 #include <deque>
 #include <source_location>
+
+namespace cql3 {
+class query_processor;
+}
 
 namespace db {
 class system_keyspace;

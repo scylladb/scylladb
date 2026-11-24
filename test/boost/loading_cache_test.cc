@@ -31,6 +31,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/exception_utils.hh"
 #include "exceptions/exceptions.hh"
+#include "cql3/query_processor.hh"
 
 #include <vector>
 #include <numeric>

@@ -15,16 +15,17 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/thread.hh>
 
 #include "replica/database_config.hh"
 #include "locator/token_metadata.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/storage_options.hh"
 #include "transport/messages/result_message_base.hh"
-#include "cql3/query_options_fwd.hh"
+#include "cql3/query_options.hh"
 #include "cql3/values.hh"
 #include "cql3/prepared_statements_cache.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_processor_memory_config.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "bytes.hh"
 #include "schema/schema.hh"
@@ -85,6 +86,7 @@ class disk_space_monitor;
 namespace service {
 
 class client_state;
+class storage_service;
 class migration_manager;
 class raft_group0_client;
 class raft_group_registry;
@@ -106,6 +108,8 @@ public:
 namespace db {
     class config;
 }
+
+class reader_permit;
 
 struct scheduling_groups {
     scheduling_group compaction_scheduling_group;
@@ -134,7 +138,7 @@ public:
     // Scheduling groups are overwritten unconditionally, see get_scheduling_groups().
     std::optional<replica::database_config> dbcfg;
     std::set<sstring> disabled_features;
-    std::optional<cql3::query_processor::memory_config> qp_mcfg;
+    std::optional<cql3::query_processor_memory_config> qp_mcfg;
     bool need_remote_proxy = false;
     std::optional<uint64_t> initial_tablets; // When engaged, the default keyspace will use tablets.
     std::optional<data_dictionary::storage_options> keyspace_storage_options;

@@ -10,7 +10,6 @@
 
 #include "authentication_statement.hh"
 #include "transport/messages/result_message.hh"
-#include "cql3/query_processor.hh"
 
 uint32_t cql3::statements::authentication_statement::get_bound_terms() const {
     return 0;

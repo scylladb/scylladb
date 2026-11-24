@@ -33,6 +33,8 @@
 
 namespace service::strong_consistency {
 
+using namespace std::chrono_literals;
+
 static logging::logger logger("sc_coordinator");
 
 // Timeouts carry the request's consistency level: drivers read it back from the

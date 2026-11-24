@@ -21,7 +21,6 @@
 
 #include "common.hh"
 #include "auth/config.hh"
-#include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include "seastarx.hh"
 #include "service/raft/raft_group0_client.hh"

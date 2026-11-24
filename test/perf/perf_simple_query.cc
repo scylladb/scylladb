@@ -24,7 +24,6 @@
 #include "schema/schema_builder.hh"
 #include "types/map.hh"
 #include "service/storage_proxy.hh"
-#include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/tags/extension.hh"
