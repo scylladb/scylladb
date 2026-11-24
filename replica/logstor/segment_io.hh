@@ -84,7 +84,7 @@ class scanned_chunk;
 
 // The records of a chunk body, in order. The range ends at the end of the body, or at the first
 // record frame that does not fit in the rest of the body, which only a corrupt chunk whose CRC
-// matches can hold.
+// matches can hold. The iterator logs a warning at such a frame.
 // An increment of the iterator throws std::runtime_error at a record with an unknown flag, as
 // parse_record_frame() does.
 class chunk_records {
