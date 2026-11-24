@@ -272,7 +272,7 @@ public:
      * commit step, which writes it with committed = true.*/
     future<> insert_snapshot_attempt(std::string_view tag, utils::UUID attempt,
             snapshot_attempt_committed committed = snapshot_attempt_committed::no,
-            db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+            db::consistency_level cl = db::consistency_level::QUORUM);
     future<std::vector<snapshot_attempt_entry>> get_snapshot_attempts(std::string_view tag,
             db::consistency_level cl = db::consistency_level::QUORUM);
     future<> delete_snapshot_attempt(std::string_view tag, utils::UUID attempt,
