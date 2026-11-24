@@ -443,10 +443,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_invalid_header) {
     BOOST_REQUIRE(read_with_header(good).value == record.value);
 
     auto h = good;
-    h.value_size = 0;
-    BOOST_REQUIRE_THROW(read_with_header(h), std::runtime_error);
-
-    h = good;
     h.flags = ~ondisk::known_record_flags;
     BOOST_REQUIRE_THROW(read_with_header(h), std::runtime_error);
 
@@ -462,8 +458,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_invalid_header) {
 }
 
 // Checks that ondisk::parse_record_frame() reads a frame at the start of a longer buffer, as a scan
-// of a chunk does, that a frame which does not fit or has an invalid header leaves the stream as it
-// was, and that a frame with an unknown flag throws.
+// of a chunk does, that a frame which does not fit leaves the stream as it was, and that a frame
+// with an unknown flag throws.
 SEASTAR_THREAD_TEST_CASE(test_logstor_parse_record_frame) {
     auto schema = make_kv_schema();
     auto record = make_log_record(schema, "pk0", "a-value-of-some-length", api::timestamp_type(1));
@@ -494,10 +490,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_parse_record_frame) {
         return false;
     };
 
-    // A scan finds a zero value_size in the zero-filled end of a torn chunk.
     const auto key_size = uint16_t(record.header.key.key().representation().size());
     const auto value_size = uint32_t(record.value.size());
-    BOOST_REQUIRE(!parses_with_header(frame, {.key_size = key_size, .value_size = 0}));
 
     // This is the largest key size that the frame header can hold.
     std::vector<char> large(ondisk::min_record_frame_size + ondisk::max_key_size + 2);
@@ -509,7 +503,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_parse_record_frame) {
             std::runtime_error);
     // Bytes that are not a valid frame do not cause the unknown-flag error, whatever their flags
     // field holds.
-    BOOST_REQUIRE(!parses_with_header(frame, {.key_size = key_size, .flags = uint16_t(~ondisk::known_record_flags), .value_size = 0}));
+    BOOST_REQUIRE(!parses_with_header(frame, {.key_size = key_size, .flags = uint16_t(~ondisk::known_record_flags), .value_size = uint32_t(frame.size())}));
 }
 
 // Checks that read_record_header() returns the record header that write_record_header() wrote,

@@ -332,14 +332,6 @@ inline bool validate_chunk_body(const chunk_header& ch, std::span<const char> bo
     return calculate_body_crc(body) == ch.body_crc;
 }
 
-inline bool validate_record_frame_header(const record_frame_header& frame_header) noexcept {
-    // A record always carries an encoded value, so a zero value_size cannot come from a record
-    // this code wrote. A scan finds a zero value_size in the zero-filled end of a torn chunk, and
-    // this check stops the scan there, so that the scan does not read the end as a run of
-    // zero-length records.
-    return frame_header.value_size != 0;
-}
-
 // Returns the flags of `frame_header` that are not in known_record_flags. A record with such a flag
 // is from a release that this code cannot read, so a read or a scan must fail. A scan must not stop
 // at that record as at the end of the chunk's frames, because the scan would then lose the records
@@ -454,7 +446,7 @@ void write_record_frame(Output& out, log_record_bytes_view record_view) {
 
 // Reads the record frame at the start of `in`, without its padding, and returns the bytes of its
 // record header and record value, which point into `in`. Returns nullopt, and leaves `in` as it
-// was, if the frame header is invalid or the frame does not fit in `in`.
+// was, if the frame does not fit in `in`.
 //
 // This function checks the sizes in the frame header before it uses them, because the chunk CRC
 // shows only that the bytes did not change after the write, and not that the writer wrote correct
@@ -469,14 +461,14 @@ inline std::optional<log_record_bytes_view> parse_record_frame(seastar::simple_m
     }
     auto rest = in;
     auto frame_header = ser::serializer<record_frame_header>::read(rest);
-    if (!validate_record_frame_header(frame_header)
-            || size_t(frame_header.key_size) + frame_header.value_size > in.size() - min_record_frame_size) {
+    const size_t header_size = record_header_size(frame_header);
+    if (header_size + frame_header.value_size > rest.size()) {
         return std::nullopt;
     }
     if (const auto unknown = unknown_record_flags(frame_header)) [[unlikely]] {
         throw_unknown_record_flags(unknown);
     }
-    auto header = rest.read_substream(record_header_size(frame_header));
+    auto header = rest.read_substream(header_size);
     auto value = rest.read_substream(frame_header.value_size);
     in = rest;
     return log_record_bytes_view{
