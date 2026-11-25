@@ -1292,11 +1292,16 @@ stop_iteration compacted_fragments_writer::consume(range_tombstone_change&& rtc)
 }
 
 stop_iteration compacted_fragments_writer::consume_end_of_partition() {
-    auto ret = do_consume_end_of_partition();
-    if (ret == stop_iteration::yes) {
+    // The sstable writer stops when its sstable reached the maximum size.
+    // Then close this sstable, and the next partition will start a new one.
+    // But don't stop the compaction: when this writer is fed by the reader
+    // directly (consume_without_gc_writer()), not through the mutation
+    // compactor that ignores this result, stopping would end the compaction
+    // after the first output sstable and lose the rest of its input.
+    if (do_consume_end_of_partition() == stop_iteration::yes) {
         stop_current_writer();
     }
-    return ret;
+    return stop_iteration::no;
 }
 
 void compacted_fragments_writer::consume_end_of_stream() {
