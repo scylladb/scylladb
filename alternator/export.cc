@@ -2991,7 +2991,8 @@ static future<> run_export(
         // compatibility. It is the requested time, in the 5 minutes before the accept time.
         rjson::add(summary, "exportTime", rjson::from_string(format_manifest_time(row.export_time)));
         rjson::add(summary, "s3Bucket", rjson::from_string(s3_bucket));
-        rjson::add(summary, "s3Prefix", rjson::from_string(s3_prefix));
+        // DynamoDB writes null if the request has no S3Prefix.
+        rjson::add(summary, "s3Prefix", s3_prefix.empty() ? rjson::null_value() : rjson::from_string(s3_prefix));
         // Alternator does not know the encryption of the bucket.
         rjson::add(summary, "s3SseAlgorithm", rjson::null_value());
         rjson::add(summary, "s3SseKmsKeyId", rjson::null_value());

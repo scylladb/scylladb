@@ -658,11 +658,14 @@ def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, n
             assert 's3Bucket' in manifest_summary
             assert manifest_summary['s3Bucket'] == bucket
 
-            assert 's3Prefix' in manifest_summary
+            # DynamoDB writes null if the request has no S3Prefix.
+            assert manifest_summary['s3Prefix'] == s3_prefix_value
             assert 's3SseAlgorithm' in manifest_summary
             assert 's3SseKmsKeyId' in manifest_summary
             assert 'manifestFilesS3Key' in manifest_summary
             assert get_content_by_path(manifest_summary['manifestFilesS3Key']) == root_dir['manifest-files.json']
+            # DescribeExport names the summary manifest of the export.
+            assert get_content_by_path(final['ExportManifest']) == root_dir['manifest-summary.json']
 
             assert 'billedSizeBytes' in manifest_summary
             assert manifest_summary['billedSizeBytes'] >= 0
