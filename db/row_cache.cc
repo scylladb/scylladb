@@ -32,6 +32,7 @@
 #include "utils/labels.hh"
 #include "utils/error_injection.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/histogram_metrics_helper.hh"
 
 namespace cache {
 
@@ -80,8 +81,14 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
     , _app_stats(app_stats)
     , _index_cache_fraction(std::move(index_cache_fraction))
 {
+    for (auto& m : _age_markers) {
+        m._tracker = this;
+    }
     if (with_metrics) {
         setup_metrics();
+        // Only the real per-shard tracker pays for the timer; test trackers place markers by hand.
+        _age_timer.set_callback([this] { on_age_timer(); });
+        _age_timer.arm(_age_marker_interval);
     }
 
     _region.make_evictable([this] {
@@ -123,9 +130,97 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
             size_t index_cache_space = _partition_index_cache_stats.used_bytes + _index_cached_file_stats.cached_bytes;
             bool should_evict_index = index_cache_space > total_cache_space * _index_cache_fraction.get();
 
-            return _lru.evict(should_evict_index);
+            // An index-list eviction is out of LRU order, so _front_ts doesn't describe it.
+            bool in_lru_order = !(should_evict_index && _lru.has_index_entries());
+            if (!in_lru_order) {
+                return _lru.evict(should_evict_index);
+            }
+            // Markers free no memory, so skip them to evict a real entry.
+            pop_front_age_markers();
+            size_t used_before = _region.occupancy().used_space();
+            auto ret = _lru.evict(should_evict_index);
+            auto now = lowres_clock::now();
+            // Unlinking a last dummy frees nothing; don't let it weigh as an evicted entry.
+            if (_region.occupancy().used_space() < used_before) {
+                auto age = std::chrono::duration_cast<std::chrono::seconds>(now - _front_ts).count();
+                _eviction_age.add(std::max<int64_t>(age, 0));
+            }
+            // Turnover sped up: don't wait for a long timer tick, it would overstate ages.
+            if (_age_timer.armed()) {
+                refresh_age_markers(now);
+            }
+            return ret;
         });
     });
+}
+
+void cache_tracker::age_marker::on_evicted() noexcept {
+    _tracker->_front_ts = _ts;
+    _tracker->_age_markers_head = (_tracker->_age_markers_head + 1) % max_age_markers;
+    --_tracker->_age_markers_linked;
+}
+
+// Markers are in time order, so only the ring head can be at the LRU front.
+void cache_tracker::pop_front_age_markers() noexcept {
+    while (_age_markers_linked) {
+        auto& m = _age_markers[_age_markers_head];
+        if (_lru.front() != &m) {
+            break;
+        }
+        _lru.remove(m);
+        m.on_evicted();
+    }
+    // Whatever gets cached next is newer than now; don't date it by the last marker.
+    if (!_lru.front()) {
+        _front_ts = lowres_clock::now();
+    }
+}
+
+void cache_tracker::insert_age_marker(lowres_clock::time_point ts) noexcept {
+    if (_age_markers_linked == max_age_markers) {
+        coarsen_age_markers();
+        _age_marker_interval = std::min(_age_marker_interval * 2, max_age_marker_interval);
+    }
+    auto& m = _age_markers[(_age_markers_head + _age_markers_linked) % max_age_markers];
+    m._ts = ts;
+    _last_age_marker_ts = ts;
+    _lru.add(m);
+    ++_age_markers_linked;
+}
+
+// Drops every second marker, halving resolution so the ring spans twice the time.
+void cache_tracker::coarsen_age_markers() noexcept {
+    auto slot = [this] (unsigned i) -> age_marker& { return _age_markers[(_age_markers_head + i) % max_age_markers]; };
+    for (unsigned i = 1; i < _age_markers_linked; ++i) {
+        auto& m = slot(i);
+        if (i % 2) {
+            _lru.remove(m);
+        } else {
+            // Move into the slot freed earlier in this loop, keeping the ring contiguous.
+            auto& dst = slot(i / 2);
+            dst.swap(m);
+            dst._ts = m._ts;
+        }
+    }
+    _age_markers_linked = (_age_markers_linked + 1) / 2;
+}
+
+void cache_tracker::on_age_timer() noexcept {
+    // Without evictions nothing else advances _front_ts past entries that were touched since.
+    pop_front_age_markers();
+    refresh_age_markers(lowres_clock::now());
+    _age_timer.arm(_age_marker_interval);
+}
+
+// Shared by the timer and the evictor: the evictor must not re-arm a timer from inside an allocation.
+void cache_tracker::refresh_age_markers(lowres_clock::time_point now) noexcept {
+    // Few markers left means the LRU spans less time than before, so go back to fine spacing.
+    if (_age_markers_linked < max_age_markers / 4) {
+        _age_marker_interval = min_age_marker_interval;
+    }
+    if (now - _last_age_marker_ts >= _age_marker_interval) {
+        insert_age_marker(now);
+    }
 }
 
 cache_tracker::~cache_tracker() {
@@ -135,6 +230,7 @@ cache_tracker::~cache_tracker() {
 memory::reclaiming_result cache_tracker::evict_from_lru_shallow() noexcept {
     return with_allocator(_region.allocator(), [this] () noexcept {
         current_tracker = this;
+        pop_front_age_markers();
         return _lru.evict_shallow();
     });
 }
@@ -195,6 +291,10 @@ cache_tracker::setup_metrics() {
             sm::description("total amount of attempts to compact expired rows during read")),
         sm::make_counter("rows_compacted_away", _stats.rows_compacted_away,
             sm::description("total amount of compacted and removed rows during read")),
+        sm::make_histogram("eviction_age_seconds", sm::description("time since last access of entries evicted under memory pressure"),
+            [this] { return to_metrics_histogram(_eviction_age); }).aggregate({sm::shard_label}).set_skip_when_empty(),
+        sm::make_gauge("lru_front_age_seconds", sm::description("time since last access of the least recently used cache entry"),
+            [this] { return std::chrono::duration<double>(lowres_clock::now() - _front_ts).count(); }),
     });
     sstables::register_index_page_cache_metrics(_metrics, _index_cached_file_stats);
     sstables::register_index_page_metrics(_metrics, _partition_index_cache_stats);
@@ -214,6 +314,9 @@ void cache_tracker::clear() {
         _garbage.clear();
         _memtable_cleaner.clear();
     });
+    // What gets cached from now on must not inherit the age of the old contents.
+    _front_ts = lowres_clock::now();
+    _age_marker_interval = min_age_marker_interval;
     _stats.partition_removals += partitions_before;
     _stats.row_removals += rows_before;
     allocator().invalidate_references();
@@ -901,6 +1004,7 @@ void row_cache::clear_now() noexcept {
         });
         _tracker.clear_continuity(*it);
     });
+    _tracker.pop_front_age_markers();
 }
 
 template<typename CreateEntry, typename VisitEntry>
@@ -1310,6 +1414,8 @@ future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::p
             }
 
             on_failure.cancel();
+            // If this emptied the LRU, what is cached next must not inherit the old front age.
+            _tracker.pop_front_age_markers();
         };
     } catch (...) {
         return clear_on_error(std::move(eu), std::current_exception());
