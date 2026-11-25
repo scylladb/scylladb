@@ -190,14 +190,21 @@ class BaseAlternator(Tester):
 
     alternator_urls = {}
     alternator_apis = {}
-    clear_resources_methods = []
 
     @pytest.fixture(scope="function", autouse=True)
     def clear_resources(self):
+        # The list belongs to this test only. If one method fails, the other
+        # methods still run, and only the teardown of this test fails.
+        self.clear_resources_methods = []
         yield
+        errors = []
         for resource_method in self.clear_resources_methods:
-            resource_method()
-        self.clear_resources_methods.clear()
+            try:
+                resource_method()
+            except Exception as error:  # noqa: BLE001
+                errors.append(error)
+        if errors:
+            raise errors[0] if len(errors) == 1 else ExceptionGroup("clear_resources failed", errors)
 
     @property
     def boto_config(self):
