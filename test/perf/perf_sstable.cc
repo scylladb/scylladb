@@ -22,23 +22,17 @@ static unsigned iterations = 30;
 static unsigned parallelism = 1;
 
 future<> test_write(sharded<perf_sstable_test_env>& dt) {
-    return seastar::async([&dt] {
-        dt.invoke_on_all([] (perf_sstable_test_env &t) {
+        co_await dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.fill_memtable();
-        }).then([&dt] {
-            return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::flush_memtable);
-        }).get();
-    });
+        });
+            co_await time_runs(iterations, parallelism, dt, &perf_sstable_test_env::flush_memtable);
 }
 
 future<> test_compaction(sharded<perf_sstable_test_env>& dt) {
-    return seastar::async([&dt] {
-        dt.invoke_on_all([] (perf_sstable_test_env &t) {
+        co_await dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.prepare_compaction_input();
-        }).then([&dt] {
-            return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::compaction, "input rows", "row");
-        }).get();
-    });
+        });
+            co_await time_runs(iterations, parallelism, dt, &perf_sstable_test_env::compaction, "input rows", "row");
 }
 
 future<> test_index_read(sharded<perf_sstable_test_env>& dt) {
