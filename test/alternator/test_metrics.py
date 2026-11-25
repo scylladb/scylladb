@@ -372,7 +372,7 @@ def test_export_table_operations(test_table_s, metrics):
     table_arn = test_table_s.meta.client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
     with check_increases_operation(metrics, ['ExportTableToPointInTime']):
         with check_table_increases_operation(metrics, ['ExportTableToPointInTime'], test_table_s.name):
-            with pytest.raises(ClientError):
+            with pytest.raises(ClientError, match='InvalidExportTimeException'):
                 test_table_s.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket',
                     ExportTime=time.time() + 3600)
 
