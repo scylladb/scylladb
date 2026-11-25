@@ -5,7 +5,7 @@
 import re
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, ConfigurationException
 
 from .util import new_test_table, unique_name, keyspace_has_tablets
 from .nodetool import flush
@@ -448,3 +448,15 @@ def test_create_if_not_exists_with_cdc(scylla_only, cql, test_keyspace):
         cql.execute(create_table_query)
     finally:
         cql.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+# The CDC ttl option ends up as the TTL of the log rows, so it must respect
+# the same maximum as USING TTL (20 years), otherwise the sstable reader
+# rejects the log sstables ("Too big ttl"). Reproduces SCYLLADB-6065.
+def test_cdc_ttl_option_limit(scylla_only, cql, test_keyspace):
+    max_ttl = 20 * 365 * 24 * 60 * 60
+    with pytest.raises(ConfigurationException, match=f"ttl must be less than or equal to {max_ttl}"):
+        with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", f"WITH cdc = {{'enabled': true, 'ttl': '{max_ttl + 1}'}}"):
+            pass
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", f"WITH cdc = {{'enabled': true, 'ttl': '{max_ttl}'}}") as table:
+        with pytest.raises(ConfigurationException, match=f"ttl must be less than or equal to {max_ttl}"):
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true, 'ttl': '{max_ttl + 1}'}}")

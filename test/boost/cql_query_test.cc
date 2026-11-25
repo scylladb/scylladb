@@ -158,12 +158,13 @@ SEASTAR_TEST_CASE(test_twcs_max_window) {
                       "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
                       "AND default_time_to_live=36000;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
-        // LiveUpdate - Disable check
+        // LiveUpdate - Disable check. Use the largest default_time_to_live
+        // Scylla accepts (max_ttl, 20 years), which is way beyond 10 windows.
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
-        e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
-                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                      "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
-                      "AND default_time_to_live=864000000;").get();
+        e.execute_cql(format("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {{'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'}} "
+                      "AND default_time_to_live={:d};", max_ttl.count())).get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl2"));
     });
 }
