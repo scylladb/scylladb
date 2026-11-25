@@ -8,14 +8,22 @@ from test.pylib.util import wait_for_first_completed
 pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
-async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args: str) -> subprocess.CompletedProcess:
-    """Runs `nodetool <args>` against `server`, with the server's executable."""
+async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args: str,
+                       expected_exit_code: int = 0) -> subprocess.CompletedProcess:
+    """
+    Runs `nodetool <args>` against `server`, with the server's executable,
+    and checks that it exits with `expected_exit_code`.
+    """
     exe_path = await manager.server_get_exe(server.server_id)
     cmd = [exe_path, "nodetool", *args, "--logger-log-level", "scylla-nodetool=trace", "-h", server.ip_addr]
     proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     stdout, stderr = await proc.communicate()
     assert proc.returncode is not None
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout.decode(), stderr.decode())
+    result = subprocess.CompletedProcess(cmd, proc.returncode, stdout.decode(), stderr.decode())
+    assert result.returncode == expected_exit_code, \
+        f"{cmd} exited with {result.returncode}, expected {expected_exit_code}\n" \
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    return result
 
 
 async def validate_status_operation(result: str, live_eps: list, down_eps: list, leaving: list, joining: list,
