@@ -2016,6 +2016,8 @@ def test_export_table_invalid_export_time_before_now(test_table_s_for_export_onl
         )
 
 # Test that ExportTime in the future is rejected. DynamoDB also refuses it.
+# ExportTime is a minute ahead, so that it is still in the future when the
+# server checks it, even on a slow (e.g. debug) run.
 def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
@@ -2024,7 +2026,7 @@ def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only
         client.export_table_to_point_in_time(
             TableArn=table_arn,
             S3Bucket='my-bucket',
-            ExportTime=int(time.time()) + 10,
+            ExportTime=int(time.time()) + 60,
         )
 
 
