@@ -187,6 +187,10 @@ class schema_applier {
     affected_tables_and_views _affected_tables_and_views;
 
     std::unique_ptr<replica::tables_metadata_lock_on_all_shards> _metadata_locks;
+    // Set once commit() succeeded (a failed commit() aborts the node). From then
+    // on the tables in _affected_tables_and_views.table_shards are dropped, and
+    // have to be stopped before they are destroyed.
+    bool _committed = false;
 
     functions_change_batch_all_shards _functions_batch; // includes aggregates
     // Set during prepare() when the incoming mutations touch a cluster-config table, so

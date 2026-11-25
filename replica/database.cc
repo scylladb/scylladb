@@ -1482,14 +1482,18 @@ void database::drop_table(sharded<database>& sharded_db,
 
 future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
         bool with_snapshot, global_table_ptr& table_shards) {
-    co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
+    // The table has to be stopped, whatever fails below: destroying a table which
+    // was not stopped aborts the node.
+    auto f = co_await coroutine::as_future(sharded_db.invoke_on_all([&] (database& db) -> future<> {
         auto& cf = *table_shards;
         auto uuid = cf.schema()->id();
+        co_await utils::get_local_injector().inject("cleanup_drop_table_fail",
+                [] { return std::make_exception_ptr(std::runtime_error("injected failure in cleanup_drop_table_on_all_shards")); });
         co_await cf.await_pending_ops();
         co_await db.foreach_reader_concurrency_semaphore([uuid] (reader_concurrency_semaphore& sem) -> future<> {
             co_await sem.evict_inactive_reads_for_table(uuid);
         });
-    });
+    }));
     // Use a time point in the far future (9999-12-31T00:00:00+0000)
     // to ensure all sstables are truncated,
     // but be careful to stays within the client's datetime limits.
@@ -1507,12 +1511,21 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     //   obsolete system.large_* tables on boot, which are recreated and dropped again
     //   on every boot, before the commitlog is replayed.
     const bool persist_truncation_record = false;
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt),
-            persist_truncation_record));
-    co_await smp::invoke_on_all([&] {
+    if (!f.failed()) {
+        f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt),
+                persist_truncation_record));
+    }
+    auto stop_f = co_await coroutine::as_future(smp::invoke_on_all([&] {
         return table_shards->stop();
-    });
-    f.get(); // re-throw exception from truncate() if any
+    }));
+    if (f.failed()) {
+        // Report the failure which interrupted the cleanup, rather than the one of stopping the table.
+        if (stop_f.failed()) {
+            dblog.error("Failed to stop dropped table {}.{}: {}", table_shards->schema()->ks_name(), table_shards->schema()->cf_name(), stop_f.get_exception());
+        }
+        co_await std::move(f);
+    }
+    co_await std::move(stop_f);
     co_await sys_ks.local().remove_truncation_records(table_shards->schema()->id());
     co_await table_shards->destroy_storage();
 }
