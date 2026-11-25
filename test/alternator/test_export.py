@@ -2686,6 +2686,32 @@ def test_export_error_injection_export_row_insert_overloaded(cql, scylla_only, r
         assert_listed_with_status(client, table_arn, desc['ExportArn'], 'FAILED')
 
 
+# Test that the client gets the error, not a FAILED export, if the write of the FAILED export row
+# fails too. A retry with the same ClientToken would not find that FAILED export: a background fiber
+# repeats the write, and until then the retry gets IN_PROGRESS. After the write, retries with the
+# same ClientToken report the FAILED export.
+def test_export_error_injection_failed_row_not_stored(scylla_only, rest_api, test_table_s, s3):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    request = {'TableArn': table_arn, 'ClientToken': str(uuid.uuid4())}
+
+    with new_s3_bucket(s3) as bucket:
+        request['S3Bucket'] = bucket
+        with scylla_inject_error(rest_api, 'alternator_export_to_s3_after_client_token_insertion', one_shot=True), \
+             scylla_inject_error(rest_api, 'alternator_export_to_s3_final_write', one_shot=True):
+            with pytest.raises(ClientError, match='InternalServerError'):
+                client.export_table_to_point_in_time(**request)
+        # The background fiber writes the FAILED row at once, but a retry can come first. Until
+        # then the export row does not exist, so repeat the request, not DescribeExport.
+        deadline = time.time() + 60
+        while (desc := client.export_table_to_point_in_time(**request)['ExportDescription'])['ExportStatus'] == 'IN_PROGRESS':
+            assert time.time() < deadline, desc
+            time.sleep(0.1)
+        assert desc['ExportStatus'] == 'FAILED', desc
+        again = client.export_table_to_point_in_time(**request)['ExportDescription']
+        assert (again['ExportArn'], again['ExportStatus']) == (desc['ExportArn'], 'FAILED')
+
+
 # Test that a ClientToken insert which fails with an unavailable error writes nothing.
 def test_export_error_injection_client_token_insert_unavailable(cql, scylla_only, rest_api, test_table_s, s3):
     injection = 'alternator_export_to_s3_client_token_insert_unavailable'

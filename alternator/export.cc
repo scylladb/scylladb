@@ -2297,13 +2297,17 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     } else {
         set_failed(erow, "Exception", e ? e->what() : "Unknown error");
     }
+    // `failed_row_stored` is true if the FAILED export row of this request is stored.
+    bool failed_row_stored = false;
     try {
         if (co_await try_write_final_export_row(_sdks, erow)) {
             xlogger.warn("Export {} failed before it started, with {}: {}", erow.export_arn, *erow.failure_code,
                     *erow.failure_message);
+            failed_row_stored = true;
         }
         else {
-            // The write did not apply. The garbage collector took the export and marked it FAILED.
+            // The write did not apply: the garbage collector took the export and wrote its own
+            // FAILED row, with other values. Answer with the error, so that a retry reports that row.
             xlogger.debug("Export {} failed during starting up phase, but the row is no longer ours",
                     erow.export_arn);
         }
@@ -2315,14 +2319,18 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         // does not start either.
         xlogger.warn("Export {}: failed to write the FAILED state, retrying in the background: {}",
                 erow.export_arn, std::current_exception());
-        _s3_exports->finish_export_in_background(std::move(*export_slot), erow);
+        _s3_exports->finish_export_in_background(std::move(*export_slot), std::move(erow));
     }
-    if (!client_token_is_ours) {
+    // Answer with this FAILED export only if a retry with the same ClientToken finds it, that is
+    // if the token row has our ARN and the FAILED export row is stored. Else answer with the
+    // error. An SDK retries it with the same ClientToken, and the retry reports what is stored. If
+    // only the write of the FAILED row threw, the retry gets IN_PROGRESS until the background
+    // fiber above writes FAILED.
+    if (!client_token_is_ours || !failed_row_stored) {
         std::rethrow_exception(failure);
     }
-    // The token row has our ARN. Answer with the FAILED export, also for an api_error such as
-    // RequestLimitExceeded. An SDK retries such an error with the same ClientToken, and the retry
-    // finds this FAILED export.
+    // Answer with the FAILED export, also for an api_error such as RequestLimitExceeded. An SDK
+    // retries such an error with the same ClientToken, and the retry finds this FAILED export.
     co_return rjson::print(build_export_description_response(erow));
 }
 
