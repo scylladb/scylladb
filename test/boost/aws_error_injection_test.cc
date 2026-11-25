@@ -205,3 +205,46 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_2) {
         return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
     });
 }
+
+// A DeleteObjects reply that succeeds as a whole can still fail some keys. The middle
+// key of three fails according to the policy: a transient failure is retried, any other
+// one fails the call and names the key.
+void test_client_delete_objects(std::string_view test_name, failure_policy policy) {
+    const sstring bucket = "test";
+    std::vector<sstring> keys;
+    for (int i = 0; i < 3; i++) {
+        keys.push_back(fmt::format("{}-{}-{}", test_name, ::getpid(), i));
+    }
+    register_policy(fmt::format("/{}/{}", bucket, keys[1]), policy);
+
+    auto client = s3::client::make(get_address(), make_mock_config());
+    auto client_shutdown = deferred_close(*client);
+    client->delete_objects(bucket, keys).get();
+}
+
+// A non-retryable failure is reported as is, a retryable one once the retries
+// run out, through the same path as any failed request, which adds a prefix
+static auto delete_objects_failed_with(std::string_view reason) {
+    return [reason] (const std::exception& e) {
+        return std::string_view(e.what()).contains("Failed to delete 1 of 3 objects from bucket test: ")
+                && std::string_view(e.what()).ends_with(reason);
+    };
+}
+
+SEASTAR_THREAD_TEST_CASE(test_delete_objects_success) {
+    BOOST_REQUIRE_NO_THROW(test_client_delete_objects(seastar_test::get_name(), failure_policy::SUCCESS));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_delete_objects_retryable_success) {
+    BOOST_REQUIRE_NO_THROW(test_client_delete_objects(seastar_test::get_name(), failure_policy::RETRYABLE_FAILURE));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_delete_objects_failure_1) {
+    BOOST_REQUIRE_EXCEPTION(test_client_delete_objects(seastar_test::get_name(), failure_policy::NEVERENDING_RETRYABLE_FAILURE),
+            std::exception, delete_objects_failed_with("-1 (InternalError: We encountered an internal error. Please try again.)"));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_delete_objects_failure_2) {
+    BOOST_REQUIRE_EXCEPTION(test_client_delete_objects(seastar_test::get_name(), failure_policy::NONRETRYABLE_FAILURE),
+            std::exception, delete_objects_failed_with("-1 (AccessDenied: Access Denied)"));
+}

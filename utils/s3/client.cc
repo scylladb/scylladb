@@ -13,6 +13,7 @@
 #include <initializer_list>
 #include <memory>
 #include <ranges>
+#include <span>
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
@@ -54,6 +55,8 @@
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/aws_sigv4.hh"
+#include "utils/hashers.hh"
+#include "utils/base64.hh"
 #include "db_clock.hh"
 #include "utils/log.hh"
 
@@ -974,6 +977,168 @@ future<> client::delete_object(sstring object_name, seastar::abort_source* as) {
     s3l.trace("DELETE {}", object_name);
     auto req = http::request::make("DELETE", _host, object_name);
     co_await make_request(std::move(req), ignore_reply, deleted_or_absent, as);
+}
+
+static std::string_view xml_entity(char c) {
+    switch (c) {
+    case '&': return "&amp;";
+    case '<': return "&lt;";
+    case '>': return "&gt;";
+    case '"': return "&quot;";
+    case '\'': return "&apos;";
+    // A parser turns a literal CR into LF, so the key would arrive changed
+    case '\r': return "&#xD;";
+    case '\n': return "&#xA;";
+    }
+    on_internal_error(s3l, seastar::format("no XML entity for '{}'", c));
+}
+
+// Feeds the DeleteObjects request body for the keys to the consumer piece by piece,
+// see https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html#API_DeleteObjects_RequestSyntax
+// for the format and https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html#object-key-xml-related-constraints
+// for how keys are escaped in it.
+// The body is needed twice, to checksum it before the request is sent and then to send
+// it, so it is generated twice rather than kept in memory.
+static future<> generate_delete_objects_body(std::span<const sstring> keys, noncopyable_function<future<>(std::string_view)> consume) {
+    // Quiet mode makes the response list only the keys that failed
+    co_await consume(R"(<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Quiet>true</Quiet>)");
+    for (const auto& key : keys) {
+        co_await consume("<Object><Key>");
+        std::string_view rest = key;
+        while (true) {
+            auto pos = rest.find_first_of("&<>\"'\r\n");
+            co_await consume(rest.substr(0, pos));
+            if (pos == std::string_view::npos) {
+                break;
+            }
+            co_await consume(xml_entity(rest[pos]));
+            rest.remove_prefix(pos + 1);
+        }
+        co_await consume("</Key></Object>");
+    }
+    co_await consume("</Delete>");
+}
+
+namespace {
+// A key that DeleteObjects reported as failed to delete
+struct delete_objects_failure {
+    sstring key;
+    sstring code;
+    aws::aws_error error;
+};
+}
+
+// Note it parses the body in place.
+static std::vector<delete_objects_failure> parse_delete_objects_errors(sstring& body) {
+    auto doc = std::make_unique<rapidxml::xml_document<>>();
+    try {
+        doc->parse<0>(body.data());
+    } catch (const rapidxml::parse_error& e) {
+        throw std::runtime_error(seastar::format("cannot parse DeleteObjects response: {}", e.what()));
+    }
+    auto root = doc->first_node("DeleteResult");
+    if (!root) {
+        throw std::runtime_error("'DeleteResult' node is missing in DeleteObjects response");
+    }
+    std::vector<delete_objects_failure> failures;
+    auto value = [] (const rapidxml::xml_node<>* node, std::string_view name) -> std::string_view {
+        auto child = node->first_node(name.data());
+        return child ? child->value() : "";
+    };
+    const auto& known_errors = aws::aws_error::get_errors();
+    for (auto err = root->first_node("Error"); err; err = err->next_sibling("Error")) {
+        auto code = value(err, "Code");
+        auto message = std::string(value(err, "Message"));
+        auto known = known_errors.find(code);
+        auto error = known != known_errors.end()
+                ? aws::aws_error(known->second.get_error_type(), std::move(message), known->second.is_retryable())
+                : aws::aws_error(aws::aws_error_type::UNKNOWN, std::move(message), utils::http::retryable::no);
+        failures.push_back({sstring(value(err, "Key")), sstring(code), std::move(error)});
+    }
+    return failures;
+}
+
+static sstring describe_delete_objects_failures(std::span<const delete_objects_failure> failures, size_t total, std::string_view bucket) {
+    auto describe = [] (const delete_objects_failure& f) {
+        return seastar::format("{} ({}: {})", f.key, f.code, f.error.get_error_message());
+    };
+    return seastar::format("Failed to delete {} of {} objects from bucket {}: {}",
+            failures.size(), total, bucket, fmt::join(failures | std::views::transform(describe), ", "));
+}
+
+future<> client::delete_objects(sstring bucket, std::span<const sstring> keys, seastar::abort_source* as) {
+    // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+    constexpr size_t max_keys_per_request = 1000;
+    // A missing bucket answers 404, tolerated for the same reasons delete_object() does
+    constexpr expected_status deleted_or_absent = {http::reply::status_type::ok, http::reply::status_type::not_found};
+    std::vector<delete_objects_failure> failed;
+    for (auto batch : keys | std::views::chunk(max_keys_per_request)) {
+        s3l.trace("POST /{} delete {} objects", bucket, batch.size());
+        auto req = http::request::make("POST", _host, format("/{}", bucket));
+        req.set_query_param("delete", "");
+        md5_hasher md5;
+        size_t body_size = 0;
+        co_await generate_delete_objects_body(batch, [&md5, &body_size] (std::string_view piece) {
+            md5.update(piece.data(), piece.size());
+            body_size += piece.size();
+            return make_ready_future<>();
+        });
+        // The request is mandated to carry a checksum of the body, and since our
+        // payloads are unsigned, nothing else would carry one. MD5 is the checksum
+        // every S3-compatible server supports.
+        req._headers["Content-MD5"] = base64_encode(md5.finalize());
+        req.write_body("xml", body_size, [batch] (output_stream<char>&& out) -> future<> {
+            auto output = std::move(out);
+            std::exception_ptr ex;
+            try {
+                co_await generate_delete_objects_body(batch, [&output] (std::string_view piece) {
+                    return output.write(piece.data(), piece.size());
+                });
+                co_await output.flush();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            co_await output.close();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
+        });
+        co_await make_request(std::move(req), [&failed, &bucket, batch] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
+            auto in = std::move(in_);
+            auto body = co_await util::read_entire_stream_contiguous(in);
+            if (rep._status == http::reply::status_type::not_found) {
+                // The bucket is missing, so are the keys
+                co_return;
+            }
+            // A 200 reply can still carry an error for the whole request. It's thrown from
+            // here for the retry strategy to see. The copy is cheap, as in quiet mode the
+            // body only lists the keys that failed.
+            if (auto err = aws::aws_error::parse(sstring(body))) {
+                throw aws::aws_exception(std::move(*err));
+            }
+            auto failures = parse_delete_objects_errors(body);
+            // A reply that succeeds as a whole can still report a transient failure of some
+            // keys, e.g. InternalError or SlowDown. It's thrown for the retry strategy to
+            // resend the whole batch, which is fine, as deleting a deleted key succeeds.
+            // SlowDown goes first to get the throttling backoff.
+            auto transient = std::ranges::find_if(failures, [] (const delete_objects_failure& f) {
+                return f.error.get_error_type() == aws::aws_error_type::SLOW_DOWN;
+            });
+            if (transient == failures.end()) {
+                transient = std::ranges::find_if(failures, [] (const delete_objects_failure& f) {
+                    return f.error.is_retryable() == utils::http::retryable::yes;
+                });
+            }
+            if (transient != failures.end()) {
+                throw aws::aws_exception(aws::aws_error(transient->error.get_error_type(),
+                        describe_delete_objects_failures(failures, batch.size(), bucket), utils::http::retryable::yes));
+            }
+            std::ranges::move(failures, std::back_inserter(failed));
+        }, deleted_or_absent, as);
+    }
+    if (!failed.empty()) {
+        throw std::runtime_error(describe_delete_objects_failures(failed, keys.size(), bucket));
+    }
 }
 
 future<> client::create_bucket(sstring bucket_name, seastar::abort_source* as) {
