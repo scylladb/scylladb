@@ -131,11 +131,13 @@ static bool is_true(std::string_view s) {
 
 class encryption::kms_host::impl {
 public:
-    // set a rather long expiry. normal KMS policies are 365-day rotation of keys.
-    // we can do with 10 minutes. CMH. maybe even longer.
+    // normal KMS policies are 365-day rotation of keys. A used key is reloaded every 1-2
+    // refresh periods (5-10 minutes); expiry only bounds keys that stop being read or reloaded.
     // (see comments below on what keys are here)
-    static inline constexpr std::chrono::milliseconds default_expiry = 600s;
-    static inline constexpr std::chrono::milliseconds default_refresh = 1200s;
+    static inline constexpr std::chrono::milliseconds default_expiry = 1200s;
+    static inline constexpr std::chrono::milliseconds default_refresh = 300s;
+    // The timer ticks every refresh, so an entry can age 2*refresh before reload; expiry must exceed that.
+    static_assert(2 * default_refresh < default_expiry);
 
     impl(encryption_context& ctxt, const std::string& name, const host_options& options)
         : _ctxt(ctxt)
