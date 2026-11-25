@@ -1728,6 +1728,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         batch.size());
             }
 
+            // The reconciler only runs with an empty request queue, which a client
+            // resubmitting quiesce requests never leaves; so schedule a due auto-RF change
+            // from here and evaluate this request again once it is queued. A change held
+            // back by the backoff is not waited for: it may never succeed.
+            {
+                std::optional<lowres_clock::time_point> retry_at;
+                auto candidate = co_await find_auto_rf_change(guard, retry_at);
+                if (retry_at) {
+                    _auto_rf_retry_timer.rearm(*retry_at);
+                }
+                if (candidate) {
+                    co_await schedule_auto_rf_change(std::move(guard), *candidate);
+                    co_return;
+                }
+            }
+
             try {
                 rtlogger.debug("quiesce topology request: refreshing tablet load stats");
                 auto [load_stats, complete] = co_await collect_tablet_load_stats(require_live_nodes::yes);
@@ -1744,6 +1760,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         requires_schema_changes = plan.requires_schema_changes();
                     } else if (!tm->tablets().is_idle()) {
                         error = "tablet resize in progress";
+                    } else if (_feature_service.auto_replication_factor && co_await auto_rf_change_ongoing(_topo_sm._topology, _sys_ks, guard)) {
+                        // Typically the change scheduled above, queued behind this request.
+                        error = "auto-RF change in progress";
                     }
                 }
             } catch (...) {
@@ -2386,6 +2405,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // deferred): a running change's own migrations are part of the balance plan.
         _auto_rf_needed = false;
         _auto_rf_needed_stale = false;
+        // Leaves a due change to the quiesce handler, which schedules it itself.
+        if (utils::get_local_injector().enter("auto_rf_skip_idle_path")) {
+            rtlogger.debug("Injection point auto_rf_skip_idle_path enabled, leaving auto-RF changes to the quiesce handler");
+            co_return std::move(guard);
+        }
         std::optional<lowres_clock::time_point> retry_at;
         auto candidate = co_await find_auto_rf_change(guard, retry_at);
         if (retry_at) {
