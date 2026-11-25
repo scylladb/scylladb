@@ -2195,12 +2195,37 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Where the auto-RF keyspaces may replicate, computed once per reconciler pass.
     struct auto_rf_racks {
         // The racks some non-auto-RF tablets keyspace lists: the racks the auto-RF
-        // keyspaces follow.
+        // keyspaces follow. A rack outside this set is given up.
         rack_map eligible;
-        // The eligible racks with a token-owning, non-excluded normal node: the racks
-        // an auto-RF keyspace may be extended into.
+        // The racks with a token-owning, non-excluded normal node.
+        rack_map usable;
+        // The eligible racks which are usable: the racks an auto-RF keyspace may be
+        // extended into.
         rack_map allowed;
     };
+
+    // A rack of `rack_list` which no non-auto-RF tablets keyspace uses any more, one
+    // without a usable node first, so that the racks kept can hold replicas. A DC's
+    // last rack is never given up, nor any rack while no eligible keyspace exists
+    // (nothing then says where the operator wants the system keyspaces).
+    static std::optional<sstring> find_ineligible_rack(const auto_rf_racks& racks, const sstring& dc, const locator::rack_list& rack_list) {
+        if (racks.eligible.empty() || rack_list.size() < 2) {
+            return std::nullopt;
+        }
+        std::optional<sstring> ineligible;
+        for (const auto& rack : rack_list) {
+            if (contains_rack(racks.eligible, dc, rack)) {
+                continue;
+            }
+            if (!contains_rack(racks.usable, dc, rack)) {
+                return rack;
+            }
+            if (!ineligible) {
+                ineligible = rack;
+            }
+        }
+        return ineligible;
+    }
 
     auto_rf_racks get_auto_rf_racks() {
         auto_rf_racks racks;
@@ -2218,8 +2243,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
         const auto& excluded = _topo_sm._topology.excluded_tablet_nodes;
         for (const auto& [id, rs] : _topo_sm._topology.normal_nodes) {
-            if (rs.ring && !rs.ring->tokens.empty() && !excluded.contains(id) && contains_rack(racks.eligible, rs.datacenter, rs.rack)) {
-                racks.allowed[rs.datacenter].insert(rs.rack);
+            if (rs.ring && !rs.ring->tokens.empty() && !excluded.contains(id)) {
+                racks.usable[rs.datacenter].insert(rs.rack);
+                if (contains_rack(racks.eligible, rs.datacenter, rs.rack)) {
+                    racks.allowed[rs.datacenter].insert(rs.rack);
+                }
             }
         }
         return racks;
@@ -2241,9 +2269,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     }
 
     // The replication options auto-RF gives the keyspace next, or nullopt if it has
-    // nothing to change. One step per change, tried in this order: add a rack to a DC
-    // below the goal, add a DC. Auto-RF manages rack lists only: a keyspace with a
-    // numeric RF is left alone.
+    // nothing to change. One step per change, tried in this order: give up a rack
+    // which is no longer eligible, add a rack to a DC below the goal, add a DC.
+    // Auto-RF manages rack lists only: a keyspace with a numeric RF is left alone.
     static std::optional<locator::replication_strategy_config_options> next_auto_rf_change(
             const data_dictionary::keyspace_metadata& ks_md, size_t goal, const auto_rf_racks& racks) {
         const auto& ks_name = ks_md.name();
@@ -2257,6 +2285,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             new_options[dc] = std::move(rack_list);
             return new_options;
         };
+
+        for (const auto& [dc, rf] : options) {
+            auto rack_list = locator::replication_factor_data(rf).get_rack_list();
+            if (auto rack = find_ineligible_rack(racks, dc, rack_list)) {
+                rtlogger.debug("Keyspace {} replicates to rack {} of DC {}, which is no longer eligible, removing it", ks_name, *rack, dc);
+                std::erase(rack_list, *rack);
+                return with_racks(dc, std::move(rack_list));
+            }
+        }
 
         for (const auto& [dc, rf] : options) {
             auto rack_list = locator::replication_factor_data(rf).get_rack_list();
