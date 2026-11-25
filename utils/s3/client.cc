@@ -2071,7 +2071,18 @@ auto client::download_source::request_body() -> future<external_body> {
         auto f = xb.done.get_future();
         p->set_value(std::move(xb));
         p.reset();
-        co_await std::move(f);
+        // When get() fails to read the body, it fails done, and sends a new
+        // request for the rest of the range by itself. So that failure must
+        // not make the transport retry this request: the retry would call
+        // this handler again, after p was reset, and wait for a done which
+        // nobody resolves - so close(), which waits for the request, would
+        // wait forever.
+        try {
+            co_await std::move(f);
+        } catch (...) {
+            auto error = aws::aws_error::from_exception_ptr(std::current_exception());
+            throw aws::aws_exception(aws::aws_error(error.get_error_type(), std::string(error.get_error_message()), utils::http::retryable::no));
+        }
     }, whole_or_ranged_object, _as).handle_exception([&p] (auto ex) {
         if (p.has_value()) {
             p->set_exception(std::move(ex));
