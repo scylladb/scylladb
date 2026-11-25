@@ -440,7 +440,12 @@ void client::register_client_metrics() {
     defs.emplace_back(sm::make_counter("unclassified_groups", [this] { return _unclassified_groups; },
             sm::description("Scheduling groups with no object_storage_connections entry, which fell back to the shared pool"), {ep_label}));
 
-    _client_metrics.add_group("s3", defs);
+    try {
+        _client_metrics.add_group("s3", defs);
+    } catch (const seastar::metrics::double_registration& e) {
+        // As in group_client::register_metrics(): a dropped endpoint's client may still be alive.
+        s3l.warn("Not reporting s3 client metrics for {}: {}", _host, e.what());
+    }
 }
 
 client::group_client& client::find_or_create_client() {
