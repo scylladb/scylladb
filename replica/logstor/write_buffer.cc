@@ -741,7 +741,10 @@ future<> write_buffer_ring::consumer_loop() {
             co_await coroutine::maybe_yield();
         }
     } catch (...) {
-        on_internal_error(logstor_logger, fmt::format("The consumer of the write buffer ring failed: {:t}", std::current_exception()));
+        // Without the consumer, nothing completes the accepted writes, the queued writes or the
+        // flush() calls. The queued writes and the flush() calls hold the gate, so stop() would wait
+        // for them forever.
+        on_fatal_internal_error(logstor_logger, fmt::format("The consumer of the write buffer ring failed: {:t}", std::current_exception()));
     }
 }
 
