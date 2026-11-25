@@ -24,6 +24,7 @@
 #include "schema/schema_builder.hh"
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
+#include "utils/murmur_hash.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
@@ -141,6 +142,37 @@ SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     // Expected value was taken from Origin
     BOOST_REQUIRE_EQUAL(dk.token(), token_from_long(4958784316840156970));
     BOOST_REQUIRE(dk._key.equal(*s, key));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_key_token_matches_legacy_form) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+        .with_column("pk", bytes_type, column_kind::partition_key)
+        .with_column("v", int32_type)
+        .build();
+
+    dht::murmur3_partitioner partitioner;
+    for (size_t size : {0, 1, 4, 7, 8, 15, 16, 17, 31, 32, 33, 1000}) {
+        auto key = partition_key::from_single_value(*s, tests::random::get_bytes(size));
+        auto legacy = key.legacy_form(*s);
+        std::array<uint64_t, 2> hash;
+        utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);
+        BOOST_REQUIRE_EQUAL(partitioner.get_token(*s, key), token_from_long(hash[0]));
+    }
+
+    auto s2 = schema_builder(this_smp_shard_count(), "ks", "cf2")
+        .with_column("pk1", bytes_type, column_kind::partition_key)
+        .with_column("pk2", bytes_type, column_kind::partition_key)
+        .with_column("v", int32_type)
+        .build();
+    for (size_t size1 : {0, 1, 2, 8}) {
+        for (size_t size2 : {0, 1, 2, 8}) {
+            auto key = partition_key::from_exploded(*s2, {tests::random::get_bytes(size1), tests::random::get_bytes(size2)});
+            auto legacy = key.legacy_form(*s2);
+            std::array<uint64_t, 2> hash;
+            utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);
+            BOOST_REQUIRE_EQUAL(partitioner.get_token(*s2, key), token_from_long(hash[0]));
+        }
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_wraparound_1) {
