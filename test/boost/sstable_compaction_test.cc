@@ -4564,6 +4564,72 @@ SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
     return test_env::do_with_async([](test_env& env) { test_twcs_compaction_across_buckets_fn(env); });
 }
 
+// A TWCS compaction whose output fills an output sstable must continue writing
+// the rest of its input into further sstables, and not stop and lose it.
+// TWCS limits the output sstable size of a compaction within a single window
+// (to sstable_size_in_mb), and such a compaction, without the garbage-collected
+// sstable writer, passes its output writer directly to the reader. That writer
+// used to stop the read as soon as the first output sstable was full, so the
+// compaction completed with one output sstable and the rest of its input was
+// lost. Reproduces SCYLLADB-6641.
+SEASTAR_TEST_CASE(test_twcs_single_window_compaction_writes_all_input) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "test_twcs_single_window_compaction_writes_all_input")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type)
+                // The bug isn't specific to uncompressed tables: it also loses
+                // data with compression. We disable compression only to keep the
+                // test's data small: the output sstable size is checked on the
+                // size of the data file, which in a compressed sstable grows only
+                // when a whole compressed chunk is written. With compression, this
+                // test's few tiny partitions would never fill even one chunk, so
+                // the size limit would never be reached and the test would need
+                // much more data to fail.
+                .set_compressor_params(compression_parameters::no_compression());
+        builder.set_compaction_strategy(compaction::compaction_strategy_type::time_window);
+        builder.set_compaction_strategy_options({
+                { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
+                { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+        });
+        auto s = builder.build();
+        auto sst_gen = env.make_sst_factory(s);
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+
+        // All the data has one timestamp, so it is all in one window.
+        const auto ts = api::new_timestamp();
+        constexpr unsigned n_sstables = 4;
+        constexpr unsigned partitions_per_sstable = 10;
+        auto keys = tests::generate_partition_keys(n_sstables * partitions_per_sstable, s);
+        std::vector<shared_sstable> ssts;
+        for (unsigned i = 0; i < n_sstables; i++) {
+            utils::chunked_vector<mutation> muts;
+            for (unsigned j = 0; j < partitions_per_sstable; j++) {
+                mutation m(s, keys[i * partitions_per_sstable + j]);
+                m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(i)), ts);
+                muts.push_back(std::move(m));
+            }
+            ssts.push_back(make_sstable_containing(sst_gen, std::move(muts)).get());
+        }
+
+        // An output sstable size of one byte fills each output sstable with
+        // its first partition.
+        compaction::compaction_descriptor desc(std::move(ssts), compaction::compaction_descriptor::default_level, 1);
+        auto ret = compact_sstables(env, std::move(desc), cf, sst_gen, replacer_fn_no_op(), can_purge_tombstones::no).get();
+
+        // Check that every partition of the input was written to the output.
+        std::set<dht::decorated_key, dht::decorated_key::less_comparator> written{dht::decorated_key::less_comparator(s)};
+        for (auto& sst : ret.new_sstables) {
+            auto reader = sstable_reader(sst, s, env.make_reader_permit());
+            auto close_reader = deferred_close(reader);
+            while (auto mfopt = read_mutation_from_mutation_reader(reader).get()) {
+                written.insert(mfopt->decorated_key());
+            }
+        }
+        BOOST_REQUIRE_EQUAL(written.size(), keys.size());
+    });
+}
+
 SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
         *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_twcs_compaction_across_buckets_fn(env); },
