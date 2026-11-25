@@ -288,17 +288,21 @@ public:
         return begin(v) == end(v);
     }
     void validate(const managed_bytes_view& v) const {
-        std::vector<managed_bytes_view> values(begin(v), end(v));
-        if (AllowPrefixes == allow_prefixes::no && values.size() < _types.size()) {
+        size_t n_values = 0;
+        for (auto it = begin(v), e = end(v); it != e; ++it) {
+            ++n_values;
+        }
+        if (AllowPrefixes == allow_prefixes::no && n_values < _types.size()) {
             throw marshal_exception(fmt::format("compound::validate(): non-prefixable compound cannot be a prefix"));
         }
-        if (values.size() > _types.size()) {
+        if (n_values > _types.size()) {
             throw marshal_exception(fmt::format("compound::validate(): cannot have more values than types, have {} values but only {} types",
-                        values.size(), _types.size()));
+                        n_values, _types.size()));
         }
-        for (size_t i = 0; i != values.size(); ++i) {
+        auto type = _types.begin();
+        for (auto it = begin(v), e = end(v); it != e; ++it, ++type) {
             //FIXME: is it safe to assume internal serialization-format format?
-            _types[i]->validate(values[i]);
+            (*type)->validate(*it);
         }
     }
     bool equal(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
