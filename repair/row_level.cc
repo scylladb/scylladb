@@ -919,6 +919,20 @@ private:
     std::unique_ptr<const locator::token_metadata> _small_table_optimization_tm;
     seastar::semaphore _small_table_optimization_tm_sem{1};
     bool _small_table_optimization_tm_calculated = false;
+    // When set, the repair master ignores the rows of a node which is not a
+    // replica of the row's token: its own rows when reading from disk, and
+    // those received from the followers.
+    //
+    // With the small table optimization all token owners participate in the
+    // repair of the whole ring. A node can have data for tokens it doesn't
+    // own, if it lost them in a topology change and wasn't cleaned up since.
+    // Such a node doesn't receive the tombstones written for this data, so
+    // syncing its data to the replicas resurrects deleted data once the
+    // replicas purged the tombstones.
+    locator::effective_replication_map_ptr _source_ownership_erm;
+    // The partition being read from disk is not owned by this node and has to
+    // be ignored. Used only when _source_ownership_erm is set.
+    bool _ignore_current_partition = false;
     optimized_optional<seastar::abort_source::subscription> _session_abort_sub;
     const bool _is_eligible_to_repair_rejection;
 private:
@@ -1006,7 +1020,8 @@ public:
             service::frozen_topology_guard topo_guard,
             std::optional<int64_t> repaired_at,
             locator::tablet_repair_incremental_mode incremental_mode,
-            bool explicit_dst_cpu_id)
+            bool explicit_dst_cpu_id,
+            locator::effective_replication_map_ptr source_ownership_erm)
             : _rs(rs)
             , _db(rs.get_db())
             , _messaging(rs.get_messaging())
@@ -1055,6 +1070,7 @@ public:
             , _is_tablet(cf.uses_tablets())
             , _explicit_dst_cpu_id(explicit_dst_cpu_id)
             , _table_is_migrating(is_table_migrating(_db.local(), *_schema))
+            , _source_ownership_erm(std::move(source_ownership_erm))
             , _is_eligible_to_repair_rejection(cf.is_eligible_to_write_rejection_on_critical_disk_utilization())
             {
 
@@ -1103,7 +1119,7 @@ public:
             locator::tablet_repair_incremental_mode incremental_mode,
             bool explicit_dst_cpu_id)
         : repair_meta(rs, cf, std::move(s), std::move(permit), std::move(range), algo, max_row_buf_size, seed, master, repair_meta_id, reason,
-                std::move(master_node_shard_config), std::move(all_live_peer_nodes), 1, {std::nullopt}, nullptr, compaction_time, topo_guard, repaired_at, incremental_mode, explicit_dst_cpu_id)
+                std::move(master_node_shard_config), std::move(all_live_peer_nodes), 1, {std::nullopt}, nullptr, compaction_time, topo_guard, repaired_at, incremental_mode, explicit_dst_cpu_id, nullptr)
     {
     }
 
@@ -1144,6 +1160,12 @@ public:
         return _stopped->get_future();
     }
 
+private:
+    bool is_owner(const locator::host_id& node, const dht::token& token) const {
+        return std::ranges::contains(_source_ownership_erm->get_natural_replicas(token), node);
+    }
+
+public:
     void reset_peer_row_hash_sets() {
         if (_peer_row_hash_sets.size() != _nr_peer_nodes) {
             _peer_row_hash_sets.resize(_nr_peer_nodes);
@@ -1335,7 +1357,17 @@ private:
 
     void handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         _repair_reader->track_partition(mf);
-        if (!makes_repair_row(mf)) {
+        if (mf.is_partition_start()) {
+            const auto& token = mf.as_partition_start().key().token();
+            _ignore_current_partition = _source_ownership_erm && !is_owner(myhostid(), token);
+            if (_ignore_current_partition) {
+                rlogger.trace("master: ignore partition read from disk, not owned by this node, token={}", token);
+                return;
+            }
+        } else if (mf.is_end_of_partition()) {
+            _ignore_current_partition = false;
+        }
+        if (_ignore_current_partition || !makes_repair_row(mf)) {
             return;
         }
         repair_row r = make_repair_row_from_disk(_repair_reader->get_current_dk(), _repair_hasher, *_schema, mf);
@@ -1698,6 +1730,36 @@ private:
         stats().rx_row_bytes += sz;
         stats().rx_row_nr += row_diff.size();
         stats().rx_row_nr_peer[from] += row_diff.size();
+        if (update_hash_set) {
+            // The peer has all of these rows, including those ignored below.
+            _peer_row_hash_sets[node_idx] = row_diff
+                   | std::views::transform([] (repair_row& r) { thread::maybe_yield(); return r.hash(); })
+                   | std::ranges::to<repair_hash_set>();
+        }
+        if (_source_ownership_erm) {
+            // Rows of a peer which doesn't own them are not added to
+            // _working_row_buf, so they are neither written to disk nor sent
+            // to the other peers. A replica which has the same row is still
+            // asked for it, as the row stays missing on the master.
+            // The rows of a partition are adjacent, so the ownership is
+            // calculated only when the token changes.
+            std::optional<dht::token> prev_token;
+            bool owned = false;
+            for (auto it = row_diff.begin(); it != row_diff.end();) {
+                thread::maybe_yield();
+                const auto& token = it->get_dk_with_hash()->dk.token();
+                if (prev_token != token) {
+                    owned = is_owner(from, token);
+                    prev_token = token;
+                }
+                if (owned) {
+                    ++it;
+                } else {
+                    rlogger.trace("master: ignore row from node={}, not owned by the node, token={}", from, token);
+                    it = row_diff.erase(it);
+                }
+            }
+        }
         if (update_buf) {
             // Both row_diff and _working_row_buf and are ordered, merging
             // two sored list to make sure the combination of row_diff
@@ -1709,11 +1771,6 @@ private:
                 thread::maybe_yield();
                 _working_row_buf_combined_hash.add(r.hash());
             }
-        }
-        if (update_hash_set) {
-            _peer_row_hash_sets[node_idx] = row_diff
-                   | std::views::transform([] (repair_row& r) { thread::maybe_yield(); return r.hash(); })
-                   | std::ranges::to<repair_hash_set>();
         }
         // Repair rows in row_diff will be flushed to disk by flush_rows_in_working_row_buf,
         // so we skip calling do_apply_rows here.
@@ -3860,7 +3917,11 @@ public:
                     _topo_guard,
                     repaired_at,
                     _rstate.sched_info.incremental_mode,
-                    false);
+                    false,
+                    // Node operations are left alone: there a node can
+                    // legitimately be the source of data it doesn't own in the
+                    // ring the rows are filtered with, e.g. a leaving node.
+                    _small_table_optimization && _rstate.reason() == streaming::stream_reason::repair ? get_erm() : nullptr);
             auto auto_stop_master = defer([&master] noexcept {
                 try {
                     master.stop().get();
