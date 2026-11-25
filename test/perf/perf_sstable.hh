@@ -128,6 +128,8 @@ public:
         api::timestamp_type timestamp_range;
         unsigned rows_per_partition;
         compaction_input_layout compaction_layout;
+        // Memory a memtable may use while generating compaction input before it is flushed.
+        size_t memtable_size;
     };
 
 private:
@@ -157,6 +159,8 @@ private:
     std::uniform_int_distribution<char> _distribution;
     lw_shared_ptr<replica::memtable> _mt;
     std::vector<shared_sstable> _sst;
+    // Input of compaction mode, built once and compacted by every run.
+    std::vector<shared_sstable> _compaction_input;
 
     bool has_clustering_key() const {
         return _cfg.rows_per_partition > 1 || _cfg.compaction_layout == compaction_input_layout::interleaved_rows;
@@ -175,7 +179,10 @@ private:
                     ? clustering_key::from_single_value(*s, int32_type->decompose(int32_t(first_row + row * row_stride)))
                     : clustering_key::make_empty();
             for (auto& cdef: s->regular_columns()) {
-                const auto ts = _cfg.timestamp_range ? tests::random::get_int<api::timestamp_type>(-_cfg.timestamp_range, _cfg.timestamp_range) : 0;
+                // Drawn from _generator, like the values, so reseeding it reproduces the partition.
+                const auto ts = _cfg.timestamp_range
+                        ? std::uniform_int_distribution<api::timestamp_type>(-_cfg.timestamp_range, _cfg.timestamp_range)(_generator)
+                        : 0;
                 mut.set_clustered_cell(ckey, cdef, atomic_cell::make_live(*utf8_type, ts, utf8_type->decompose(random_column())));
             }
         }
@@ -224,27 +231,111 @@ private:
         }
     }
 
+    shared_sstable make_new_sstable() {
+        return _env.make_sstable(s, dir(), _env.new_generation(), sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
+    }
+
+    // Compacts `input` into new sstables, which it returns. Only `input` is read:
+    // the table the compaction runs for holds no sstables, and the input is left
+    // in place. Must be called in a seastar thread.
+    compaction::compaction_result compact(sstables::test_env& env, std::vector<shared_sstable> input, bool garbage_collection, perf_sample* sample = nullptr) {
+        cache_tracker tracker;
+        cell_locker_stats cl_stats;
+        tasks::task_manager tm;
+        auto cm = make_lw_shared<compaction::compaction_manager>(tm, compaction::compaction_manager::for_testing_tag{});
+        auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), *cm, nullptr, env.manager(), cl_stats, tracker, nullptr);
+        // A table's compaction groups must be stopped before they are destroyed.
+        auto stop_cf = deferred_stop(*cf);
+
+        auto descriptor = compaction::compaction_descriptor(std::move(input));
+        if (garbage_collection) {
+            descriptor.enable_garbage_collection(cf->get_sstable_set());
+        }
+        descriptor.creator = [this] (unsigned dummy) {
+            return make_new_sstable();
+        };
+        descriptor.replacer = sstables::replacer_fn_no_op();
+        descriptor.gc_state = cf->try_get_compaction_group_view_with_static_sharding().get_tombstone_gc_state();
+        auto cdata = compaction::compaction_manager::create_compaction_data();
+        compaction::compaction_progress_monitor progress_monitor;
+        auto do_compact = [&] {
+            return compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
+        };
+        if (!sample) {
+            return do_compact();
+        }
+        perf_sampler sampler;
+        compaction::compaction_result ret;
+        *sample = sampler.measure([&] {
+            ret = do_compact();
+        });
+        return ret;
+    }
+
+    // Calls func(mutation) for each partition of compaction input sstable number sstable_index.
     // Must be called in a seastar thread.
-    lw_shared_ptr<replica::memtable> make_compaction_input_memtable(unsigned sstable_index) {
-        auto mt = make_lw_shared<replica::memtable>(s);
+    template <typename Func>
+    void for_each_compaction_input_partition(unsigned sstable_index, Func func) {
         const auto sstables = _cfg.sstables;
         switch (_cfg.compaction_layout) {
         case compaction_input_layout::identical:
-            throw std::logic_error("identical compaction input is written from the shared memtable");
+            for_each_local_partition_key(partitions_per_sstable(), [&] (uint64_t, dht::decorated_key dk) {
+                func(make_partition(dk, 0, 1));
+            });
+            break;
         case compaction_input_layout::interleaved_partitions:
             for_each_local_partition_key(uint64_t(partitions_per_sstable()) * sstables, [&] (uint64_t n, dht::decorated_key dk) {
                 if (n % sstables == sstable_index) {
-                    mt->apply(make_partition(dk, 0, 1));
+                    func(make_partition(dk, 0, 1));
                 }
             });
             break;
         case compaction_input_layout::interleaved_rows:
             for_each_local_partition_key(partitions_per_sstable(), [&] (uint64_t, dht::decorated_key dk) {
-                mt->apply(make_partition(dk, sstable_index, sstables));
+                func(make_partition(dk, sstable_index, sstables));
             });
             break;
         }
-        return mt;
+    }
+
+    // Builds compaction input sstable number sstable_index the way the database
+    // builds its sstables: the data is applied to a memtable, which is flushed
+    // whenever it reaches memtable_size, and the flushed sstables are compacted
+    // into one, with garbage collection disabled. Returns more than one sstable
+    // only if the compaction strategy splits its output (time window).
+    // Must be called in a seastar thread.
+    std::vector<shared_sstable> build_compaction_input(sstables::test_env& env, unsigned sstable_index) {
+        // The identical layout needs identical values and timestamps in every sstable,
+        // the others need different ones. Seeds start at 1, since a linear congruential
+        // engine treats 0 like 1.
+        _generator.seed(_cfg.compaction_layout == compaction_input_layout::identical ? 1 : sstable_index + 1);
+
+        std::vector<shared_sstable> flushed;
+        auto mt = make_lw_shared<replica::memtable>(s);
+        auto flush = [&] {
+            auto sst = make_new_sstable();
+            write_memtable_to_sstable(*mt, sst).get();
+            sst->open_data().get();
+            flushed.push_back(std::move(sst));
+            mt = make_lw_shared<replica::memtable>(s);
+        };
+        for_each_compaction_input_partition(sstable_index, [&] (mutation m) {
+            mt->apply(m);
+            if (mt->occupancy().total_space() >= _cfg.memtable_size) {
+                flush();
+            }
+        });
+        if (mt->partition_count()) {
+            flush();
+        }
+        if (flushed.size() <= 1) {
+            return flushed;
+        }
+        auto ret = compact(env, flushed, false);
+        for (auto& sst : flushed) {
+            sst->mark_for_deletion();
+        }
+        return std::move(ret.new_sstables);
     }
 
     schema_ptr create_schema(compaction::compaction_strategy_type type) {
@@ -321,10 +412,15 @@ public:
            , s(create_schema(cfg.compaction_strategy))
            , _distribution('@', '~')
            , _mt(make_lw_shared<replica::memtable>(s))
-    {}
+    {
+        if (!_cfg.memtable_size) {
+            _cfg.memtable_size = memory::stats().total_memory() / 4;
+        }
+    }
 
     future<> stop() {
         _sst.clear();
+        _compaction_input.clear();
         return _env.stop();
     }
 
@@ -339,10 +435,12 @@ public:
     // Every layout gives each input sstable partitions_per_sstable() partitions
     // with rows_per_partition rows each, so they all compact the same amount of input.
     future<> prepare_compaction_input() {
-        if (_cfg.compaction_layout == compaction_input_layout::identical) {
-            return fill_memtable();
-        }
-        return make_ready_future<>();
+        co_await test_setup::create_empty_test_dir(dir());
+        co_await sstables::test_env::do_with_async([this] (sstables::test_env& env) {
+            for (unsigned i = 0; i < _cfg.sstables; ++i) {
+                std::ranges::move(build_compaction_input(env, i), std::back_inserter(_compaction_input));
+            }
+        });
     }
 
     future<> load_sstables(unsigned iterations) {
@@ -380,66 +478,31 @@ public:
     }
 
     future<counted_run> compaction(int idx) {
-        return test_setup::create_empty_test_dir(dir()).then([this] {
-            return sstables::test_env::do_with_async_returning<counted_run>([this] (sstables::test_env& env) {
-                auto sst_gen = [this] () mutable {
-                    return _env.make_sstable(s, dir(), _env.new_generation(), sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
-                };
+        return sstables::test_env::do_with_async_returning<counted_run>([this] (sstables::test_env& env) {
+            perf_sample sample;
+            auto ret = compact(env, _compaction_input, true, &sample);
+            // The input is reused by the next run, the output is not.
+            for (auto& sst : ret.new_sstables) {
+                sst->mark_for_deletion();
+            }
 
-                std::vector<shared_sstable> ssts;
-                for (auto i = 0u; i < _cfg.sstables; i++) {
-                    auto sst = sst_gen();
-                    if (_cfg.compaction_layout == compaction_input_layout::identical) {
-                        write_memtable_to_sstable(*_mt, sst).get();
-                        _mt->revert_flushed_memory();
-                    } else {
-                        write_memtable_to_sstable(*make_compaction_input_memtable(i), sst).get();
-                    }
-                    sst->open_data().get();
-                    ssts.push_back(std::move(sst));
-                }
-
-                cache_tracker tracker;
-                cell_locker_stats cl_stats;
-                tasks::task_manager tm;
-                auto cm = make_lw_shared<compaction::compaction_manager>(tm, compaction::compaction_manager::for_testing_tag{});
-                auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), *cm, nullptr, env.manager(), cl_stats, tracker, nullptr);
-                // A table's compaction groups must be stopped before they are destroyed.
-                auto stop_cf = deferred_stop(*cf);
-
-                auto descriptor = compaction::compaction_descriptor(std::move(ssts));
-                descriptor.enable_garbage_collection(cf->get_sstable_set());
-                descriptor.creator = [sst_gen = std::move(sst_gen)] (unsigned dummy) mutable {
-                    return sst_gen();
-                };
-                descriptor.replacer = sstables::replacer_fn_no_op();
-                descriptor.gc_state = cf->try_get_compaction_group_view_with_static_sharding().get_tombstone_gc_state();
-                auto cdata = compaction::compaction_manager::create_compaction_data();
-                compaction::compaction_progress_monitor progress_monitor;
-                perf_sampler sampler;
-                compaction::compaction_result ret;
-                auto sample = sampler.measure([&] {
-                    ret = compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
-                });
-
-                auto partitions_per_sstable = this->partitions_per_sstable();
-                if (_cfg.compaction_strategy != compaction::compaction_strategy_type::time_window) {
-                    SCYLLA_ASSERT(ret.new_sstables.size() == 1);
-                }
-                auto total_keys_written = std::accumulate(ret.new_sstables.begin(), ret.new_sstables.end(), uint64_t(0), [] (uint64_t n, const sstables::shared_sstable& sst) {
-                    return n + sst->get_estimated_key_count();
-                });
-                SCYLLA_ASSERT(total_keys_written >= partitions_per_sstable);
-
-                // The output size depends on how much the input overlaps, so report
-                // input rows, which are the same for all layouts.
-                uint64_t input_rows = uint64_t(partitions_per_sstable) * _cfg.rows_per_partition * _cfg.sstables;
-                return counted_run{
-                    .units_per_sec = input_rows / sample.time.count(),
-                    .units = input_rows,
-                    .sample = sample,
-                };
+            auto partitions_per_sstable = this->partitions_per_sstable();
+            if (_cfg.compaction_strategy != compaction::compaction_strategy_type::time_window) {
+                SCYLLA_ASSERT(ret.new_sstables.size() == 1);
+            }
+            auto total_keys_written = std::accumulate(ret.new_sstables.begin(), ret.new_sstables.end(), uint64_t(0), [] (uint64_t n, const sstables::shared_sstable& sst) {
+                return n + sst->get_estimated_key_count();
             });
+            SCYLLA_ASSERT(total_keys_written >= partitions_per_sstable);
+
+            // The output size depends on how much the input overlaps, so report
+            // input rows, which are the same for all layouts.
+            uint64_t input_rows = uint64_t(partitions_per_sstable) * _cfg.rows_per_partition * _cfg.sstables;
+            return counted_run{
+                .units_per_sec = input_rows / sample.time.count(),
+                .units = input_rows,
+                .sample = sample,
+            };
         });
     }
 

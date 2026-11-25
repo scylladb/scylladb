@@ -122,6 +122,7 @@ int scylla_sstable_main(int argc, char** argv) {
         ("compaction-strategy", bpo::value<sstring>()->default_value("IncrementalCompactionStrategy"), "compaction strategy to use, one of "
              "(IncrementalCompactionStrategy, LeveledCompactionStrategy, TimeWindowCompactionStrategy)")
         ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]")
+        ("memtable-size", bpo::value<size_t>()->default_value(0), "memory in MB a memtable may use while generating compaction input before it is flushed, 0 for a quarter of the shard's memory")
         ("rows-per-partition", bpo::value<unsigned>()->default_value(1), "number of rows per partition (in each sstable, for compaction mode)")
         ("compaction-input-layout", bpo::value<sstring>()->default_value("identical"), "how the input sstables of compaction mode share data, one of: "
              "identical (all sstables hold the same data), interleaved-partitions (each sstable holds its own partitions), "
@@ -160,6 +161,7 @@ int scylla_sstable_main(int argc, char** argv) {
                 throw boost::program_options::invalid_option_value(layout_name);
             }
             cfg.compaction_layout = layout->second;
+            cfg.memtable_size = app.configuration()["memtable-size"].as<size_t>() << 20;
             auto scf = make_sstable_compressor_factory_for_tests_in_thread();
             test.start(std::move(cfg), std::ref(*scf)).get();
             auto stop_test = deferred_stop(test);
