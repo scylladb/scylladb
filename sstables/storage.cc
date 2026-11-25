@@ -962,15 +962,18 @@ future<> release_object_storage_snapshot_refs_by_listing(object_storage_client& 
     // components
     auto objects = co_await list_object_storage_sstable_objects(client, bucket, prefix, sid);
     const auto tag_prefix = fmt::format("refs/snapshot-{}/", tag);
+    std::vector<sstring> tag_refs;
     std::vector<sstring> components;
     for (auto& name : objects) {
         std::string_view sv(name);
         if (sv.starts_with(std::string_view(tag_prefix))) {
-            co_await delete_object_storage_snapshot_ref(client, object_name(bucket, prefix, sid, name));
+            tag_refs.push_back(sstring(object_name(bucket, prefix, sid, name).object()));
         } else if (!sv.starts_with("refs/") && name != sstable_version_constants::TOC_SUFFIX) {
             components.push_back(std::move(name));
         }
     }
+    co_await client.delete_objects(bucket, tag_refs);
+    sstlog.debug("Deleted {} snapshot references of sstable_id={} tag={}", tag_refs.size(), sid, tag);
     // Listing after the deletes helps us avoid a race with restore which can put a node ref
     // concurrently. It's a path we take on exceptional scenarios so definitely not hot.
     auto refs = co_await list_object_storage_references(client, bucket, prefix, sid);
@@ -993,9 +996,17 @@ future<> delete_object_storage_components(object_storage_client& client, sstring
             sstlog.warn("Failed to delete object {} for sstable_id={}: {:t}", component, sid, std::current_exception());
         }
     };
-    co_await coroutine::parallel_for_each(components, [&] (const sstring& component) -> future<> {
-        co_await delete_component(component);
-    });
+    auto objects = components | std::views::transform([&] (const sstring& component) {
+        return sstring(object_name(bucket, prefix, sid, component).object());
+    }) | std::ranges::to<std::vector<sstring>>();
+    try {
+        co_await client.delete_objects(bucket, objects, as);
+    } catch (...) {
+        if (!log_errors) {
+            throw;
+        }
+        sstlog.warn("Failed to delete objects for sstable_id={}: {:t}", sid, std::current_exception());
+    }
     // The TOC goes last: while it exists the sstable is still discoverable,
     // so a crash mid-way leaves a deletable sstable, not blind orphans.
     co_await delete_component(sstable_version_constants::TOC_SUFFIX);
