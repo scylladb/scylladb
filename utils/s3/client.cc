@@ -1166,32 +1166,19 @@ future<> client::delete_bucket(sstring bucket_name, seastar::abort_source* as) {
 
 future<> client::delete_bucket_with_objects(sstring bucket_name, seastar::abort_source* as) {
     s3l.trace("DELETE bucket with objects /{}", bucket_name);
-    bucket_lister lister(shared_from_this(), bucket_name, "", 100);
-    constexpr size_t default_concurrency = 16;
-    std::vector<directory_entry> entries;
-    entries.reserve(default_concurrency);
-    bool stop = false;
-    while (true) {
-        std::optional<directory_entry> entry;
-        while (entries.size() < default_concurrency) {
-            entry = co_await lister.get();
-            if (entry) {
-                entries.push_back(std::move(*entry));
-            } else {
-                stop = true;
-                break;
-            }
-        }
-        if (!entries.empty()) {
-            co_await max_concurrent_for_each(entries, default_concurrency, [this, as, bucket_name](const auto& entry) {
-                return delete_object(format("/{}/{}", bucket_name, entry.name), as);
-            });
-            entries.clear();
-        }
-        if (stop) {
-            break;
+    // Both a listing page and a DeleteObjects request take up to 1000 keys
+    constexpr size_t keys_per_batch = 1000;
+    bucket_lister lister(shared_from_this(), bucket_name, "", keys_per_batch);
+    std::vector<sstring> keys;
+    keys.reserve(keys_per_batch);
+    while (auto entry = co_await lister.get()) {
+        keys.push_back(std::move(entry->name));
+        if (keys.size() == keys_per_batch) {
+            co_await delete_objects(bucket_name, keys, as);
+            keys.clear();
         }
     }
+    co_await delete_objects(bucket_name, keys, as);
     co_await lister.close();
     co_await delete_bucket(bucket_name, as);
 }
