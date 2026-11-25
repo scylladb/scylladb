@@ -276,6 +276,8 @@ public:
                 tasks::task_manager tm;
                 auto cm = make_lw_shared<compaction::compaction_manager>(tm, compaction::compaction_manager::for_testing_tag{});
                 auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), *cm, nullptr, env.manager(), cl_stats, tracker, nullptr);
+                // A table's compaction groups must be stopped before they are destroyed.
+                auto stop_cf = deferred_stop(*cf);
 
                 auto start = perf_sstable_test_env::now();
 
