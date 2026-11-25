@@ -176,10 +176,11 @@ static future<std::optional<export_row>> insert_export(db::system_distributed_ke
     co_return co_await helper.insert_export(row, export_row_ttl);
 }
 
+// Each write sets the TTL, see insert_export().
 static future<bool> update_export(db::system_distributed_keyspace& sdks, const export_row& row, const sstring& old_export_status,
-        const sstring& old_node_id, std::chrono::seconds ttl) {
+        const sstring& old_node_id) {
     db::alternator_export_table_helper helper(sdks.qp());
-    co_return co_await helper.update_export(row, old_export_status, old_node_id, ttl);
+    co_return co_await helper.update_export(row, old_export_status, old_node_id, export_row_ttl);
 }
 
 // Makes `row` a FAILED row. update_export() writes all columns, so this also clears the fields
@@ -203,7 +204,7 @@ static future<bool> try_write_final_export_row(db::system_distributed_keyspace& 
             [] { throw std::runtime_error("injected failure alternator_export_to_s3_final_write"); });
     // Tests make the update miss the row, as the case below does.
     if (!utils::get_local_injector().enter("alternator_export_to_s3_final_write_update_not_applied")
-            && co_await update_export(sdks, row, "IN_PROGRESS", row.node_id, export_row_ttl)) {
+            && co_await update_export(sdks, row, "IN_PROGRESS", row.node_id)) {
         co_return true;
     }
     auto existing_row = co_await insert_export(sdks, row);
@@ -216,7 +217,7 @@ static future<bool> try_write_final_export_row(db::system_distributed_keyspace& 
     // IN_PROGRESS, and the garbage collector does not take the rows of a running node.
     if (existing_row->export_status == "IN_PROGRESS" && existing_row->node_id == row.node_id
             && existing_row->client_token == row.client_token) {
-        co_return co_await update_export(sdks, row, "IN_PROGRESS", row.node_id, export_row_ttl);
+        co_return co_await update_export(sdks, row, "IN_PROGRESS", row.node_id);
     }
     co_return false;
 }
@@ -1489,7 +1490,7 @@ static future<> collect_export_row(service::storage_proxy& proxy, db::system_dis
     auto failed_export_row = exp;
     set_failed(failed_export_row, "NodeFailure", "The node that was performing the export has failed before the export could finish.");
     failed_export_row.node_id = self_node_id.to_string();
-    if (!co_await update_export(sdks, failed_export_row, exp.export_status, exp.node_id, export_row_ttl)) {
+    if (!co_await update_export(sdks, failed_export_row, exp.export_status, exp.node_id)) {
         // A different node took the row first. Skip it.
         xlogger.debug("Failed to update export row {} to FAILED, it may have been updated by another node", exp.export_arn);
     } else {
@@ -1869,22 +1870,16 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     }
     maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "ExportTableToPointInTime", request);
 
-    if (!parts.keyspace_name.starts_with(executor::KEYSPACE_NAME_PREFIX)) {
-        co_return api_error::table_not_found(
-                fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
-    }
-
     // As in DynamoDB, a retry of a deleted table also gets TableNotFoundException.
-    schema_ptr schema;
-    try {
-        schema = _proxy.data_dictionary().find_schema(parts.keyspace_name, parts.table_name);
-    } catch (const data_dictionary::no_such_column_family&) {
-        // `schema` stays null.
+    std::optional<data_dictionary::table> table;
+    if (is_alternator_keyspace(parts.keyspace_name)) {
+        table = _proxy.data_dictionary().try_find_table(parts.keyspace_name, parts.table_name);
     }
-    if (!schema) {
+    if (!table) {
         co_return api_error::table_not_found(
                 fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
     }
+    schema_ptr schema = table->schema();
     get_stats_from_schema(_proxy, *schema)->api_operations.export_table_to_point_in_time++;
 
     // Reading the table needs SELECT on it, writing it out to S3 needs MODIFY on ALL OBJECT STORAGE.
@@ -1900,9 +1895,11 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
     auto export_type = get_non_empty_string_attribute(request, "ExportType", "");
 
-    auto now = to_epoch_seconds(db_clock::now());
-    // If there is no ExportTime, use the current time (see the validation below).
-    auto export_time = now;
+    // ExportTime must be in the 5 minutes before `now` (see the check below).
+    auto now = db_clock::now();
+    // The ExportTime of the request, rounded to the millisecond. Without it, the export uses its
+    // accept time.
+    std::optional<db_clock::time_point> requested_export_time;
     const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     auto user_client_token = get_non_empty_string_attribute(request, "ClientToken", "");
 
@@ -1958,16 +1955,16 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         if (!export_time_v->IsNumber()) {
             co_return api_error::validation("Expected a number attribute ExportTime");
         }
-        export_time = export_time_v->GetDouble();
+        double seconds = export_time_v->GetDouble();
         // ExportTime becomes int64 milliseconds (db_clock). The cap, 9999-12-31T23:59:59Z, is far
-        // below the limit of that type, so the conversions below cannot overflow.
+        // below the limit of that type, so the conversion below cannot overflow.
         constexpr double max_export_time = 253402300799; // 9999-12-31T23:59:59Z
-        if (std::isnan(export_time) || export_time < 0 || export_time > max_export_time) {
+        if (std::isnan(seconds) || seconds < 0 || seconds > max_export_time) {
             co_return api_error::invalid_export_time("ExportTime number is out of range of valid values for this field");
         }
         // DynamoDB rounds a requested ExportTime to the nearest millisecond.
-        export_time = std::chrono::duration<double>(std::chrono::round<std::chrono::milliseconds>(
-                std::chrono::duration<double>(export_time))).count();
+        requested_export_time = db_clock::time_point(std::chrono::round<db_clock::duration>(
+                std::chrono::duration<double>(seconds)));
     }
 
     if (user_client_token.empty()) {
@@ -2012,7 +2009,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
             .table_id = schema->id(),
             .export_status = "IN_PROGRESS",
             .export_id_token = export_id_token,
-            .export_time = export_time_of_request(request_to_compare, row_accepted_at),
+            .export_time = requested_export_time.value_or(row_accepted_at),
             .accepted_at = row_accepted_at,
             .node_id = node_id.to_string(),
         };
@@ -2078,13 +2075,14 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     // From here, the request starts a new export. Check the two conditions that can change after
     // we accept a request. A retry skips them, so that it always finds its export.
     // ExportTime must be in the last 5 minutes. DynamoDB refuses a time in the future.
-    if (export_time_v) {
+    if (requested_export_time) {
         // `now` is cut down to the millisecond, while ExportTime is rounded to the nearest
         // millisecond. Thus a request for the current time can be one millisecond after `now`.
-        auto to_millis = [] (double seconds) { return std::llround(seconds * 1000); };
-        if (to_millis(export_time) > to_millis(now) + 1 || now - export_time > 300) {
+        if (*requested_export_time > now + std::chrono::milliseconds(1)
+                || now - *requested_export_time > std::chrono::minutes(5)) {
             co_return api_error::invalid_export_time(fmt::format("ExportTime must be in the last 5 minutes. "
-                                "ExportTime: {} s , current time: {} s", export_time, now));
+                                "ExportTime: {} s , current time: {} s", to_epoch_seconds(*requested_export_time),
+                                to_epoch_seconds(now)));
         }
     }
 
