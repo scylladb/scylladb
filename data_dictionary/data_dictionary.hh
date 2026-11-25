@@ -80,6 +80,10 @@ public:
     // Empty once the table is dropped: it stays reachable through its schema for a while,
     // its keyspace may not.
     std::optional<class keyspace> keyspace() const;
+    // Whether this table keeps its data in tablets. Answered from the table's own
+    // replication, which while its keyspace migrates from vnodes to tablets can
+    // differ from what the keyspace says.
+    bool uses_tablets() const;
     const std::vector<view_ptr>& views() const;
     const secondary_index::secondary_index_manager& get_index_manager() const;
     db_clock::time_point get_truncation_time() const;

@@ -602,6 +602,9 @@ public:
     virtual std::optional<data_dictionary::keyspace> get_table_keyspace(data_dictionary::table t) const override {
         return make_keyspace(this, nullptr);
     }
+    virtual bool get_table_uses_tablets(data_dictionary::table t) const override {
+        throw std::bad_function_call();
+    }
     virtual db_clock::time_point get_truncation_time(data_dictionary::table t) const override {
         return {};
     }

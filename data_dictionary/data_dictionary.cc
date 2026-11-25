@@ -38,6 +38,11 @@ table::keyspace() const {
     return _ops->get_table_keyspace(*this);
 }
 
+bool
+table::uses_tablets() const {
+    return _ops->get_table_uses_tablets(*this);
+}
+
 const std::vector<view_ptr>&
 table::views() const {
     return _ops->get_table_views(*this);

@@ -96,6 +96,9 @@ public:
         }
         return std::nullopt;
     }
+    virtual bool get_table_uses_tablets(data_dictionary::table t) const override {
+        return unwrap(t).uses_tablets();
+    }
     virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
         return unwrap(t).views();
     }
