@@ -1129,23 +1129,22 @@ future<> schema_applier::finalize_tables_and_views() {
     auto& sharded_db = _proxy.local().get_db();
     auto& diff = _affected_tables_and_views;
 
+    auto cleanup_dropped_table = [&] (const schema& s) -> future<> {
+        co_await _ss.local().on_cleanup_for_drop_table(s.id());
+        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s.id()]);
+    };
+
     // first drop views and *only then* the tables, if interleaved it can lead
     // to a mv not finding its schema when snapshotting since the main table
     // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
     for (auto& dropped_view : diff.tables_and_views.local().views.dropped) {
-        auto s = dropped_view.get();
-        co_await _ss.local().on_cleanup_for_drop_table(s->id());
-        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+        co_await cleanup_dropped_table(*dropped_view);
     }
     for (auto& dropped_table : diff.tables_and_views.local().tables.dropped) {
-        auto s = dropped_table.get();
-        co_await _ss.local().on_cleanup_for_drop_table(s->id());
-        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+        co_await cleanup_dropped_table(*dropped_table);
     }
     for (auto& dropped_cdc : diff.tables_and_views.local().cdc.dropped) {
-        auto s = dropped_cdc.get();
-        co_await _ss.local().on_cleanup_for_drop_table(s->id());
-        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+        co_await cleanup_dropped_table(*dropped_cdc);
     }
 
     if (_tablet_hint) {
