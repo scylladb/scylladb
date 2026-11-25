@@ -98,6 +98,24 @@ def test_fetch_from_system_tables(scylla_only, dynamodb, rest_api):
 
     assert keyspaces_done != {}
 
+# When a page of a scan of a system table ends at a range tombstone, the
+# LastEvaluatedKey holds only a prefix of the clustering key, with the
+# position's region and weight. Check that a start key which skips a
+# clustering column but has a later one is rejected, instead of being taken
+# as a shorter prefix and resuming the scan at the wrong position.
+def test_exclusive_start_key_with_clustering_key_gap(scylla_only, dynamodb):
+    client = dynamodb.meta.client
+    qualified_name = f"{internal_prefix}system.scylla_table_schema_history"
+    # scylla_table_schema_history has a primary key of (cf_id, schema_version, column_name)
+    start_key = {'cf_id': 'eee7eb26-a372-4eb4-aeaa-72f224cf0000',
+                 ':scylla:paging:region': 'clustered', ':scylla:paging:weight': 1}
+    # A prefix with the trailing column omitted is fine
+    client.scan(TableName=qualified_name, Limit=1,
+                ExclusiveStartKey={**start_key, 'schema_version': 'eee7eb26-a372-4eb4-aeaa-82f224cf0000'})
+    with pytest.raises(ClientError, match='ValidationException.*schema_version'):
+        client.scan(TableName=qualified_name, Limit=1,
+                    ExclusiveStartKey={**start_key, 'column_name': 'a'})
+
 def test_block_access_to_non_system_tables_with_virtual_interface(scylla_only, test_table_s, dynamodb):
     client = dynamodb.meta.client
     with pytest.raises(ClientError, match='ResourceNotFoundException.*{}'.format(internal_prefix)):
