@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <memory>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/format.hh>
 #include <seastar/core/file.hh>
@@ -363,6 +364,12 @@ public:
 
     promise<>& promise() {
         return _pr;
+    }
+
+    // Replaces the promise with a new one, constructed in place.
+    void reset_promise() noexcept {
+        std::destroy_at(&_pr);
+        std::construct_at(&_pr);
     }
 
     void on_waiting_for_admission() {
@@ -1473,7 +1480,7 @@ future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit::impl& permi
     if (auto ex = check_queue_size("wait")) {
         return make_exception_future<>(std::move(ex));
     }
-    permit.promise() = {};
+    permit.reset_promise();
     auto fut = permit.promise().get_future();
     if (wait == wait_on::admission) {
         permit.on_waiting_for_admission();
@@ -1828,7 +1835,7 @@ future<> reader_concurrency_semaphore::with_ready_permit(reader_permit::impl& pe
     if (auto ex = check_queue_size("ready")) {
         return make_exception_future<>(std::move(ex));
     }
-    permit.promise() = {};
+    permit.reset_promise();
     auto fut = permit.promise().get_future();
     permit.unlink();
     _ready_list.push_back(permit);

@@ -66,6 +66,13 @@ public:
 
     max_purgeable& combine(max_purgeable other);
 
+    // Restores the default-constructed state.
+    void reset() noexcept {
+        _timestamp = api::missing_timestamp;
+        _expiry_threshold.reset();
+        _source = timestamp_source::none;
+    }
+
     struct can_purge_result {
         bool can_purge { true };
         timestamp_source timestamp_source { timestamp_source::none };

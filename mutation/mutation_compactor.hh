@@ -417,8 +417,8 @@ public:
         _static_row_live = false;
         _partition_tombstone = {};
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
-        _max_purgeable_regular = {};
-        _max_purgeable_shadowable = {};
+        _max_purgeable_regular.reset();
+        _max_purgeable_shadowable.reset();
         _gc_before = std::nullopt;
         _last_static_row.reset();
         _last_pos = position_in_partition::for_partition_start();
