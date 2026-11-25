@@ -1370,14 +1370,14 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     co_return manifest_summary{tablet_count, sstables->Size()};
 }
 
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, db::snapshot_dc_location location, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
     if (manifest_prefixes.empty()) {
         throw std::invalid_argument("manifest prefixes list must not be empty");
     }
 
     // Download manifests in parallel and populate system_distributed.snapshot_sstables
     // with the content extracted from each manifest
-    auto client = sm.get_endpoint_client(endpoint);
+    auto client = sm.get_endpoint_client(location.endpoint);
 
     // tablet_count to be returned by this function, we also validate that all manifests passed contain the same tablet count
     std::optional<size_t> tablet_count;
@@ -1385,7 +1385,7 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
 
     co_await seastar::max_concurrent_for_each(manifest_prefixes, 16, [&] (const sstring& manifest_prefix) {
         // Manifest entries are relative to the backup location's prefix, same as start_restore.
-        sstables::object_name name(bucket, join_path(prefix, manifest_prefix));
+        sstables::object_name name(location.bucket, join_path(location.prefix, manifest_prefix));
         auto source = client->make_download_source(name);
         return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
             return process_manifest(is, keyspace, table, expected_snapshot_name, expected_datacenter, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
@@ -1573,7 +1573,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
 
     for (auto& [dc, loc] : locations) {
-        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.location.endpoint, loc.location.bucket, loc.location.prefix, snap_name, dc, std::move(loc.manifests));
+        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.location, snap_name, dc, std::move(loc.manifests));
         if (summary.tablet_count == 0) {
             summary.tablet_count = loc_summary.tablet_count;
         } else if (summary.tablet_count != loc_summary.tablet_count) {
