@@ -8,6 +8,7 @@
 
 
 #include <algorithm>
+#include <map>
 #include <unordered_set>
 #include <regex>
 #include <boost/test/unit_test.hpp>
@@ -954,6 +955,74 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete_s3) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete_proxy) {
     client_list_objects_incomplete(make_proxy_client);
+}
+
+// get_entry() reports the size of each listed object, an empty one included.
+void client_list_objects_sizes(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto client = guard.client();
+    const sstring& bucket = guard.bucket();
+    const sstring prefix("testprefix/");
+
+    std::map<sstring, uint64_t> sizes{{"empty", 0}, {"one", 1}, {"ten", 10}, {"large", 70000}};
+    for (const auto& [name, size] : sizes) {
+        client->put_object(format("/{}/{}{}", bucket, prefix, name), sstring(size, 'x').release()).get();
+    }
+
+    s3::client::bucket_lister lister(client, bucket, prefix, 3);
+    auto close_lister = deferred_close(lister);
+    std::map<sstring, uint64_t> listed;
+    while (auto entry = lister.get_entry().get()) {
+        listed.emplace(entry->name, entry->size);
+    }
+    BOOST_REQUIRE(listed == sizes);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_sizes_s3) {
+    client_list_objects_sizes(make_s3_client);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_sizes_proxy) {
+    client_list_objects_sizes(make_proxy_client);
+}
+
+class listing_cancelled_marker : public std::exception {
+public:
+    const char* what() const noexcept override { return "listing_cancelled_marker"; }
+};
+
+// An abort of the lister's abort source ends the listing with the exception of the abort, whether
+// the listing has started or not, and not with the storage_io_error which the client makes of an
+// aborted request.
+void client_list_objects_abort(const client_maker_function& client_maker, bool started) {
+    s3_test_fixture guard(client_maker);
+    auto client = guard.client();
+    const sstring& bucket = guard.bucket();
+    const sstring prefix("testprefix/");
+
+    // Far more objects than the lister can list ahead of get_entry(): a page of 2, and a queue of 1.
+    populate_bucket(client, bucket, prefix, 10);
+
+    seastar::abort_source as;
+    s3::client::bucket_lister lister(client, bucket, prefix, 2, 1, &as);
+    auto close_lister = deferred_close(lister);
+    if (started) {
+        BOOST_REQUIRE(lister.get_entry().get());
+    }
+    as.request_abort_ex(listing_cancelled_marker{});
+    auto drain = [&] {
+        while (lister.get_entry().get()) {
+        }
+    };
+    BOOST_REQUIRE_THROW(drain(), listing_cancelled_marker);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_abort_before_start_s3) {
+    client_list_objects_abort(make_s3_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_abort_while_listing_s3) {
+    client_list_objects_abort(make_s3_client, true);
 }
 
 // Not using s3_test_fixture here — the test intentionally targets a

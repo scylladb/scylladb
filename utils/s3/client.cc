@@ -10,6 +10,7 @@
 #include <exception>
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <initializer_list>
 #include <memory>
 #include <ranges>
@@ -2441,23 +2442,27 @@ future<> client::close() noexcept {
     s3l.info("Closed S3 client");
 }
 
-client::bucket_lister::bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, size_t objects_per_page, size_t entries_batch)
+client::bucket_lister::bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, size_t objects_per_page, size_t entries_batch,
+        seastar::abort_source* as)
     : bucket_lister(std::move(client), std::move(bucket), std::move(prefix),
             [] (const fs::path& parent_dir, const directory_entry& entry) { return true; },
-            objects_per_page, entries_batch)
+            objects_per_page, entries_batch, as)
 {}
 
-client::bucket_lister::bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page, size_t entries_batch)
+client::bucket_lister::bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page, size_t entries_batch,
+        seastar::abort_source* as)
     : _client(std::move(client))
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
     , _max_keys(format("{}", objects_per_page))
+    , _as(as)
     , _filter(std::move(filter))
     , _queue(entries_batch)
 {
 }
 
-static std::pair<std::vector<sstring>, sstring> parse_list_of_objects(sstring body) {
+// The keys and sizes of the objects of a list-objects-v2 response, and its continuation token.
+static std::pair<std::vector<std::pair<sstring, uint64_t>>, sstring> parse_list_of_objects(sstring body) {
     auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
         doc->parse<0>(body.data());
@@ -2466,7 +2471,7 @@ static std::pair<std::vector<sstring>, sstring> parse_list_of_objects(sstring bo
         throw std::runtime_error("cannot parse objects list response");
     }
 
-    std::vector<sstring> names;
+    std::vector<std::pair<sstring, uint64_t>> objects;
     auto root_node = doc->first_node("ListBucketResult");
     if (!root_node) {
         throw std::runtime_error("'ListBucketResult' node is missing in list-objects-v2 response");
@@ -2479,7 +2484,17 @@ static std::pair<std::vector<sstring>, sstring> parse_list_of_objects(sstring bo
         if (!key) {
             throw std::runtime_error("'Key' node is missing in 'Contents' of list-objects-v2 response");
         }
-        names.push_back(key->value());
+        auto size_node = contents->first_node("Size");
+        if (!size_node) {
+            throw std::runtime_error("'Size' node is missing in 'Contents' of list-objects-v2 response");
+        }
+        std::string_view size_value = size_node->value();
+        uint64_t size;
+        auto [end, ec] = std::from_chars(size_value.data(), size_value.data() + size_value.size(), size);
+        if (ec != std::errc() || end != size_value.data() + size_value.size()) {
+            throw std::runtime_error(format("invalid 'Size' {} in 'Contents' of list-objects-v2 response", size_value));
+        }
+        objects.emplace_back(key->value(), size);
     }
 
     sstring continuation_token;
@@ -2492,7 +2507,7 @@ static std::pair<std::vector<sstring>, sstring> parse_list_of_objects(sstring bo
         continuation_token = continuation->value();
     }
 
-    return {std::move(names), std::move(continuation_token)};
+    return {std::move(objects), std::move(continuation_token)};
 }
 
 future<> client::bucket_lister::start_listing() {
@@ -2511,25 +2526,26 @@ future<> client::bucket_lister::start_listing() {
             req.set_query_param("prefix", _prefix);
         }
 
-        std::vector<sstring> names;
+        std::vector<std::pair<sstring, uint64_t>> objects;
         try {
             co_await _client->make_request(std::move(req),
-                [&names, &continuation_token] (const http::reply& reply, input_stream<char>&& in) mutable -> future<> {
+                [&objects, &continuation_token] (const http::reply& reply, input_stream<char>&& in) mutable -> future<> {
                     auto input = std::move(in);
                     auto body = co_await util::read_entire_stream_contiguous(input);
                     auto list = parse_list_of_objects(std::move(body));
-                    names = std::move(list.first);
+                    objects = std::move(list.first);
                     continuation_token = std::move(list.second);
-                }, http::reply::status_type::ok);
+                }, http::reply::status_type::ok, _as);
         } catch (...) {
-            _queue.abort(std::current_exception());
+            // The client reports an aborted request as a storage_io_error, as any other failure.
+            _queue.abort(_as && _as->abort_requested() ? _as->abort_requested_exception_ptr() : std::current_exception());
             co_return;
         }
 
         fs::path dir(_prefix);
-        for (auto&& o : names) {
-            directory_entry ent{o.substr(_prefix.size())};
-            if (!_filter(dir, ent)) {
+        for (auto&& [key, size] : objects) {
+            entry ent{key.substr(_prefix.size()), size};
+            if (!_filter(dir, directory_entry{ent.name})) {
                 continue;
             }
             co_await _queue.push_eventually(std::move(ent));
@@ -2539,6 +2555,14 @@ future<> client::bucket_lister::start_listing() {
 }
 
 future<std::optional<directory_entry>> client::bucket_lister::get() {
+    auto ent = co_await get_entry();
+    if (!ent) {
+        co_return std::nullopt;
+    }
+    co_return directory_entry{std::move(ent->name)};
+}
+
+future<std::optional<client::bucket_lister::entry>> client::bucket_lister::get_entry() {
     if (!_opt_done_fut) {
         _opt_done_fut = start_listing();
     }
