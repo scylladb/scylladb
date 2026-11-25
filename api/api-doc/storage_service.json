@@ -1898,6 +1898,15 @@
                      "type":"string",
                      "enum": [ "all", "vnodes", "tablets" ],
                      "paramType":"query"
+                  },
+                  {
+                     "name":"consistency",
+                     "description":"Filter keyspaces for their consistency: eventual or global (strongly consistent) (default: all)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "enum": [ "all", "eventual", "global" ],
+                     "paramType":"query"
                   }
                ]
             }

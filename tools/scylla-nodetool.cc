@@ -356,13 +356,27 @@ public:
     }
 };
 
-std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}, std::optional<sstring> replication = {}) {
+// The values of the `consistency` filter of /storage_service/keyspaces.
+enum class keyspace_consistency {
+    all,
+    eventual,
+};
+
+std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}, std::optional<sstring> replication = {},
+        keyspace_consistency consistency = keyspace_consistency::all) {
     std::unordered_map<sstring, sstring> params;
     if (type) {
         params["type"] = *type;
     }
     if (replication) {
         params["replication"] = *replication;
+    }
+    switch (consistency) {
+        case keyspace_consistency::all:
+            break;
+        case keyspace_consistency::eventual:
+            params["consistency"] = "eventual";
+            break;
     }
     auto keyspaces_json = client.get("/storage_service/keyspaces", std::move(params));
     std::vector<sstring> keyspaces;
@@ -621,10 +635,19 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
         if (!uses_tablets) {
             throw std::invalid_argument("nodetool cluster repair repairs only tablet keyspaces. To repair vnode keyspaces use nodetool repair.");
         }
+        // Repair doesn't apply to strongly consistent keyspaces: raft replicates their writes.
+        // Check that the keyspace is eventually consistent rather than that it isn't strongly
+        // consistent: a server that doesn't know the `consistency` filter ignores it and lists
+        // all keyspaces, which then lets the repair through.
+        if (!std::ranges::contains(get_keyspaces(client, {}, {}, keyspace_consistency::eventual), res.keyspace)) {
+            throw std::invalid_argument(fmt::format("Cannot repair keyspace {} because it is strongly consistent. "
+                    "Repair is not supported for strongly consistent keyspaces.", res.keyspace));
+        }
         keyspaces.push_back(std::move(res.keyspace));
         tables = std::move(res.tables);
     } else {
-        keyspaces = get_keyspaces(client, "non_local_strategy", "tablets");
+        // Strongly consistent keyspaces are left out -- they are not repaired.
+        keyspaces = get_keyspaces(client, "non_local_strategy", "tablets", keyspace_consistency::eventual);
         if (!get_keyspaces(client, "non_local_strategy", "vnodes").empty()) {
             fmt::print("Warning: only tablet keyspaces will be repaired. To repair vnode keyspaces use nodetool repair.");
         }
@@ -4232,6 +4255,9 @@ nodetool cluster repair on one node only.
 
 Note that nodetool cluster repair repairs only tablet keyspaces.
 To repair vnode keyspaces use nodetool repair.
+
+Repair doesn't apply to strongly consistent keyspaces. They are skipped
+when all keyspaces are repaired, and naming one is an error.
 
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/cluster/repair.html")),

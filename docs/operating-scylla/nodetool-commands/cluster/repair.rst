@@ -11,6 +11,9 @@ of the nodes in the cluster, and :doc:`nodetool cluster repair </operating-scyll
 
 .. warning:: :term:`Colocated Tables <Colocated Table>` cannot be synchronized using cluster repair in this version.
 
+Repair doesn't apply to strongly consistent keyspaces (see the :ref:`consistency <consistency-option>` option):
+Raft replicates their writes. ``cluster repair`` leaves them out when it repairs all keyspaces, and fails when one is named.
+
 To check if a keyspace enables tablets, use:
 
 .. code-block:: cql

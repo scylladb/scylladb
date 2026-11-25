@@ -67,6 +67,41 @@ def test_storage_service_keyspaces_replication(cql, this_dc, rest_api, skip_with
         assert vnodes_keyspace in vnodes_ks
         assert tablets_keyspace not in vnodes_ks
 
+def test_storage_service_keyspaces_consistency(cql, this_dc, rest_api, skip_without_tablets):
+    """Check the `consistency` filter of GET /storage_service/keyspaces:
+    `eventual` and `global` keep only the keyspaces with that consistency,
+    no filter or `all` keeps both kinds, the filter combines with `replication`,
+    and an unsupported value is rejected. nodetool cluster repair relies on
+    the filter to leave strongly consistent keyspaces out."""
+    def get_keyspaces(params):
+        resp = rest_api.send("GET", "storage_service/keyspaces", { "type": "user", **params })
+        resp.raise_for_status()
+        return resp.json()
+
+    with (new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as ec_keyspace,
+          new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'initial': 1 }} AND consistency = 'global'") as sc_keyspace):
+        for params in [{}, { "consistency": "all" }]:
+            keyspaces = get_keyspaces(params)
+            assert ec_keyspace in keyspaces
+            assert sc_keyspace in keyspaces
+
+        eventual_ks = get_keyspaces({ "consistency": "eventual" })
+        assert ec_keyspace in eventual_ks
+        assert sc_keyspace not in eventual_ks
+
+        global_ks = get_keyspaces({ "consistency": "global" })
+        assert ec_keyspace not in global_ks
+        assert sc_keyspace in global_ks
+
+        # The filters combine.
+        assert sc_keyspace in get_keyspaces({ "replication": "tablets", "consistency": "global" })
+        assert sc_keyspace not in get_keyspaces({ "replication": "tablets", "consistency": "eventual" })
+        assert get_keyspaces({ "replication": "vnodes", "consistency": "global" }) == []
+
+        resp = rest_api.send("GET", "storage_service/keyspaces", { "consistency": "local" })
+        assert resp.status_code == requests.codes.bad_request
+        assert "Invalid consistency: local" in resp.text
+
 def do_test_storage_service_attribute_api_keyspace(cql, this_dc, rest_api, api_name):
     keyspace = new_keyspace(cql, this_dc)
     # test empty keyspace
