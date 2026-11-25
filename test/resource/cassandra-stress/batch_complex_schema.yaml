@@ -1,0 +1,118 @@
+### DML ###
+
+# cassandra-stress user profile=data_dir/complex_schema.yaml  ops'(insert=3,read1=1,read2=1,update_static=1,update_ttl=1,update_diff1_ts=1,update_diff2_ts=1,update_same1_ts=1,update_same2_ts=1,alter_table=1,delete_row=0.1)' cl=QUORUM duration=10m
+
+# Keyspace Name
+keyspace: keyspace_complex
+
+# The CQL for creating a keyspace (optional if it already exists)
+keyspace_definition: |
+  CREATE KEYSPACE IF NOT EXISTS keyspace_complex WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 4};
+
+# Table name
+table: user_with_ck
+
+# The CQL for creating a table you wish to stress (optional if it already exists)
+table_definition: |
+  CREATE TABLE IF NOT EXISTS user_with_ck (
+    key blob,
+    // Case sensitive column names
+    //"Md5" text,
+    md5 text,
+    email text,
+    static_int int static,
+    //short non-PK column names
+    a blob,
+    b text,
+    c ascii,
+    d varchar,
+    e boolean,
+    f inet,
+    g int,
+    // Case sensitive column names
+    h bigint,
+    //H bigint,
+    char ascii,
+    vchar varchar,
+    finished boolean,
+    osirisjson blob,
+    ip inet,
+    size int,
+    imagebase bigint,
+    small_num smallint,
+    tiny_num tinyint,
+    // todo: verify size of varint
+    vint varint,
+    decimal_num decimal,
+    double_num double,
+    float_num float,
+    start_date date,
+    start_time time,
+    check_date timestamp,
+    pass_date timestamp,
+    upload_time timeuuid,
+    user_uid uuid,
+    //// name_tuple tuple<text>,
+    name_set set<text>,
+    name_list list<text>,
+    //// map1 map<text,text>,
+    //// map2 map<int,text>,
+    //home_addr address,
+    //// frozen_office_addr frozen<address>,
+    //hash_bashname hash_and_basename,
+    ////frozen_hash_bashname frozen<hash_and_basename>,
+    //num counter,
+    //PRIMARY KEY (key, md5, upload_time)
+    PRIMARY KEY (key, md5)
+    //PRIMARY KEY (key)
+  );
+
+extra_definitions:
+  - CREATE TYPE IF NOT EXISTS hash_and_basename (md5 text, basename text);
+  - CREATE TYPE IF NOT EXISTS address (street text, city text, zip_code int, phones set<text>, map1 map<text,text>, map2 map<int,text>);
+
+### Column Distribution Specifications ###
+
+columnspec:
+  - name: key
+    size: fixed(10)
+
+
+### Batch Ratio Distribution Specifications ###
+
+insert:
+  partitions: fixed(2)
+  select:    fixed(1)/1000
+  batchtype: LOGGED
+
+queries:
+  read1:
+    cql: select * from user_with_ck where key = ? LIMIT 1
+    fields: samerow
+  read2:
+    cql: select * from user_with_ck where key = ? and md5 = ? LIMIT 1
+    fields: samerow
+  update_static:
+    cql: update user_with_ck USING TTL 5 set static_int = ? where key = ?
+    fields: samerow
+  update_ttl:
+    cql: update user_with_ck USING TTL 5 set check_date = ? where key = ? and md5 = ?
+    fields: samerow
+  update_diff1_ts:
+    cql: update user_with_ck USING TIMESTAMP 10 set check_date = ? where key = ? and md5 = ?
+    fields: samerow
+  update_diff2_ts:
+    cql: update user_with_ck USING TIMESTAMP 5 set pass_date = ? where key = ? and md5 = ?
+    fields: samerow
+  update_same1_ts:
+    cql: update user_with_ck USING TIMESTAMP 10 set check_date = '2018-01-01T11:21:59.001+0000' where key = ? and md5 = ?
+    fields: samerow
+  update_same2_ts:
+    cql: update user_with_ck USING TIMESTAMP 10 set pass_date = '2018-01-01T11:21:59.001+0000' where key = ? and md5 = ?
+    fields: samerow
+  alter_table:
+    cql: ALTER TABLE user_with_ck WITH comment = 'updated'
+    fields: samerow
+  delete_row:
+    cql: delete from user_with_ck where key = ? and md5 = ?
+    fields: samerow

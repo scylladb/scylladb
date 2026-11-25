@@ -1,6 +1,7 @@
 from ..cqlpy.util import new_test_table, new_test_keyspace
 from test.rest_api.rest_util import set_tmp_task_ttl, scylla_inject_error
 from test.rest_api.task_manager_utils import list_tasks, drain_module_tasks, get_task_status, get_task_status_recursively, wait_for_task, check_child_parent_relationship, get_children
+import pytest
 
 empty_id = "00000000-0000-0000-0000-000000000000"
 module_name = "repair"
@@ -116,3 +117,17 @@ def test_repair_task_progress(cql, this_dc, rest_api, test_keyspace_vnodes):
                     for child_status in get_children(status_tree, status["id"]):
                         assert child_status["progress_completed"] == child_status["progress_total"], "Incorrect task progress"
     drain_module_tasks(rest_api, module_name)
+
+# Asking for the status of a repair id that was never assigned must fail with
+# "400 Bad Request" and an "unknown repair id" message, both in the
+# non-blocking status call and in the one that waits for completion.
+# Reproduces https://github.com/scylladb/scylla/pull/9578
+@pytest.mark.non_gating
+def test_repair_status_unknown_id(rest_api, test_keyspace):
+    unknown_id = 2**31 - 1
+    resp = rest_api.send("GET", "storage_service/repair_status", {"id": unknown_id})
+    assert resp.status_code == 400
+    assert "unknown repair id" in resp.text
+    resp = rest_api.send("GET", f"storage_service/repair_async/{test_keyspace}", {"id": unknown_id})
+    assert resp.status_code == 400
+    assert "unknown repair id" in resp.text

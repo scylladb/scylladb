@@ -231,7 +231,10 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Only run tests that match the given mark expression. The syntax is the same "
                              "as in pytest, for example: --markers 'mark1 and not mark2'. The parameter "
                              "is only supported by python tests for now, other tests ignore it. "
-                             "By default, the marker filter is not applied and all tests will be run without exception."
+                             "Without it, python tests run as in CI's PR stage: those marked non_gating or tier2 "
+                             "(which xfail tests are too) are left out unless named by their test id "
+                             "(path::name); -k and --skip "
+                             "only narrow what is left. "
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
     parser.add_argument('--coverage', action = 'store_true', default = False,
                         help="When running code instrumented with coverage support"
@@ -246,6 +249,12 @@ def parse_cmd_line() -> argparse.Namespace:
                         help = "Do not delete llvm indexed profiles when processing coverage reports.")
     parser.add_argument("--coverage-keep-lcovs",action = 'store_true',
                         help = "Do not delete intermediate lcov traces when processing coverage reports.")
+    parser.add_argument("--select-tests-as-mode", action="store", default=None, metavar="MODE",
+                        help="Choose tests by MODE's run_in_*/skip_in_* lists, whatever mode runs them "
+                             "(e.g. --mode coverage --select-tests-as-mode dev).")
+    parser.add_argument("--coverage-per-test", action="store", default=None, metavar="DIR",
+                        help="Write an LLVM coverage profile of every test (all scylla processes it ran) to "
+                             "DIR/<test>.profdata.zst, with its outcome in DIR/<test>.json.  Needs --mode coverage.")
     parser.add_argument("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
                         help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                              "with logs")
@@ -314,6 +323,9 @@ def parse_cmd_line() -> argparse.Namespace:
         if len(missing_coverage_modes) > 0:
             raise RuntimeError(f"The following modes weren't built or ran (using the '--mode' option): {missing_coverage_modes}")
         args.coverage = True
+
+    if args.coverage_per_test and set(args.modes) != {"coverage"}:
+        raise RuntimeError("--coverage-per-test needs an instrumented build: run it with --mode coverage alone")
 
     args.tmpdir = os.path.abspath(args.tmpdir)
 
@@ -396,8 +408,10 @@ def run_pytest(options: argparse.Namespace) -> int:
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
     files_to_run = options.name if options.keep_duplicates else _deduplicate_test_args(options.name)
-    # runner.py treats a custom executable as the "custom_exe" mode.
-    files_to_run = drop_disabled_tests(files_to_run, options.modes or ["custom_exe"])
+    # runner.py treats a custom executable as the "custom_exe" mode, and with
+    # --select-tests-as-mode, chooses tests by that mode's lists.
+    files_to_run = drop_disabled_tests(files_to_run, [options.select_tests_as_mode] if options.select_tests_as_mode
+                                       else options.modes or ["custom_exe"])
     if options.name and not files_to_run:
         return pytest.ExitCode.NO_TESTS_COLLECTED
     files_to_run = files_to_run or [str(TOP_SRC_DIR / 'test/')]
@@ -405,6 +419,8 @@ def run_pytest(options: argparse.Namespace) -> int:
         '--color=yes',
         f'--repeat={options.repeat}',
         *[f'--mode={mode}' for mode in options.modes],
+        # Deduplication may fold a test id into a file argument: keep it named.
+        *[f'--run-named={name}' for name in options.name if '::' in name and name not in files_to_run],
     ]
     if options.list_tests:
         args.extend(['--collect-only', '--quiet', '--no-header'])
@@ -432,6 +448,10 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append(f'--random-seed={options.random_seed}')
     if options.gather_metrics:
         args.append('--gather-metrics')
+    if options.select_tests_as_mode:
+        args.append(f'--select-tests-as-mode={options.select_tests_as_mode}')
+    if options.coverage_per_test:
+        args.append(f'--coverage-per-test={os.path.abspath(options.coverage_per_test)}')
     if options.coverage:
         args.append('--coverage')
         args.extend(f'--coverage-mode={mode}' for mode in options.coverage_modes)
@@ -491,8 +511,9 @@ async def main() -> int:
         print(palette.fail(e))
         raise
     if exit_code == 5:
-        print(palette.fail("No tests were collected. Please check the test names and modes you provided, as well as"
-                           "the test markers if you used the '--markers' option."
+        print(palette.fail("No tests were collected. Please check the test names and modes you provided, as well as "
+                           "the test markers if you used the '--markers' option; without it, tests marked "
+                           "non_gating or tier2 (or xfail) are left out unless named by their id (path::name). "
                            "Alternatively you can check with --list option if there any errors."))
     if 'coverage' in options.modes:
         coverage.generate_coverage_report(

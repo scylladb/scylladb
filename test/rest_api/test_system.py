@@ -4,10 +4,25 @@
 
 import pytest
 import requests
+import time
 
-def test_system_uptime_ms(rest_api):
+def get_uptime_ms(rest_api):
     resp = rest_api.send('GET', "system/uptime_ms")
     resp.raise_for_status()
+    return int(resp.text)
+
+# Check that system/uptime_ms advances along with the real time: the
+# difference between two readings must be within the time measured around
+# the two requests (with a small slack for rounding to milliseconds).
+def test_system_uptime_ms(rest_api):
+    t0 = time.monotonic()
+    uptime1 = get_uptime_ms(rest_api)
+    t1 = time.monotonic()
+    time.sleep(1)
+    t2 = time.monotonic()
+    uptime2 = get_uptime_ms(rest_api)
+    t3 = time.monotonic()
+    assert (t2 - t1) * 1000 - 2 <= uptime2 - uptime1 <= (t3 - t0) * 1000 + 2
 
 
 def test_system_highest_sstable_format(rest_api):

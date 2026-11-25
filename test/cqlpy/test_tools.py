@@ -1698,6 +1698,55 @@ def test_scrub_validate_mode(scylla_path, scrub_workdir, scrub_schema_file, scru
         assert os.path.exists(scrub_bad_sstable)
 
 
+# Scrub works on an sstable stripped down to its essential components (no
+# Filter, Summary, Digest, CRC or Scylla component), as long as the TOC
+# lists only the remaining ones, and writes out the same data.
+# Reproduces #21145.
+@pytest.mark.parametrize("sstable_version,essential", [
+    ("me", ["Data.db", "Index.db", "Statistics.db", "TOC.txt"]),
+    ("ms", ["Data.db", "Partitions.db", "Rows.db", "Statistics.db", "TOC.txt"])])
+def test_scrub_essential_components_only(scylla_path, scrub_workdir, sstable_version, essential):
+    with tempfile.TemporaryDirectory(prefix="test_scrub_essential_components_only", dir=scrub_workdir) as tmp_dir:
+        # An uncompressed table, so CompressionInfo isn't essential either.
+        schema_file = os.path.join(tmp_dir, "schema.cql")
+        with open(schema_file, "w") as f:
+            f.write("CREATE TABLE ks.tbl (pk int, ck int, v text, PRIMARY KEY (pk, ck)) WITH compression = {}")
+        sst_json = [{"key": {"raw": f"0004{pk:08x}"},
+                     "clustering_elements": [
+                         {"type": "clustering-row", "key": {"raw": f"0004{ck:08x}"},
+                          "columns": {"v": {"is_live": True, "type": "regular", "timestamp": 1686815362417553, "value": f"v{ck}"}}}
+                         for ck in range(3)]}
+                    for pk in [200, 100, 300]]
+        sst_json_path = os.path.join(tmp_dir, "sst.json")
+        with open(sst_json_path, "w") as f:
+            json.dump(sst_json, f)
+        in_dir = os.path.join(tmp_dir, "in")
+        os.mkdir(in_dir)
+        subprocess.check_call([scylla_path, "sstable", "write", "--schema-file", schema_file, "--input-format", "json",
+                               "--sstable-version", sstable_version, "--output-dir", in_dir, "--input-file", sst_json_path])
+        sst = glob.glob(os.path.join(in_dir, "*-Data.db"))[0]
+        def dump(sstable):
+            out = subprocess.check_output([scylla_path, "sstable", "dump-data", "--schema-file", schema_file, sstable])
+            return list(json.loads(out)["sstables"].values())[0]
+        expected = dump(sst)
+        assert len(expected) == 3
+
+        prefix = sst[:-len("Data.db")]
+        for component in glob.glob(prefix + "*"):
+            if component[len(prefix):] not in essential:
+                os.unlink(component)
+        with open(prefix + "TOC.txt", "w") as f:
+            f.write("".join(c + "\n" for c in essential))
+        assert sorted(c[len(prefix):] for c in glob.glob(prefix + "*")) == sorted(essential)
+
+        out_dir = os.path.join(tmp_dir, "out")
+        os.mkdir(out_dir)
+        subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", schema_file, "--scrub-mode", "abort",
+                               "--output-dir", out_dir, sst])
+        check_scrub_output_dir(out_dir, 1)
+        assert dump(glob.glob(os.path.join(out_dir, "*-Data.db"))[0]) == expected
+
+
 def _to_cql3_type(t: Type) -> str:
     # map from Python type to Cassandra type, only a small subset is supported
     py_to_cql3_type = {int: "Int32Type",

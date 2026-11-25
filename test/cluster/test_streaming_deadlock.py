@@ -6,10 +6,11 @@
 import asyncio
 import logging
 import pytest
+import random
+import string
 import time
 from cassandra.cluster import ConsistencyLevel
 
-from test.cluster.dtest.alternator_utils import random_string
 from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
@@ -42,7 +43,7 @@ async def test_streaming_deadlock_removenode(request, manager: ScyllaClusterMana
                             "WHERE c IS NOT NULL and pk IS NOT NULL PRIMARY KEY (c, pk)")
 
         keys = range(1024)
-        val = random_string(10240)
+        val = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10240))
         stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c, v) VALUES (?, ?, '{val}')")
         for _ in range(10):
             await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])

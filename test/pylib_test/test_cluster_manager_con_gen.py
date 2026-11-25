@@ -22,7 +22,9 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 def manager(monkeypatch) -> ScyllaClusterManager:
     """Exercise the factory without opening driver connections or threads."""
     monkeypatch.setattr(scylla_cluster_manager, "CassandraCluster", lambda **kwargs: SimpleNamespace(**kwargs))
-    return object.__new__(ScyllaClusterManager)
+    manager = object.__new__(ScyllaClusterManager)
+    manager.test_clusters = []
+    return manager
 
 
 @pytest.mark.parametrize("options", [{}, {"load_balancing_policy": None}], ids=["omitted", "none"])

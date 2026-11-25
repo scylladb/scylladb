@@ -7,12 +7,17 @@
 Test consistency of schema changes with topology changes.
 """
 import asyncio
+import glob
+import json
+import uuid
 import logging
 import functools
 import math
 import operator
 import os
 import struct
+import pathlib
+import shutil
 import time
 import re
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -21,9 +26,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 import pytest
+from cassandra import AlreadyExists
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
-from test.pylib.internal_types import ServerInfo, HostID
+from test.pylib.internal_types import ServerInfo, HostID, ServerNum
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier, wait_for_apply_committed
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
@@ -246,7 +252,6 @@ async def get_topology_version(cql: Session, host: Host) -> int:
         "select version from system.topology where key = 'topology'",
         host=host)
     return rows[0].version
-
 
 
 async def check_token_ring_and_group0_consistency(manager: ScyllaClusterManager) -> None:
@@ -501,7 +506,6 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
     return finish
 
 
-
 async def trigger_snapshot(manager, server: ServerInfo) -> None:
     cql = manager.get_cql()
     group0_id = (await cql.run_async(
@@ -524,7 +528,6 @@ async def trigger_stepdown(manager, server: ServerInfo, group_id: str | None = N
     if target_host_id is not None:
         params["target_host_id"] = target_host_id
     await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr, params=params or None)
-
 
 
 async def get_coordinator_host_ids(manager: ScyllaClusterManager) -> list[HostID]:
@@ -641,6 +644,32 @@ async def wait_new_coordinator_elected(manager: ScyllaClusterManager, previous_c
                        previous_coordinator_id, coordinators_ids)
 
     await wait_for(new_coordinator_elected, deadline=deadline)
+
+async def wipe_server_data(manager: ScyllaClusterManager, server_id: ServerNum) -> None:
+    """Delete everything a stopped server has stored, except its configuration,
+    so that it starts again as a new node with the same IP address and a new
+    host ID, which the manager then asks the node for again.
+    """
+    assert server_id not in {s.server_id for s in await manager.running_servers()}, \
+        f"server {server_id} must be stopped before its data is wiped"
+    workdir = pathlib.Path(await manager.server_get_workdir(server_id))
+    for entry in workdir.iterdir():
+        if entry.name == "conf":
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    manager.cluster.servers[server_id].forget_host_id()
+
+
+def vnodes_keyspace(replication: int | str) -> str:
+    """Options of a vnodes keyspace (tablets disabled) with NetworkTopologyStrategy:
+    a replication factor, or the replication options as CQL ("'dc1': 1, 'dc2': 2")."""
+    if isinstance(replication, int):
+        replication = f"'replication_factor': {replication}"
+    return f"WITH replication = {{'class': 'NetworkTopologyStrategy', {replication}}} AND tablets = {{'enabled': false}}"
+
 
 async def create_new_test_keyspace(cql: Session, opts, host=None):
     """
@@ -928,3 +957,113 @@ async def set_cluster_config(manager: ScyllaClusterManager, cql, servers: list[S
     await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], name, value)
     for log, mark in zip(logs, marks):
         await log.wait_for(rf"Refreshed cluster config cache.*\b{name}={value}\b", from_mark=mark, timeout=60)
+
+
+_ASAN_WARNING = re.compile(r"^==\d+==WARNING: ASan .*\n?", re.MULTILINE)
+
+
+def strip_asan_warnings(text: str) -> str:
+    """
+    Drops the warnings AddressSanitizer itself prints in debug builds (for
+    example "==N==WARNING: ASan doesn't fully support makecontext/swapcontext
+    functions ..."), so that a tool's stderr holds only the tool's output.
+    """
+    return _ASAN_WARNING.sub("", text)
+
+
+async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args: str,
+                       check: bool = True) -> tuple[str, str, int]:
+    """
+    Runs "scylla nodetool <args>" against the server, the way an operator
+    would, and returns its stdout, stderr (without ASan's own warnings) and
+    exit code. With check=True a non-zero exit code fails the test.
+    """
+    exe = await manager.server_get_exe(server.server_id)
+    # The host option goes before a "--", after which all arguments are positional.
+    i = args.index("--") if "--" in args else len(args)
+    proc = await asyncio.create_subprocess_exec(exe, "nodetool", *args[:i], "-h", server.ip_addr, *args[i:],
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, err = await proc.communicate()
+    stdout, stderr = out.decode(), strip_asan_warnings(err.decode())
+    if check:
+        assert proc.returncode == 0, f"nodetool {' '.join(args)} failed ({proc.returncode}): {stderr}"
+    return stdout, stderr, proc.returncode
+
+
+async def get_table_dir(manager: ScyllaClusterManager, server: ServerInfo, ks: str, cf: str) -> str:
+    """The data directory of table ks.cf on the server."""
+    workdir = await manager.server_get_workdir(server.server_id)
+    [table_dir] = glob.glob(f"{workdir}/data/{ks}/{cf}-*")
+    return table_dir
+
+
+async def dump_sstables(manager: ScyllaClusterManager, server: ServerInfo, ks: str, cf: str) -> list[dict]:
+    """
+    The partitions of all sstables of ks.cf, merged, as printed by "scylla
+    sstable dump-data --merge". Like the dtests' node.dump_sstables(), the
+    sstables are dumped from a snapshot (removed afterwards), with
+    autocompaction of system_schema and of the table disabled meanwhile.
+    """
+    tag = f"sstable-dump-{uuid.uuid1()}"
+    # The dtests' helper read the table's autocompaction state first.
+    assert await manager.api.client.get_json(f"/column_family/autocompaction/{ks}:{cf}", host=server.ip_addr)
+    await manager.api.disable_autocompaction(server.ip_addr, "system_schema")
+    await manager.api.disable_autocompaction(server.ip_addr, ks, cf)
+    try:
+        await run_nodetool(manager, server, "snapshot", "-t", tag, f"{ks}.{cf}")
+        try:
+            table_dir = await get_table_dir(manager, server, ks, cf)
+            data_files = glob.glob(f"{table_dir}/snapshots/{tag}/*-Data.db")
+            if not data_files:
+                return []
+            exe = await manager.server_get_exe(server.server_id)
+            # Run it outside the source tree, where no conf/scylla.yaml is found,
+            # as for the dtests: the tool then enables all experimental features.
+            # Not in the snapshot directory either: its schema.cql would be read as
+            # the default --schema-file, while the dtests' tool falls back to the
+            # schema stored in the sstable.
+            proc = await asyncio.create_subprocess_exec(exe, "sstable", "dump-data", "--merge", *data_files,
+                                                        cwd=table_dir,
+                                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            out, err = await proc.communicate()
+            assert proc.returncode == 0, err.decode()
+        finally:
+            await run_nodetool(manager, server, "clearsnapshot", "-t", tag, ks)
+        return json.loads(out)["sstables"]["anonymous"]
+    finally:
+        await manager.api.enable_autocompaction(server.ip_addr, ks, cf)
+        await manager.api.enable_autocompaction(server.ip_addr, "system_schema")
+
+
+async def cassandra_stress(manager: ScyllaClusterManager, server: ServerInfo, *args: str, rf: int = 1,
+                           create_keyspace: bool = True) -> str:
+    """
+    Runs cassandra-stress with the given arguments (for example "write",
+    "n=1000") against the server and returns its output. Like the dtests'
+    stress() helper, it first creates keyspace1 with the given replication
+    factor, with NetworkTopologyStrategy instead of cassandra-stress's
+    default SimpleStrategy, unless create_keyspace=False; as there, a
+    keyspace1 created before is left as it is.
+    """
+    if create_keyspace:
+        with suppress(AlreadyExists):
+            await manager.get_cql().run_async("CREATE KEYSPACE keyspace1 WITH replication = "
+                                              f"{{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+    proc = await asyncio.create_subprocess_exec("cassandra-stress", *args, "-node", server.ip_addr,
+                                                "-mode", "native", "cql3", "user=cassandra", "password=cassandra",
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await proc.communicate()
+    output = out.decode()
+    assert proc.returncode == 0, f"cassandra-stress {' '.join(args)} failed: {output}"
+    return output
+
+
+async def stop_servers_gracefully(manager: ScyllaClusterManager) -> None:
+    """
+    Stops the test's running servers gracefully, as the dtests' teardown
+    (ccm's cluster.stop()) did: shutdown flushes the memtables and closes
+    the sstables, where the harness would otherwise kill the nodes.
+    """
+    for server in await manager.running_servers():
+        await manager.server_stop_gracefully(server.server_id)
+

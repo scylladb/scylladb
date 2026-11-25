@@ -208,3 +208,29 @@ def test_scylla_config_temporary(scylla_only, dynamodb):
     with scylla_config_temporary(dynamodb, parameter, new_val):
         assert scylla_config_read(dynamodb, parameter) == new_val
     assert scylla_config_read(dynamodb, parameter) == old_val
+
+# System tables can be read through the .scylla.alternator. prefix, but
+# writing to them must be refused (with ResourceNotFoundException) unless
+# the alternator_allow_system_table_write option is set. Our test servers
+# enable it (see test_write_to_config), so we turn it off for the duration
+# of the test - through CQL, as Alternator writes to system.config would be
+# refused once it is off.
+# Reproduces issue #6122.
+def test_write_to_system_table_forbidden(scylla_only, dynamodb, cql):
+    option = 'alternator_allow_system_table_write'
+    old_val = cql.execute(f"SELECT value FROM system.config WHERE name = '{option}'").one().value
+    cql.execute(f"UPDATE system.config SET value = 'false' WHERE name = '{option}'")
+    try:
+        for table_name in ['.scylla.alternator.system.peers', '.scylla.alternator.system.config']:
+            table = dynamodb.Table(table_name)
+            # Reads are still allowed
+            full_scan(table)
+            # BatchWriteItem does not support system tables even when the
+            # option is on, so it reports them as not found.
+            with pytest.raises(ClientError, match='ResourceNotFoundException'):
+                with table.batch_writer() as batch:
+                    batch.put_item({'peer': '127.0.0.1', 'name': 'x', 'value': 'y'})
+            with pytest.raises(ClientError, match='ResourceNotFoundException.*' + option):
+                table.put_item(Item={'peer': '127.0.0.1', 'name': 'x', 'value': 'y'})
+    finally:
+        cql.execute(f"UPDATE system.config SET value = '{old_val}' WHERE name = '{option}'")
