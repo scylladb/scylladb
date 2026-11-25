@@ -1,10 +1,29 @@
 import pytest
 import asyncio
 import subprocess
+from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_first_completed
 
 pytestmark = pytest.mark.prepare_3_nodes_cluster
+
+
+async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args: str,
+                       expected_exit_code: int = 0) -> subprocess.CompletedProcess:
+    """
+    Runs `nodetool <args>` against `server`, with the server's executable,
+    and checks that it exits with `expected_exit_code`.
+    """
+    exe_path = await manager.server_get_exe(server.server_id)
+    cmd = [exe_path, "nodetool", *args, "--logger-log-level", "scylla-nodetool=trace", "-h", server.ip_addr]
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    stdout, stderr = await proc.communicate()
+    assert proc.returncode is not None
+    result = subprocess.CompletedProcess(cmd, proc.returncode, stdout.decode(), stderr.decode())
+    assert result.returncode == expected_exit_code, \
+        f"{cmd} exited with {result.returncode}, expected {expected_exit_code}\n" \
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    return result
 
 
 async def validate_status_operation(result: str, live_eps: list, down_eps: list, leaving: list, joining: list,
@@ -75,12 +94,7 @@ async def test_zero_token_node_normal(manager: ScyllaClusterManager):
 
     servers = await manager.running_servers()
 
-    exe_path = await manager.server_get_exe(servers[0].server_id)
-    cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                              "scylla-nodetool=trace",
-                                              "-h", servers[0].ip_addr]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await run_nodetool(manager, servers[0], "status")
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
@@ -105,11 +119,7 @@ async def test_zero_token_node_normal(manager: ScyllaClusterManager):
     config = await manager.server_get_config(servers[0].server_id)
     await validate_status_operation(result.stdout, live_eps, down_eps, leaving, [], zero_token_eps, host_id_map, config['num_tokens'])
 
-    zero_token_cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                                         "scylla-nodetool=trace",
-                                                         "-h", zero_token_eps[0]]
-
-    zero_token_result = subprocess.run(zero_token_cmd, capture_output=True, text=True)
+    zero_token_result = await run_nodetool(manager, zero_token_nodes[0], "status")
     await validate_status_operation(zero_token_result.stdout, live_eps, down_eps, leaving, [], zero_token_eps,
                                     host_id_map, config['num_tokens'])
 
@@ -123,16 +133,11 @@ async def test_zero_token_node_down_leaving(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(zero_token_node.server_id)
     task = asyncio.create_task(manager.remove_node(servers[0].server_id, zero_token_node.server_id))
 
-    exe_path = await manager.server_get_exe(servers[0].server_id)
-    cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                              "scylla-nodetool=trace",
-                                              "-h", servers[0].ip_addr]
-
     await wait_for_first_completed([
         manager.api.wait_for_injection_enter(srv.ip_addr, "delay_node_removal") for srv in servers
     ])
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await run_nodetool(manager, servers[0], "status")
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
@@ -165,12 +170,7 @@ async def test_zero_token_node_down_normal(manager: ScyllaClusterManager):
     zero_token_node = await manager.server_add(config={'join_ring': False})
     await manager.server_stop_gracefully(zero_token_node.server_id)
 
-    exe_path = await manager.server_get_exe(servers[0].server_id)
-    cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                              "scylla-nodetool=trace",
-                                              "-h", servers[0].ip_addr]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await run_nodetool(manager, servers[0], "status")
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
@@ -202,15 +202,10 @@ async def test_regular_node_joining(manager: ScyllaClusterManager):
     joining_server = await manager.server_add(start=False)
     task = asyncio.create_task(manager.server_start(joining_server.server_id))
 
-    exe_path = await manager.server_get_exe(servers[0].server_id)
-    cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                              "scylla-nodetool=trace",
-                                              "-h", servers[0].ip_addr]
-
     await wait_for_first_completed([
         manager.api.wait_for_injection_enter(srv.ip_addr, "delay_node_bootstrap") for srv in servers
     ])
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await run_nodetool(manager, servers[0], "status")
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
