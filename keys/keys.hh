@@ -550,6 +550,11 @@ public:
     void validate(const schema& s) const {
         return s.partition_key_type()->validate(representation());
     }
+
+    // Returns the key's only component, if it has a single component with contiguous bytes.
+    std::optional<bytes_view> single_contiguous_component() const {
+        return c_type::single_contiguous_component(representation());
+    }
 };
 
 template <>
@@ -596,6 +601,11 @@ public:
         : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
     { }
     partition_key(std::initializer_list<bytes> v) : partition_key(std::vector(v)) {}    
+
+    // Returns the key's only component, if it has a single component with contiguous bytes.
+    std::optional<bytes_view> single_contiguous_component() const {
+        return view().single_contiguous_component();
+    }
 
     partition_key(partition_key&& v) = default;
     partition_key(const partition_key& v) = default;

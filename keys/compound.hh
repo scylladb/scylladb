@@ -17,6 +17,8 @@
 #include "utils/serialization.hh"
 #include "exceptions/exceptions.hh"
 #include <seastar/util/backtrace.hh>
+#include <seastar/core/byteorder.hh>
+#include <optional>
 
 enum class allow_prefixes { no, yes };
 
@@ -202,6 +204,16 @@ public:
     }
     static std::ranges::subrange<iterator> components(managed_bytes_view v) {
         return std::ranges::subrange(begin(v), end(v));
+    }
+    // Returns the only component of the representation v, if v holds a single component
+    // and its bytes are contiguous.
+    static std::optional<bytes_view> single_contiguous_component(const managed_bytes_view& v) noexcept {
+        bytes_view frag = v.current_fragment();
+        if (frag.size() == v.size_bytes() && frag.size() >= sizeof(size_type)
+                && seastar::read_be<size_type>(reinterpret_cast<const char*>(frag.data())) == frag.size() - sizeof(size_type)) [[likely]] {
+            return frag.substr(sizeof(size_type));
+        }
+        return std::nullopt;
     }
     value_type deserialize_value(managed_bytes_view v) const {
         std::vector<bytes> result;
