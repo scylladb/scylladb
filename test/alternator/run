@@ -72,7 +72,7 @@ start_s3 = '--s3' in sys.argv
 if start_s3:
     sys.argv.remove('--s3')
     # s3mock_server imports boto3, which the run without "--s3" does not need.
-    from test.pylib.s3mock_server import S3MockServer
+    from test.pylib.s3mock_server import S3MockServer, create_conf
 
 # We run the S3 server the same as Scylla below, with run_with_temporary_dir().
 # On exit, run.py kills it, shows its log and deletes the directory. "podman
@@ -148,12 +148,7 @@ def add_s3_endpoint_to_options_file(cmd, dir):
     i = cmd.index('--options-file') + 1
     with open(cmd[i]) as f:
         conf = yaml.safe_load(f) or {}
-    # No credentials: Scylla gets them from the environment (see
-    # scylladb/scylla-pkg#3845).
-    conf['object_storage_endpoints'] = [{'name': s3_endpoint,
-                                         'aws_region': S3MockServer.DEFAULT_REGION,
-                                         'iam_role_arn': '',
-                                         'type': 's3'}]
+    conf['object_storage_endpoints'] = create_conf(s3_endpoint, S3MockServer.DEFAULT_REGION)
     cmd[i] = os.path.join(dir, 'scylla.yaml')
     with open(cmd[i], 'w') as f:
         yaml.safe_dump(conf, f)
