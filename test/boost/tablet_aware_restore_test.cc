@@ -92,7 +92,7 @@ struct fmt::formatter<db::snapshot_remote_location_entry> : fmt::formatter<strin
     auto format(const db::snapshot_remote_location_entry& e, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), 
             "{{ {}, {}, {}, {}, {}, {} }}",
-            e.snapshot_name, e.datacenter, e.endpoint, e.bucket, e.prefix, e.state
+            e.snapshot_name, e.datacenter, e.location.endpoint, e.location.bucket, e.location.prefix, e.state
         );
     }
 };
@@ -201,9 +201,11 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works) {
         db::snapshot_remote_location_entry rle {
             .snapshot_name = snapshot_name,
             .datacenter = dc,
-            .endpoint = "The end of all things",
-            .bucket = "A_bucket_for_fun",
-            .prefix = prefix,
+            .location = {
+                .endpoint = "The end of all things",
+                .bucket = "A_bucket_for_fun",
+                .prefix = prefix,
+            },
             .state = db::snapshot_state::local,
         };
 

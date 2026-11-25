@@ -1034,7 +1034,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
 
     auto snapshot_info = co_await sth.get_snapshot_remote_location(snapshot_name, datacenter);
-    llog.info("Downloading sstables for tablet {} from {}@{}/{}", tid, snapshot_name, snapshot_info.endpoint, snapshot_info.bucket);
+    llog.info("Downloading sstables for tablet {} from {}@{}/{}", tid, snapshot_name, snapshot_info.location.endpoint, snapshot_info.location.bucket);
     auto sst_infos = co_await sth.get_snapshot_sstables(snapshot_name, keyspace_name, table_name, datacenter, rack,
             db::consistency_level::QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
@@ -1074,23 +1074,23 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     // and format, which are not in the object names.
     const auto* dst_os = std::get_if<data_dictionary::storage_options::object_storage>(&_db.local().find_column_family(tid.table).get_storage_options().value);
     const bool in_place = dst_os
-            && snapshot_info.endpoint == dst_os->endpoint
-            && snapshot_info.bucket == dst_os->bucket
-            && snapshot_info.prefix == sstables::object_storage_default_prefix;
+            && snapshot_info.location.endpoint == dst_os->endpoint
+            && snapshot_info.location.bucket == dst_os->bucket
+            && snapshot_info.location.prefix == sstables::object_storage_default_prefix;
 
     std::unordered_map<sstring, std::vector<sstring>> toc_names_by_prefix;
     for (const auto& e : fully) {
         if (in_place) {
             // e.prefix is the directory of the manifest. In the unified layout, the
             // objects are under the prefix of the table, not under e.prefix.
-            toc_names_by_prefix[snapshot_info.prefix].emplace_back(seastar::format("{}/{}", e.sstable_id, e.toc_name));
+            toc_names_by_prefix[snapshot_info.location.prefix].emplace_back(seastar::format("{}/{}", e.sstable_id, e.toc_name));
             continue;
         }
         // e.prefix is relative to the backup location's own prefix (snapshot_remote_locations.prefix).
-        toc_names_by_prefix[join_path(snapshot_info.prefix, e.prefix)].emplace_back(e.toc_name);
+        toc_names_by_prefix[join_path(snapshot_info.location.prefix, e.prefix)].emplace_back(e.toc_name);
     }
 
-    auto ep_type = _storage_manager.get_endpoint_type(snapshot_info.endpoint);
+    auto ep_type = _storage_manager.get_endpoint_type(snapshot_info.location.endpoint);
     sstables::sstable_open_config cfg {
         .load_bloom_filter = false,
     };
@@ -1105,7 +1105,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     auto sstables_on_shards = co_await map_reduce(toc_names_by_prefix, [&] (auto ent) {
         return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
                 std::move(ent.second), [&, prefix = std::move(ent.first)] {
-                    return data_dictionary::make_object_storage_options(snapshot_info.endpoint, ep_type, snapshot_info.bucket, prefix,
+                    return data_dictionary::make_object_storage_options(snapshot_info.location.endpoint, ep_type, snapshot_info.location.bucket, prefix,
                             &shard_aborts[this_shard_id()],
                             in_place ? data_dictionary::storage_options::object_storage_layout::unified
                                      : data_dictionary::storage_options::object_storage_layout::foreign);
@@ -1586,9 +1586,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
         remote_locations.push_back(db::snapshot_remote_location_entry{
             .snapshot_name = snap_name,
             .datacenter = dc,
-            .endpoint = std::move(loc.location.endpoint),
-            .bucket = std::move(loc.location.bucket),
-            .prefix = std::move(loc.location.prefix),
+            .location = std::move(loc.location),
             .state = db::snapshot_state::remote,
         });
     }

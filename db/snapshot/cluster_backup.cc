@@ -107,12 +107,12 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         auto filter = db::snapshot_state::remote_and_local;
 
         // check if we are writing to a different destination. If so, we reset state
-        if (loc.endpoint != i->second.endpoint || loc.bucket != i->second.bucket || loc.prefix != i->second.prefix) {
+        if (loc.location != i->second) {
             loc.state = db::snapshot_state::local;
             filter = db::snapshot_state::remote;
         }
         if (loc.state >= db::snapshot_state::remote_and_local) {
-            snap_log.warn("Snapshot {} for {} is already backed up: {}:{}", snapshot_name, loc.datacenter, loc.bucket, loc.prefix);
+            snap_log.warn("Snapshot {} for {} is already backed up: {}:{}", snapshot_name, loc.datacenter, loc.location.bucket, loc.location.prefix);
             dc_locations.erase(loc.datacenter);
         }
 
@@ -123,9 +123,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         return db::snapshot_remote_location_entry {
             .snapshot_name = snapshot_name,
             .datacenter = p.first,
-            .endpoint = p.second.endpoint,
-            .bucket = p.second.bucket,
-            .prefix = p.second.prefix,
+            .location = p.second,
             .state = db::snapshot_state::being_backed_up,
         };
     }) | std::ranges::to<std::vector<db::snapshot_remote_location_entry>>();
