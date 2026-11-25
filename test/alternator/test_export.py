@@ -381,11 +381,15 @@ def fetch_all_exported_items(s3, bucket):
 #   directory content will still be verified and as will be manifest files.
 # Test is parameterized to run with both supported export formats and with/without S3 prefix.
 # A prefix that ends with '/' must not add an empty directory before "AWSDynamoDB".
+# A prefix with "!*'()" checks that the S3 requests for keys with these characters are valid.
+# The longest prefix has 948 characters, the most that DynamoDB accepts. It has short segments,
+# because some S3 servers store a segment as a file name, which is limited to 255 bytes.
 # The empty table is tested only once, as DYNAMODB_JSON without a prefix.
 @pytest.mark.parametrize('num_items,export_format_value,s3_prefix_value',
-    [(10, 'DYNAMODB_JSON', p) for p in [None, 'dira/dirb/dirc', 'dira/dirb/']] +
+    [(10, 'DYNAMODB_JSON', p) for p in [None, 'dira/dirb/dirc', 'dira/dirb/', "dir!*'()/sub"]] +
     [(10, 'ION', p) for p in [None, 'dira/dirb/dirc', 'dira/dirb/']] +
-    [(0, 'DYNAMODB_JSON', None)])
+    [(0, 'DYNAMODB_JSON', None)] +
+    [pytest.param(10, 'DYNAMODB_JSON', ('x' * 188 + '/') * 5 + 'xxx', id='10-DYNAMODB_JSON-longest_prefix')])
 def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, num_items, s3, request):
     if export_format_value == 'ION' and not is_aws(dynamodb):
         request.node.add_marker(pytest.mark.xfail(reason="ION export format not yet implemented on Scylla"))
@@ -959,11 +963,15 @@ def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_va
     ('ValidationException', 'ExportType', '[eE]xportType', ''),
     ('ValidationException', 'ClientToken', '[cC]lientToken', ''),
     ('ValidationException', 'ClientToken', '[cC]lientToken', 'a$b'),
+    ('ValidationException', 'ClientToken', '[cC]lientToken', 'a' * 1025),
     ('ValidationException', 'ExportFormat', '[eE]xportFormat', ''),
     ('ValidationException', 'ExportFormat', '[eE]xportFormat', 'QWERTY'),
     ('InvalidExportTimeException', 'ExportTime', 'Export ?Time', -1),
     ('ValidationException', 'S3Prefix', '[sS]3Prefix', ''),
+    ('ValidationException', 'S3Prefix', '[sS]3 ?Prefix', 'ab'),
+    ('ValidationException', 'S3Prefix', '[sS]3 ?Prefix', 'p' * 949),
     ('ValidationException', 'S3Bucket', '[sS]3Bucket', ''),
+    ('ValidationException', 'S3Bucket', '[sS]3Bucket', 'ab'),
     ('ValidationException', 'S3Bucket', '[sS]3Bucket', None),
     ('ValidationException', 'TableArn', '[tT]ableArn', None),
     ('ValidationException', 'TableArn', '[tT]ableArn', ''),
@@ -1029,17 +1037,13 @@ def test_export_bad_s3_bucket(dynamodb, test_table_s, bucket):
 
 
 # The same for S3Prefix. DynamoDB takes any S3 key as a prefix, while Alternator accepts only
-# letters, digits and "/-_.", and no "." or ".." segment between slashes (see
+# letters, digits and "/!-_.*'()", and no "." or ".." segment between slashes (see
 # docs/alternator/compatibility.md), so this test is for Alternator only.
 @pytest.mark.parametrize('prefix', [
     'alternator export test',
     'alternator-export-test\r\nGET /other HTTP/1.1\r\nHost: h\r\n\r\n',
     'alternator-export-test\n',
     'alternator?export=test',
-    'alternator!export',
-    'alternator*export',
-    "alternator'export",
-    'alternator(export)',
     '.',
     '..',
     '../alternator-export-test',

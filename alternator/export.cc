@@ -1814,18 +1814,19 @@ static bool is_valid_s3_bucket_name(std::string_view bucket) {
     });
 }
 
-// DynamoDB accepts any S3 key as a prefix, but for now we accept only letters, digits and "/-_."
-// (see docs/alternator/compatibility.md), which the URI encoding of the path leaves as they are.
-// Since s3::client encodes the path, other characters could be accepted too, but no test sends
-// them to S3 yet (SCYLLADB-6440).
+// DynamoDB accepts any S3 key as a prefix, but we accept only letters, digits and "/!-_.*'()",
+// which S3 documents as safe in a key name (see docs/alternator/compatibility.md). s3::client
+// URI-encodes the path, thus other characters can work too, but S3 documents that they need
+// special handling, and no test sends them to S3 yet (SCYLLADB-6440).
 // A "." or ".." segment between slashes is refused: the encoding keeps it, and an HTTP server or
 // proxy can resolve such a segment, so the export would write elsewhere than DescribeExport
 // reports, e.g. to another bucket with "../".
-// The length limit is the one of DynamoDB, which is also the longest key S3 accepts (the export
-// appends to the prefix, so a prefix close to the limit cannot work, but that is for S3 to say).
+// DynamoDB refuses a prefix of fewer than 3 or more than 948 characters. The upper limit leaves
+// space in the 1024 bytes of an S3 key for the keys that the export appends. An empty
+// `prefix` means that the request has no S3Prefix.
 static bool is_valid_s3_prefix(std::string_view prefix) {
-    static constexpr std::string_view other_safe_characters = "/-_.";
-    if (prefix.size() > 1024 || !std::ranges::all_of(prefix, [] (char c) {
+    static constexpr std::string_view other_safe_characters = "/!-_.*'()";
+    if ((!prefix.empty() && prefix.size() < 3) || prefix.size() > 948 || !std::ranges::all_of(prefix, [] (char c) {
             return is_ascii_alnum(c) || other_safe_characters.find(c) != std::string_view::npos;
         })) {
         return false;
@@ -1921,11 +1922,9 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
                 fmt::format("ExportType attribute: must be FULL_EXPORT, not `{}`", export_type));
     }
 
-    // The pattern of ClientToken in DynamoDB is ^[^\$]+$. The token is also the partition key of
-    // the client token table, so a long token makes the insert of the row throw. We keep the
-    // length well below the limit of a key.
+    // DynamoDB refuses a ClientToken with a '$' or with more than 1024 characters.
     constexpr size_t max_client_token_length = 1024;
-    if (user_client_token.find('$') != std::string::npos || user_client_token.size() > max_client_token_length) {
+    if (!is_valid_client_token(user_client_token) || user_client_token.size() > max_client_token_length) {
         co_return api_error::validation(fmt::format(
                 "ClientToken attribute: must not contain '$', and must have at most {} characters",
                 max_client_token_length));
@@ -1951,7 +1950,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     if (!is_valid_s3_prefix(s3_prefix)) {
         co_return api_error::validation(fmt::format("S3Prefix attribute: `{}` is not a valid key prefix - "
-                "it must have at most 1024 characters, each of them a letter, a digit or one of \"/-_.\", "
+                "it must have 3 to 948 characters, each of them a letter, a digit or one of \"/!-_.*'()\", "
                 "and no \".\" or \"..\" segment between slashes", s3_prefix));
     }
 
@@ -2881,8 +2880,13 @@ static future<> run_export(
             co_return json_key;
         };
 
-        // Create the data file object key
-        auto data_object_key = fmt::format("{}data/{}.json.gz", s3_key_prefix, row.export_id_token);
+        // The data file is named after the random part of the export id (8 hex digits). DynamoDB
+        // refuses a prefix of more than 948 characters, so that its longest key, 76 characters
+        // after the prefix, fits in the 1024 bytes of an S3 key. A temporary piece of the data file
+        // appends "_<number>" to its key, and with the short name, the key of a piece also has
+        // at most 64 characters after the prefix.
+        auto data_file_name = std::string_view(row.export_id_token).substr(row.export_id_token.find('-') + 1);
+        auto data_object_key = fmt::format("{}data/{}.json.gz", s3_key_prefix, data_file_name);
 
         try {
             // Create empty _started object

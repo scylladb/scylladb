@@ -457,7 +457,8 @@ Exports differ from DynamoDB as follows:
   `arn:aws:s3:::<bucket>/<key prefix>AWSDynamoDB/<export id>/*` with a
   bucket policy (or restart all nodes, which stops their exports). The key
   prefix is S3Prefix, followed by `/` unless S3Prefix is empty or ends with
-  `/`; without S3Prefix, the resource is
+  `/`, with each `*` written as `${*}`, because a policy reads `*` as a
+  wildcard; without S3Prefix, the resource is
   `arn:aws:s3:::<bucket>/AWSDynamoDB/<export id>/*`. After the cleanup, list
   the objects and the multipart uploads again, and delete what appeared.
 * Only a full export in the DYNAMODB_JSON format is supported.
@@ -478,8 +479,8 @@ Exports differ from DynamoDB as follows:
   credentials also need `kms:GenerateDataKey` and `kms:Decrypt` on that key.
   Without exactly one S3 endpoint, an export request gets a
   ValidationException.
-* S3Prefix may contain only letters, digits and `/-_.`, and no `.` or `..`
-  segment between slashes.
+* S3Prefix may contain only letters, digits and `/!-_.*'()`, and no `.` or
+  `..` segment between slashes.
 * The number of running exports is limited per shard (configuration
   parameter `alternator_max_concurrent_exports_per_shard`, 10 by default),
   not per account. Above the limit, a request gets LimitExceededException.

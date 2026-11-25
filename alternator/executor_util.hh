@@ -151,6 +151,13 @@ void validate_cdc_log_name_length(std::string_view table_name);
 /// a prefix that all keyspaces created by Alternator's CreateTable use.
 bool is_alternator_keyspace(std::string_view ks_name);
 
+/// Checks the pattern that DynamoDB documents for the ClientToken of
+/// ImportTable and ExportTableToPointInTime, ^[^$]+$: no character is '$'.
+/// The caller refuses an empty token.
+inline bool is_valid_client_token(std::string_view client_token) {
+    return !client_token.contains('$');
+}
+
 /// Wraps db::get_tags_of_table() and throws api_error::validation if the
 /// table is missing the tags extension.
 const std::map<sstring, sstring>& get_tags_of_table_or_throw(schema_ptr schema);

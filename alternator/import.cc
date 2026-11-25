@@ -33,13 +33,6 @@ future<std::optional<executor::request_return_type>> get_in_progress_import_desc
     co_return std::nullopt;
 }
 
-// ClientToken must match the pattern DynamoDB documents for it, ^[^$]+$:
-// at least one character, none of which is '$'. The caller already
-// refuses an empty one.
-static bool is_valid_client_token(std::string_view client_token) {
-    return !client_token.contains('$');
-}
-
 // Only check that S3Bucket is a non-empty string, and leave validating the
 // bucket name and the prefix to S3. ExportTableToPointInTime validates them,
 // because it writes to S3 (see is_valid_s3_bucket_name() in export.cc).
