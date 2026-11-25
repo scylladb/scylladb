@@ -194,3 +194,39 @@ BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string_composite_partition_key) {
     BOOST_REQUIRE_THROW(partition_key::from_nodetool_style_string(s2, "value1:value2:extra"), std::invalid_argument);
     BOOST_REQUIRE_THROW(partition_key::from_nodetool_style_string(s2, "value1"), std::invalid_argument);
 }
+
+BOOST_AUTO_TEST_CASE(test_partition_key_serialization_format) {
+    auto s1 = schema_builder(1, "ks", "cf1")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("v", bytes_type)
+            .build();
+    auto s3 = schema_builder(1, "ks", "cf3")
+            .with_column("pk1", bytes_type, column_kind::partition_key)
+            .with_column("pk2", bytes_type, column_kind::partition_key)
+            .with_column("pk3", bytes_type, column_kind::partition_key)
+            .with_column("v", bytes_type)
+            .build();
+    std::vector<partition_key> keys = {
+        partition_key::from_single_value(*s1, bytes()),
+        partition_key::from_single_value(*s1, bytes("a")),
+        partition_key::from_single_value(*s1, bytes(bytes::initialized_later(), 1000)),
+        partition_key::from_exploded(*s3, {bytes("x"), bytes(), bytes("yz")}),
+    };
+    for (const auto& key : keys) {
+        // The layout of a type with a single std::vector<bytes> member: its serialized
+        // size including the 4-byte size field, then the vector.
+        bytes_ostream components;
+        ser::serialize(components, key.explode());
+        bytes_ostream expected;
+        ser::serialize(expected, uint32_t(sizeof(uint32_t) + components.size()));
+        expected.append(components);
+
+        bytes_ostream actual;
+        ser::serialize(actual, key);
+        BOOST_REQUIRE(actual.linearize() == expected.linearize());
+
+        auto in = ser::as_input_stream(actual);
+        auto read_back = ser::deserialize(in, std::type_identity<partition_key>());
+        BOOST_REQUIRE_EQUAL(to_bytes(read_back.representation()), to_bytes(key.representation()));
+    }
+}
