@@ -19,10 +19,28 @@
 #include <seastar/http/common.hh>
 #include <seastar/net/tls.hh>
 #include <optional>
+#include <string_view>
 #include <expected>
 #include <variant>
 
 namespace vector_search {
+
+/// Outcome of a request to the Vector Store, exported as the `status` label of the
+/// requests metric. Each value says who has to act.
+enum class request_status {
+    ok,          ///< 2xx: nobody.
+    rejected,    ///< 400, 404 or 422, the query or the index is wrong: the user.
+    not_ready,   ///< 503, the index is still building: nobody.
+    unavailable, ///< No URI configured, no address resolved, or no endpoint answered: ops.
+    error,       ///< Any other status (403, 5xx), a reply that cannot be parsed, or any other exception: Vector Store, or a bug.
+    aborted,     ///< The request was aborted.
+    num_statuses
+};
+
+std::string_view to_name(request_status status);
+
+/// The status of an HTTP reply of the Vector Store.
+request_status to_request_status(seastar::http::reply::status_type status);
 
 class client {
 public:
