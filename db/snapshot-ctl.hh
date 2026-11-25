@@ -216,7 +216,7 @@ private:
             const snapshot_options& opts, reject_committed_snapshot reject_committed);
 
     future<> delete_expired_snapshots();
-    future<> backup_sstables(table_id, std::string, std::string, std::string, std::string, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
+    future<> backup_sstables(table_id, std::string, snapshot_dc_location, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
 };
 
 }

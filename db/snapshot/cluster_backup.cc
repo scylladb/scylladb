@@ -391,8 +391,8 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
 }
 
 future<>
-db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) {
-    snap_log.info("Got backup request for snapshot {}, table {}, sstables {} ({}:{}) -> {}:{}:{}", tag, table_id, sstable_ids, first_token, last_token, endpoint, bucket, prefix);
+db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::string tag, snapshot_dc_location location, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) {
+    snap_log.info("Got backup request for snapshot {}, table {}, sstables {} ({}:{}) -> {}", tag, table_id, sstable_ids, first_token, last_token, location);
 
     auto& db = snap.db().local();
     // This is not super efficient. We need to match files on disk, but we do want to use 
@@ -492,13 +492,13 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
         std::exception_ptr p;
 
         auto chunk = chunks[this_shard_id()];
-        auto client = snap.sstm().container().local().get_endpoint_client(endpoint);
+        auto client = snap.sstm().container().local().get_endpoint_client(location.endpoint);
         auto& t = db.find_column_family(table_id);
         auto& manager = db.get_sstables_manager(*t.schema());
 
         co_await coroutine::parallel_for_each(chunk | std::views::values, [&](const gen_info& info) -> future<>{
             auto& id = info.sstable.sstable_id;
-            auto table_prefix = fmt::format("{}/{}", prefix, id);
+            auto table_prefix = fmt::format("{}/{}", location.prefix, id);
 
             auto gen_info = sstables::parse_path(std::filesystem::path(info.sstable.toc_name), ksname, cfname);
             if (!gen_info) {
@@ -506,7 +506,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
             }
 
             auto gen = (*gen_info).generation;
-            auto ref_name = sstables::object_name(bucket, table_prefix, sstables::object_storage_snapshot_ref_name(user_tag, gen));
+            auto ref_name = sstables::object_name(location.bucket, table_prefix, sstables::object_storage_snapshot_ref_name(user_tag, gen));
             co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}); // any exception here can just propagate
 
             bool any_failed = false;
@@ -517,7 +517,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
                 co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
                 auto component_name = dir / name;
-                auto destination = sstables::object_name(bucket, table_prefix, name);
+                auto destination = sstables::object_name(location.bucket, table_prefix, name);
 
                 snap_log.trace("Upload {} to {}", component_name.native(), destination);
 
