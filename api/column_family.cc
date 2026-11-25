@@ -79,21 +79,23 @@ public:
     }
 };
 
-static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db, const sstring& name,
+namespace {
+
+future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db, const sstring& name,
         int64_t replica::column_family_stats::*f) {
     return map_reduce_cf(db, name, int64_t(0), [f](const replica::column_family& cf) {
         return cf.get_stats().*f;
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db,
+future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db,
         int64_t replica::column_family_stats::*f) {
     return map_reduce_cf(db, int64_t(0), [f](const replica::column_family& cf) {
         return cf.get_stats().*f;
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type> for_tables_on_all_shards(sharded<replica::database>& db, std::vector<table_info> tables, std::function<future<>(replica::table&)> set) {
+future<json::json_return_type> for_tables_on_all_shards(sharded<replica::database>& db, std::vector<table_info> tables, std::function<future<>(replica::table&)> set) {
     return do_with(std::move(tables), [&db, set] (const std::vector<table_info>& tables) {
         return db.invoke_on_all([&tables, set] (replica::database& db) {
             return parallel_for_each(tables, [&db, set] (const table_info& table) {
@@ -106,7 +108,7 @@ static future<json::json_return_type> for_tables_on_all_shards(sharded<replica::
     });
 }
 
-static future<json::json_return_type> set_tables_autocompaction(sharded<replica::database>& db, std::vector<table_info> tables, bool enabled) {
+future<json::json_return_type> set_tables_autocompaction(sharded<replica::database>& db, std::vector<table_info> tables, bool enabled) {
     apilog.info("set_tables_autocompaction: enabled={} tables={}", enabled, tables);
 
     return db.invoke_on(0, [tables = std::move(tables), enabled] (replica::database& db) {
@@ -122,7 +124,7 @@ static future<json::json_return_type> set_tables_autocompaction(sharded<replica:
     });
 }
 
-static future<json::json_return_type> set_tables_tombstone_gc(sharded<replica::database>& db, std::vector<table_info> tables, bool enabled) {
+future<json::json_return_type> set_tables_tombstone_gc(sharded<replica::database>& db, std::vector<table_info> tables, bool enabled) {
     apilog.info("set_tables_tombstone_gc: enabled={} tables={}", enabled, tables);
     return for_tables_on_all_shards(db, std::move(tables), [enabled] (replica::table& t) {
         t.set_tombstone_gc_enabled(enabled);
@@ -130,14 +132,14 @@ static future<json::json_return_type> set_tables_tombstone_gc(sharded<replica::d
     });
 }
 
-static future<json::json_return_type>  get_cf_stats_count(sharded<replica::database>& db, const sstring& name,
+future<json::json_return_type>  get_cf_stats_count(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     return map_reduce_cf(db, name, int64_t(0), [f](const replica::column_family& cf) {
         return (cf.get_stats().*f).hist.count;
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type> get_cf_stats_sum(sharded<replica::database>& db, const sstring& name,
+future<json::json_return_type> get_cf_stats_sum(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     auto uuid = parse_table_info(name, db.local()).id;
     return db.map_reduce0([uuid, f](replica::database& db) {
@@ -153,14 +155,14 @@ static future<json::json_return_type> get_cf_stats_sum(sharded<replica::database
 }
 
 
-static future<json::json_return_type>  get_cf_stats_count(sharded<replica::database>& db,
+future<json::json_return_type>  get_cf_stats_count(sharded<replica::database>& db,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     return map_reduce_cf(db, int64_t(0), [f](const replica::column_family& cf) {
         return (cf.get_stats().*f).hist.count;
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type>  get_cf_histogram(sharded<replica::database>& db, const sstring& name,
+future<json::json_return_type>  get_cf_histogram(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_and_histogram replica::column_family_stats::*f) {
     auto uuid = parse_table_info(name, db.local()).id;
     return db.map_reduce0([f, uuid](const replica::database& p) {
@@ -172,7 +174,7 @@ static future<json::json_return_type>  get_cf_histogram(sharded<replica::databas
     });
 }
 
-static future<json::json_return_type>  get_cf_histogram(sharded<replica::database>& db, const sstring& name,
+future<json::json_return_type>  get_cf_histogram(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     auto uuid = parse_table_info(name, db.local()).id;
     return db.map_reduce0([f, uuid](const replica::database& p) {
@@ -184,7 +186,7 @@ static future<json::json_return_type>  get_cf_histogram(sharded<replica::databas
     });
 }
 
-static future<json::json_return_type> get_cf_histogram(sharded<replica::database>& db, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
+future<json::json_return_type> get_cf_histogram(sharded<replica::database>& db, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     std::function<utils::ihistogram(const replica::database&)> fun = [f] (const replica::database& db)  {
         utils::ihistogram res;
         db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) mutable {
@@ -199,7 +201,7 @@ static future<json::json_return_type> get_cf_histogram(sharded<replica::database
     });
 }
 
-static future<json::json_return_type>  get_cf_rate_and_histogram(sharded<replica::database>& db, const sstring& name,
+future<json::json_return_type>  get_cf_rate_and_histogram(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     auto uuid = parse_table_info(name, db.local()).id;
     return db.map_reduce0([f, uuid](const replica::database& p) {
@@ -211,7 +213,7 @@ static future<json::json_return_type>  get_cf_rate_and_histogram(sharded<replica
     });
 }
 
-static future<json::json_return_type> get_cf_rate_and_histogram(sharded<replica::database>& db, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
+future<json::json_return_type> get_cf_rate_and_histogram(sharded<replica::database>& db, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     std::function<utils::rate_moving_average_and_histogram(const replica::database&)> fun = [f] (const replica::database& db)  {
         utils::rate_moving_average_and_histogram res;
         db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
@@ -226,13 +228,13 @@ static future<json::json_return_type> get_cf_rate_and_histogram(sharded<replica:
     });
 }
 
-static future<json::json_return_type> get_cf_unleveled_sstables(sharded<replica::database>& db, const sstring& name) {
+future<json::json_return_type> get_cf_unleveled_sstables(sharded<replica::database>& db, const sstring& name) {
     return map_reduce_cf(db, name, int64_t(0), [](const replica::column_family& cf) {
         return cf.get_unleveled_sstables();
     }, std::plus<int64_t>());
 }
 
-static int64_t min_partition_size(replica::column_family& cf) {
+int64_t min_partition_size(replica::column_family& cf) {
     int64_t res = INT64_MAX;
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::min(res, i->get_stats_metadata().estimated_partition_size.min());
@@ -240,7 +242,7 @@ static int64_t min_partition_size(replica::column_family& cf) {
     return (res == INT64_MAX) ? 0 : res;
 }
 
-static int64_t max_partition_size(replica::column_family& cf) {
+int64_t max_partition_size(replica::column_family& cf) {
     int64_t res = 0;
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::max(i->get_stats_metadata().estimated_partition_size.max(), res);
@@ -248,7 +250,7 @@ static int64_t max_partition_size(replica::column_family& cf) {
     return res;
 }
 
-static integral_ratio_holder mean_partition_size(replica::column_family& cf) {
+integral_ratio_holder mean_partition_size(replica::column_family& cf) {
     integral_ratio_holder res;
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         auto c = i->get_stats_metadata().estimated_partition_size.count();
@@ -261,7 +263,7 @@ static integral_ratio_holder mean_partition_size(replica::column_family& cf) {
 // The space the storage of a table takes: its sstables, summed by walking them rather than read off
 // the statistics the table keeps as sstables come and go, so that a drift in those cannot reach
 // this, plus the logstor segments the table owns, which are counted as its groups take them.
-static uint64_t disk_space_used(const replica::column_family& cf, bool total) {
+uint64_t disk_space_used(const replica::column_family& cf, bool total) {
     uint64_t bytes_on_disk = 0;
     auto sstables = total ? cf.get_sstables_including_compacted_undeleted() : cf.get_sstables();
     for (const auto& sst : *sstables) {
@@ -270,7 +272,7 @@ static uint64_t disk_space_used(const replica::column_family& cf, bool total) {
     return bytes_on_disk + cf.logstor_disk_space_used();
 }
 
-static future<json::json_return_type>  sum_disk_space_used(sharded<replica::database>& db, const sstring name, bool total) {
+future<json::json_return_type>  sum_disk_space_used(sharded<replica::database>& db, const sstring name, bool total) {
     return map_reduce_cf_raw(db, name, uint64_t(0), [total](replica::column_family& cf) {
         return disk_space_used(cf, total);
     }, std::plus<>()).then([] (uint64_t val) {
@@ -279,7 +281,7 @@ static future<json::json_return_type>  sum_disk_space_used(sharded<replica::data
 }
 
 
-static future<json::json_return_type> sum_disk_space_used(sharded<replica::database>& db, bool total) {
+future<json::json_return_type> sum_disk_space_used(sharded<replica::database>& db, bool total) {
     return map_reduce_cf_raw(db, uint64_t(0), [total](replica::column_family& cf) {
         return disk_space_used(cf, total);
     }, std::plus<>()).then([] (uint64_t val) {
@@ -289,7 +291,7 @@ static future<json::json_return_type> sum_disk_space_used(sharded<replica::datab
 
 // The load of the node, which is asked of the database rather than summed over the tables because
 // the space logstor takes is not all owned by tables.
-static future<json::json_return_type> node_disk_space_used(sharded<replica::database>& db) {
+future<json::json_return_type> node_disk_space_used(sharded<replica::database>& db) {
     return db.map_reduce0([] (const replica::database& db) {
         return db.disk_space_used();
     }, uint64_t(0), std::plus<>()).then([] (uint64_t val) {
@@ -297,7 +299,7 @@ static future<json::json_return_type> node_disk_space_used(sharded<replica::data
     });
 }
 
-static future<json::json_return_type> map_reduce_cf_time_histogram(sharded<replica::database>& db, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f) {
+future<json::json_return_type> map_reduce_cf_time_histogram(sharded<replica::database>& db, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f) {
     return map_reduce_cf_raw(db, name, utils::time_estimated_histogram(), f, utils::time_estimated_histogram_merge).then([](const utils::time_estimated_histogram& res) {
         return make_ready_future<json::json_return_type>(time_to_json_histogram(res));
     });
@@ -320,7 +322,7 @@ public:
     }
 };
 
-static double get_compression_ratio(replica::column_family& cf) {
+double get_compression_ratio(replica::column_family& cf) {
     sum_ratio<double> result;
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         auto compression_ratio = i->get_compression_ratio();
@@ -331,7 +333,7 @@ static double get_compression_ratio(replica::column_family& cf) {
     return std::move(result).get();
 }
 
-static std::vector<uint64_t> concat_sstable_count_per_level(std::vector<uint64_t> a, std::vector<uint64_t>&& b) {
+std::vector<uint64_t> concat_sstable_count_per_level(std::vector<uint64_t> a, std::vector<uint64_t>&& b) {
     a.resize(std::max(a.size(), b.size()), 0UL);
     for (auto i = 0U; i < b.size(); i++) {
         a[i] += b[i];
@@ -357,7 +359,6 @@ uint64_t accumulate_on_active_memtables(replica::table& t, noncopyable_function<
     return ret;
 }
 
-static
 future<json::json_return_type>
 rest_toppartitions_generic(sharded<replica::database>& db, std::unique_ptr<http::request> req) {
         bool filters_provided = false;
@@ -407,7 +408,6 @@ rest_toppartitions_generic(sharded<replica::database>& db, std::unique_ptr<http:
         });
 }
 
-static
 future<json::json_return_type>
 sstable_info(sharded<replica::database>& db, std::unique_ptr<http::request> req) {
         auto ks = get_query_param<sstring>(*req, "keyspace");
@@ -537,7 +537,6 @@ sstable_info(sharded<replica::database>& db, std::unique_ptr<http::request> req)
         });
 }
 
-static
 future<json::json_return_type>
 drop_quarantined_sstables(http_context& ctx, sharded<replica::database>& db, std::unique_ptr<http::request> req) {
     auto accept_risk = get_query_param<bool>(*req, "accept_data_resurrection_risk");
@@ -576,6 +575,8 @@ drop_quarantined_sstables(http_context& ctx, sharded<replica::database>& db, std
 
     co_return json_void();
 }
+
+} // anonymous namespace
 
 void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db) {
     cf::get_column_family_name.set(r, [&db] (const_req req){
