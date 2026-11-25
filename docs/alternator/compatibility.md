@@ -200,7 +200,9 @@ the MODIFY permission, not the SELECT permission.
 
 ExportTableToPointInTime needs both SELECT on the table and MODIFY on ALL
 OBJECT STORAGE. DescribeExport and ListExports, with or without a TableArn,
-need only SELECT on ALL OBJECT STORAGE, and no permission on the table.
+need only SELECT on ALL OBJECT STORAGE, and no permission on the table. Thus
+the deletion of a table, or a new table with the same name, does not change
+who can see the exports of the table.
 
 Permissions are separate for a base table and each of its GSI/LSI and CDC
 log, so it's possible to give a role permissions to read one index and
@@ -416,6 +418,10 @@ Alternator Streams differ in some respects from DynamoDB Streams:
 
 ## Export to S3
 
+The export to S3 is experimental. Its behavior can change in a later
+version.
+<https://scylladb.atlassian.net/browse/SCYLLADB-2175>
+
 Alternator supports ExportTableToPointInTime, DescribeExport and ListExports,
 but one shard of one node runs the whole export, so a large table exports
 slowly, and an export which that node stops running is never resumed.
@@ -427,7 +433,15 @@ Exports differ from DynamoDB as follows:
   now: ExportTime has to be in the last 5 minutes. The export reads the
   live table page by page, so an item written during the export may or may
   not be in it. The reported ExportTime is the requested time, not a time
-  at which the exported data is consistent.
+  at which the exported data is consistent. Thus an export is not a backup
+  of the table. For a backup, use ScyllaDB's backup solutions, such as
+  snapshots or ScyllaDB Manager.
+  <https://scylladb.atlassian.net/browse/SCYLLADB-2835>
+* In DynamoDB, an export uses no read capacity and has no effect on the
+  performance of the table. In Alternator, an export reads the table as a
+  Scan does, with a lower priority than requests, so it adds load to the
+  nodes of the table. More nodes do not make an export faster.
+  <https://scylladb.atlassian.net/browse/SCYLLADB-2838>
 * If the node of an export stops, the export ends as FAILED, with the
   failure code NodeShutdown after a clean shutdown or restart, or
   NodeFailure after a crash or a restart of gossip (`nodetool disablegossip`
@@ -437,6 +451,12 @@ Exports differ from DynamoDB as follows:
   when it starts again. If the node stays down, another node marks its
   exports FAILED about an hour later. Until then they are reported as
   IN_PROGRESS.
+  <https://scylladb.atlassian.net/browse/SCYLLADB-2839>
+* If Alternator records an export request but cannot start the export (for
+  example, because the cluster is overloaded), ExportTableToPointInTime
+  returns the ExportDescription with the status FAILED, not an error. A
+  retry with the same ClientToken returns the same failed export, so a new
+  export needs a new ClientToken.
 * A failed export does not delete what it uploaded to the directory of the
   export (`AWSDynamoDB/<export id>/` under the prefix): the `_started`
   object, the data file, temporary pieces of the data file (named after it,
@@ -478,13 +498,25 @@ Exports differ from DynamoDB as follows:
   encrypts new objects with a customer managed KMS key by default, the
   credentials also need `kms:GenerateDataKey` and `kms:Decrypt` on that key.
   Without exactly one S3 endpoint, an export request gets a
-  ValidationException.
+  ValidationException. See
+  {ref}`Configuring Object Storage <object-storage-configuration>` for how
+  to configure the endpoint.
 * S3Prefix may contain only letters, digits and `/!-_.*'()`, and no `.` or
   `..` segment between slashes.
 * The number of running exports is limited per shard (configuration
   parameter `alternator_max_concurrent_exports_per_shard`, 10 by default),
   not per account. Above the limit, a request gets LimitExceededException.
-* BilledSizeBytes is always 0, because ScyllaDB does not bill for exports.
+* BilledSizeBytes of a completed export, in DescribeExport and in
+  manifest-summary.json, is 0, because ScyllaDB does not bill for exports.
+  S3 gives the size of an export.
+* Alternator does not know how the bucket encrypts the objects. Thus
+  DescribeExport has no S3SseAlgorithm, and `s3SseAlgorithm` of
+  manifest-summary.json is null.
+* The metrics `scylla_alternator_s3_exports_*` and
+  `scylla_alternator_s3_exported_items` count the exports of each node and
+  the items that they scanned, also of exports that fail later. If a node
+  runs exports and its count of exported items does not increase for a
+  long time, an export can be stuck, for example while it waits for S3.
 
 ## Unimplemented API features
 
