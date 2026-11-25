@@ -90,6 +90,24 @@ class query_processor;
 
 namespace api {
 
+// The HTTP server that serves the REST API, plus the few things every endpoint
+// needs to go with it.
+//
+// This is deliberately not a place to park service references. A subsystem that
+// wants endpoints of its own brings itself in instead: declare a
+//
+//     future<> set_server_foo(http_context&, sharded<foo>&);
+//     future<> unset_server_foo(http_context&);
+//
+// pair below, let the setter register the routes with that sharded<foo>&
+// captured into the handlers and the unsetter drop them again, and in main()
+// call the setter once foo is up, paired with a defer_verbose_shutdown() that
+// calls the unsetter -- so the routes are gone before foo is.
+//
+// Done that way, nothing accumulates here that the whole of api/ could then
+// reach whether it has any business with it or not, and what a given endpoint
+// may touch is spelled out in the signature that registered it rather than
+// implied by a context it shares with everyone else.
 struct http_context {
     sstring api_dir;
     sstring api_doc;
