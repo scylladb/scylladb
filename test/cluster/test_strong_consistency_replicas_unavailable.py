@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import logging
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -20,8 +21,10 @@ from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, expect_retry_b
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.tablets import get_tablet_replicas
+from test.pylib.tablets import get_tablet_info, get_tablet_replicas
 from test.pylib.util import gather_safely, wait_for
+
+logger = logging.getLogger(__name__)
 
 KEYSPACE_OPTS = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
                  " AND tablets = {'initial': 1} AND consistency = 'global'")
@@ -69,6 +72,15 @@ async def expect_error(cql: Session, query: str | SimpleStatement, host: Host, e
     return outcome, elapsed
 
 
+async def expect_all_replicas_down(cql: Session, query: SimpleStatement, host: Host, required_replicas: int) -> float:
+    """Run `query` pinned to `host` while every replica of its tablet is down, and expect an Unavailable at the
+    query's consistency level, with `required_replicas` and no live replica. Return how long the request took."""
+    e, elapsed = await expect_error(cql, query, host, Unavailable)
+    assert "All replicas" in str(e)
+    assert (e.consistency, e.required_replicas, e.alive_replicas) == (query.consistency_level, required_replicas, 0)
+    return elapsed
+
+
 @asynccontextmanager
 async def sc_table(manager: ScyllaClusterManager, config: dict = NO_QUORUM_CONFIG) \
         -> AsyncIterator[tuple[Session, dict[ServerInfo, Host], str, tuple[str, ServerInfo, list[ServerInfo], ServerInfo]]]:
@@ -105,6 +117,11 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
     outcome cannot change, so the client should learn it at once. That holds for a write,
     a QUORUM (linearizable) read and a CL=ONE (relaxed) read alike.
 
+    The error carries the request's consistency level and how many replicas the request
+    needs: a majority of the three for the write and the QUORUM read, which need a raft
+    leader, and one for the CL=ONE read. Reproduces SCYLLADB-5513: the error always
+    reported CL=ONE with one replica required.
+
     The request timeouts are raised to 10s so that "fast" and "timed out" cannot be
     confused, and the coordinator's error counters are checked to count the refusal only
     as unavailable: it happens before the coordinator starts waiting for anything. Once the replicas
@@ -115,19 +132,24 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
         coordinator = host_of[non_replica]
         # Observe the server's Unavailable directly, without a retry exhausting the host-pinned query plan.
         no_retry = FallthroughRetryPolicy()
-        write = SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 2)", retry_policy=no_retry)
-        reads = [SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=cl, retry_policy=no_retry)
-                 for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.ONE)]
+        write = SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 2)", consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+                                retry_policy=no_retry)
+        quorum_read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.QUORUM,
+                                      retry_policy=no_retry)
+        one_read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.ONE,
+                                   retry_policy=no_retry)
 
         # Going through the non-replica also fills its leader cache, so the refusal below
         # has to see past a cached leader that is dead by then.
         await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)", host=coordinator)
 
         async with down(manager, list(host_of), [leader] + followers):
-            for query in (write, *reads):
-                e, elapsed = await expect_error(cql, query, coordinator, Unavailable)
-                assert e.alive_replicas == 0 and "All replicas" in str(e), str(e)
-                assert elapsed < 5.0, f"{query} took {elapsed:.1f}s to be refused"
+            elapsed = await expect_all_replicas_down(cql, write, coordinator, required_replicas=2)
+            assert elapsed < 5.0
+            elapsed = await expect_all_replicas_down(cql, quorum_read, coordinator, required_replicas=2)
+            assert elapsed < 5.0
+            elapsed = await expect_all_replicas_down(cql, one_read, coordinator, required_replicas=1)
+            assert elapsed < 5.0
 
             metrics = await manager.metrics.query(non_replica.ip_addr)
             assert metrics.get(WRITE_ERRORS, {'reason': 'unavailable'}) == 1  # 1 write
@@ -137,7 +159,58 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
             assert metrics.get(READ_ERRORS) == 2
 
         await wait_for_leader(manager, leader, group_id)
-        assert [r.c for r in await cql.run_async(reads[0], host=coordinator)] == [1]
+        assert [r.c for r in await cql.run_async(quorum_read, host=coordinator)] == [1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_all_replicas_down_mid_rf_change_counts_raft_voters(manager: ScyllaClusterManager):
+    """
+    Verify the number of required replicas in an Unavailable during an RF increase from 1 to 2.
+    The change is held where the new replica is already a raft voter, but the tablet still lists
+    only the old one as a replica. With both replicas down, a non-replica refuses a write and a
+    QUORUM read with 2 required, a majority of the 2 voters, and a CL=ONE read with 1.
+    Reproduces SCYLLADB-5513.
+    """
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='dc1')
+    cql, hosts = await manager.get_ready_cql(servers)
+    replica, pending, non_replica = servers
+    coordinator = hosts[2]
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']}"
+                                          " AND tablets = {'initial': 1} AND consistency = 'global'") as ks, \
+            new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+        no_retry = FallthroughRetryPolicy()
+        write = SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 1)", consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+                                retry_policy=no_retry)
+        quorum_read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.QUORUM,
+                                      retry_policy=no_retry)
+        one_read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.ONE,
+                                   retry_policy=no_retry)
+
+        logger.info("Increasing RF from 1 to 2, parked at the snapshot transfer to the new replica")
+        await manager.api.enable_injection(pending.ip_addr, "sc_wait_for_snapshot_transfer", one_shot=True)
+        alter = cql.run_async(
+            f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']}}",
+            host=coordinator)
+        try:
+            await manager.api.wait_for_injection_enter(pending.ip_addr, "sc_wait_for_snapshot_transfer")
+            logger.info("Holding the RF change at sc_become_voter")
+            await manager.api.enable_injection(replica.ip_addr, "sc_pause_after_config_sync", one_shot=True)
+            await manager.api.message_injection(pending.ip_addr, "sc_wait_for_snapshot_transfer")
+            await manager.api.wait_for_injection_enter(replica.ip_addr, "sc_pause_after_config_sync")
+            table_name = table.split('.')[-1]
+            tablet = await get_tablet_info(manager, non_replica, ks, table_name, 0)
+            assert tablet.stage == "write_both_read_new"
+
+            logger.info("Killing both replicas")
+            async with down(manager, servers, [replica, pending]):
+                await expect_all_replicas_down(cql, write, coordinator, required_replicas=2)
+                await expect_all_replicas_down(cql, quorum_read, coordinator, required_replicas=2)
+                await expect_all_replicas_down(cql, one_read, coordinator, required_replicas=1)
+        finally:
+            await manager.api.message_injection(pending.ip_addr, "sc_wait_for_snapshot_transfer")
+            await manager.api.message_injection(replica.ip_addr, "sc_pause_after_config_sync")
+            await alter
 
 
 @pytest.mark.asyncio
