@@ -1807,7 +1807,12 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
 
         auto& ctl = snap_ctl.local();
-        auto task_id = co_await ctl.start_backup(std::move(endpoint), std::move(bucket), std::move(prefix), std::move(keyspace), std::move(table), std::move(snapshot_name), move_files);
+        auto location = db::snapshot_dc_location{
+            .endpoint = std::move(endpoint),
+            .bucket = std::move(bucket),
+            .prefix = std::move(prefix),
+        };
+        auto task_id = co_await ctl.start_backup(std::move(location), std::move(keyspace), std::move(table), std::move(snapshot_name), move_files);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 

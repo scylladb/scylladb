@@ -319,7 +319,7 @@ future<sstring> backup(cql_test_env& env, sstring endpoint, sstring bucket) {
     );
     auto prefix = fmt::format("/backup-{}", utils::UUID_gen::get_time_UUID());
 
-    auto task_id = co_await ctl.local().start_backup(endpoint, bucket, prefix, "ks", "cf", "snapshot", false);
+    auto task_id = co_await ctl.local().start_backup(db::snapshot_dc_location{.endpoint = endpoint, .bucket = bucket, .prefix = prefix}, "ks", "cf", "snapshot", false);
     auto task = tasks::task_handler{env.get_task_manager().local(), task_id};
     auto status = co_await task.wait_for_task(30s);
     BOOST_REQUIRE(status.state == tasks::task_manager::task_state::done);

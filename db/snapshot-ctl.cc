@@ -320,15 +320,15 @@ future<int64_t> snapshot_ctl::true_snapshots_size() {
     }));
 }
 
-future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring bucket, sstring prefix, sstring keyspace, sstring table, sstring snapshot_name, bool move_files) {
+future<tasks::task_id> snapshot_ctl::start_backup(snapshot_dc_location location, sstring keyspace, sstring table, sstring snapshot_name, bool move_files) {
     if (this_shard_id() != 0) {
         co_return co_await container().invoke_on(0, [&](auto& local) {
-            return local.start_backup(endpoint, bucket, prefix, keyspace, table, snapshot_name, move_files);
+            return local.start_backup(location, keyspace, table, snapshot_name, move_files);
         });
     }
 
     co_await coroutine::switch_to(_config.backup_sched_group);
-    snap_log.info("Backup sstables from {}({}) to {}", keyspace, snapshot_name, endpoint);
+    snap_log.info("Backup sstables from {}({}) to {}", keyspace, snapshot_name, location);
     //
     // The keyspace data directories and their snapshots are arranged as follows:
     //
@@ -359,7 +359,7 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
 
     cancel_expiration(snapshot_name, {keyspace}, table);
 
-    auto state = make_lw_shared<snapshot::backup_state>(*this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, std::move(*dir), move_files);
+    auto state = make_lw_shared<snapshot::backup_state>(*this, _storage_manager.container(), std::move(location), keyspace, std::move(*dir), move_files);
     tasks::task_manager::task_builder task_builder{_task_manager_module, snapshot::backup_task_type};
     task_builder.set_scope("node")
                 .set_keyspace(std::move(keyspace))
