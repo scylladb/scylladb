@@ -98,6 +98,7 @@ future<> logstor::stop() {
     logstor_logger.info("Stopping logstor");
 
     co_await _async_gate.close();
+    co_await _flush_to_separator_action.join();
     co_await _write_buffer.stop();
     co_await _segment_manager.stop();
 
@@ -130,6 +131,10 @@ std::unique_ptr<primary_index> logstor::make_primary_index(bool with_cache_track
 
 future<> logstor::flush_to_separator() {
     auto gate_holder = _async_gate.hold();
+    co_await _flush_to_separator_action.trigger();
+}
+
+future<> logstor::do_flush_to_separator() {
     co_await _write_buffer.flush();
     co_await _segment_manager.await_pending_writes();
 }

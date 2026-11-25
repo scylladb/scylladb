@@ -15,6 +15,7 @@
 #include "segment_stats.hh"
 #include "segment_ref.hh"
 #include <seastar/core/format.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -80,6 +81,9 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     // The sequence of the latest use of the segment, which each valid chunk of the segment also
     // has, except between get_segment() and the write of the first chunk. reset() keeps it.
     segment_sequence seq{0};
+    // A kept segment is not freed when its last reference goes, because the index can still point
+    // into the segment.
+    bool kept{false};
 
     void reset(size_t segment_size) noexcept {
         free_space = segment_size;
@@ -319,7 +323,9 @@ private:
 struct separator_buffer {
     owned_write_buffer buf;
     utils::chunked_vector<future<>> pending_updates;
-    utils::chunked_vector<segment_ref> held_segments;
+    // A successful flush cancels the guards of the source segments. Otherwise the guards keep the
+    // segments.
+    utils::chunked_vector<segment_keep_guard> held_segments;
     std::optional<segment_sequence> min_seq_num;
 
     separator_buffer() = default;
@@ -335,8 +341,8 @@ struct separator_buffer {
     template <log_record_writer_concept Writer>
     void write(segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, Writer writer, separator_index_update after_written) {
         // The separator buffer holds a reference to the source segment until its updates are durable.
-        if (held_segments.empty() || held_segments.back().id() != seg_ref.id()) {
-            held_segments.push_back(std::move(seg_ref));
+        if (held_segments.empty() || held_segments.back().ref().id() != seg_ref.id()) {
+            held_segments.push_back(segment_keep_guard(std::move(seg_ref)));
         }
 
         if (segment_seq_num && (!min_seq_num || *segment_seq_num < *min_seq_num)) {
@@ -379,6 +385,15 @@ struct separator_buffer {
     future<> release();
 
     future<> abort(std::exception_ptr);
+
+    // Cancels the guards of the source segments, so that the segments can be freed.
+    // The caller must call release_held_segments() only after a flush wrote the records.
+    void release_held_segments() noexcept {
+        for (auto& guard : held_segments) {
+            guard.cancel();
+        }
+        held_segments.clear();
+    }
 };
 
 class compaction_reenabler {
@@ -440,12 +455,17 @@ class logstor_group {
     separator_buffer _flushing_buffer;
     uint64_t _separator_generation{1};
     shared_future<> _separator_flush{make_ready_future<>()};
+    shared_future<> _active_buffer_allocation{make_ready_future<>()};
+    seastar::gate _separator_flush_calls;
     // Whether the separator may write to this group. The group must be registered with the compaction
     // manager in order for it to be enabled.
     bool _separator_enabled{false};
 
     void switch_active_separator_buffer();
 
+    // Waits for the allocation of the active buffer, and starts the allocation if none is in
+    // progress.
+    future<> wait_for_active_separator_buffer();
     future<> allocate_active_separator_buffer();
 
 protected:
@@ -489,6 +509,8 @@ public:
     template <log_record_writer_concept Writer>
     future<> write_to_separator(Writer, segment_ref, std::optional<segment_sequence>, separator_index_update);
 
+    // Flushes each separator buffer of the group that holds a record of a segment with a segment_seq
+    // lower than `seq_num`, or each separator buffer that holds a record when `seq_num` is not given.
     future<> flush_separator(std::optional<segment_sequence> seq_num = std::nullopt);
 
     // Lets the separator write to this group. Called by the compaction manager when the group is
@@ -497,11 +519,10 @@ public:
         _separator_enabled = true;
     }
 
-    // Stops taking separator writes and gives up what the separator has already buffered for this
-    // group, handing its buffers back to the pool. What is dropped here was never written out, so the
-    // source segments the buffers hold are marked as failed rather than released: the index still
-    // points at those records there. A group is expected to have been flushed before it is closed, so
-    // anything this finds costs the segments it is holding, and it says so.
+    // Stops the separator writes to the group, waits for the flush_separator() calls, discards the
+    // records that the separator buffers still hold, and gives the buffers back to the pool.
+    // The index still points at the discarded records, so the discard keeps their source segments.
+    // The caller should flush the group first, and must call close_separator() at most one time.
     future<> close_separator();
 
     bool empty() const noexcept {

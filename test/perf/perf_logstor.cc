@@ -634,6 +634,11 @@ public:
         }
         co_await drop_private_index();
         if (_group) {
+            // The writes of this tool hold no gate of the group, so wait until the separator took
+            // them, and flush the separator buffers of the group as a table does when it stops.
+            // Then the removal of the group discards no records.
+            co_await _logstor->flush_to_separator();
+            co_await _group->flush_separator();
             // The index evicts what it has in the cache before it goes, since a cached partition
             // lives in the shared cache region and the index entry only points at it. This is what
             // a table does when it stops.
