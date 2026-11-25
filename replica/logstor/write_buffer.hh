@@ -156,7 +156,7 @@ struct buffered_write_result {
 //                         |       ...        |
 //   + records_size        +------------------+
 //                         |   zero padding   |  finish(), to block_alignment
-//   serialized_size()     +------------------+
+//   chunk size            +------------------+
 //                         |      unused      |
 //   buffer_size()         +------------------+
 //
@@ -204,10 +204,6 @@ public:
 
     bool has_data() const noexcept { return _record_count > 0; }
 
-    // Returns the number of bytes written to the buffer so far, which is the size of the whole
-    // chunk after finish().
-    size_t serialized_size() const noexcept { return _buffer_size - _stream.size(); }
-
     size_t buffer_size() const noexcept { return _buffer_size; }
 
     size_t chunk_header_size() const noexcept {
@@ -236,8 +232,10 @@ private:
     std::optional<dht::token> _min_token;
     std::optional<dht::token> _max_token;
 
-    // Holds the values that finish() computes from the chunk body, for the chunk header.
+    // Holds the values that finish() computes: the size of the chunk, and the size and the CRC of
+    // the chunk body for the chunk header.
     struct finished_body {
+        size_t chunk_size;
         uint32_t records_size;
         uint32_t body_crc;
     };
@@ -253,7 +251,8 @@ private:
 
     bool fits_frame(size_t frame_size) const noexcept;
 
-    void pad_to_alignment(size_t alignment);
+    // Returns the chunk offset at which the next record frame or padding goes.
+    size_t write_offset() const noexcept { return _buffer_size - _stream.size(); }
 
     bytes_view do_seal(segment_sequence segment_seq, std::optional<table_id> table);
 };
@@ -301,7 +300,6 @@ public:
     bool fits(const Writer& writer) const noexcept { return _builder.fits(writer); }
     bool has_data() const noexcept { return _builder.has_data(); }
 
-    size_t serialized_size() const noexcept { return _builder.serialized_size(); }
     size_t buffer_size() const noexcept { return _builder.buffer_size(); }
     size_t record_bytes() const noexcept { return _builder.record_bytes(); }
     size_t record_count() const noexcept { return _builder.record_count(); }

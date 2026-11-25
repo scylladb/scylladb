@@ -2038,7 +2038,7 @@ future<> segment_manager_impl::write_to_separator(std::vector<separator_record>&
 }
 
 future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, logstor_group& cg) {
-    logstor_logger.trace("Flushing separator buffer with {} bytes", buf.serialized_size());
+    logstor_logger.trace("Flushing separator buffer with {} bytes of records", buf.record_bytes());
 
     auto flush_result = co_await coroutine::as_future([this, &buf, &cg] () -> future<> {
         utils::get_local_injector().inject("fail_flush_separator_buffer", []() {
@@ -2819,8 +2819,8 @@ future<> logstor_group::close_separator() {
             co_return;
         }
         if (!buf.empty()) {
-            logstor_logger.warn("Discarding a logstor separator buffer of table {} with {} bytes from {} segments,"
-                    " the segments will not be reclaimed", table_id(), buf.serialized_size(), buf.held_segments.size());
+            logstor_logger.warn("Discarding a separator buffer of table {} with {} bytes of records from {} segments,"
+                    " the segments will not be reclaimed", table_id(), buf.record_bytes(), buf.held_segments.size());
         }
         // A failed flush does the same teardown. abort() fails the writes of the buffer, which the
         // close in release() needs, and release() drops the guards, which keep the held segments.

@@ -73,7 +73,7 @@ frame_extent chunk_builder::append(const Writer& writer) {
 
     const size_t frame_size = record_frame_size(writer);
     const size_t padded_size = align_up(frame_size, ondisk::record_alignment);
-    const size_t frame_offset = serialized_size();
+    const size_t frame_offset = write_offset();
 
     // Write the frame and its padding through a view of the next padded_size bytes, and move the
     // stream past them only when the frame is complete, so that an append that throws leaves the
@@ -101,19 +101,22 @@ frame_extent chunk_builder::append(const Writer& writer) {
 
 size_t chunk_builder::finish() {
     if (_finished_body) {
-        return serialized_size();
+        return _finished_body->chunk_size;
     }
-    const size_t records_size = serialized_size() - chunk_header_size();
+    const size_t records_end = write_offset();
+    const size_t records_size = records_end - chunk_header_size();
     const auto body_crc = ondisk::calculate_body_crc(std::span(_buffer.get() + chunk_header_size(), records_size));
 
-    pad_to_alignment(ondisk::block_alignment);
+    const size_t chunk_size = align_up(records_end, ondisk::block_alignment);
+    _stream.fill('\0', chunk_size - records_end);
 
     _finished_body = finished_body{
+        .chunk_size = chunk_size,
         .records_size = static_cast<uint32_t>(records_size),
         .body_crc = body_crc,
     };
 
-    return serialized_size();
+    return _finished_body->chunk_size;
 }
 
 bytes_view chunk_builder::seal(segment_sequence segment_seq) {
@@ -159,22 +162,13 @@ bytes_view chunk_builder::do_seal(segment_sequence segment_seq, std::optional<ta
     ostream out(_buffer.get(), chunk_header_size());
     ondisk::write_chunk_header(out, ch);
     _sealed = true;
-    return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get()), serialized_size());
+    return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get()), _finished_body->chunk_size);
 }
 
 bool chunk_builder::fits_frame(size_t frame_size) const noexcept {
     // A finished chunk takes no more frames, also when the padding of finish() leaves room in the
     // buffer. The frame is followed by the padding to record_alignment.
     return !_finished_body && align_up(frame_size, ondisk::record_alignment) <= _stream.size();
-}
-
-void chunk_builder::pad_to_alignment(size_t alignment) {
-    auto current_pos = serialized_size();
-    auto next_pos = align_up(current_pos, alignment);
-    auto padding = next_pos - current_pos;
-    if (padding > 0) {
-        _stream.fill('\0', padding);
-    }
 }
 
 template frame_extent chunk_builder::append<log_record_writer>(const log_record_writer&);
