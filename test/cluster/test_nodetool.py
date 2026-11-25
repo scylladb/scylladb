@@ -12,7 +12,10 @@ async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args:
     """Runs `nodetool <args>` against `server`, with the server's executable."""
     exe_path = await manager.server_get_exe(server.server_id)
     cmd = [exe_path, "nodetool", *args, "--logger-log-level", "scylla-nodetool=trace", "-h", server.ip_addr]
-    return subprocess.run(cmd, capture_output=True, text=True)
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    stdout, stderr = await proc.communicate()
+    assert proc.returncode is not None
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout.decode(), stderr.decode())
 
 
 async def validate_status_operation(result: str, live_eps: list, down_eps: list, leaving: list, joining: list,
