@@ -69,6 +69,8 @@ public:
         uint64_t corrupt_bytes = 0;
         uint64_t truncated_at = 0;
         uint64_t broken_files = 0;
+        // Message of a segment_data_corruption_error. Kept per file, operator+= leaves it out.
+        sstring corruption;
 
         stats& operator+=(const stats& s) {
             invalid_mutations += s.invalid_mutations;
@@ -224,6 +226,7 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
             // the boot over the unread bytes while this shard hosts a strongly consistent
             // group, unless strongly_consistent_tables_start_on_damaged_commitlog is set.
             s->corrupt_bytes += e.bytes();
+            s->corruption = e.what();
             unreadable = true;
         } catch (commitlog::segment_truncation& e) {
             // Where the writing stopped, which every crash leaves behind: an EOF, a
@@ -478,7 +481,7 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
                     rlogger.debug("Replaying {} for {}", f, _impl->_context);
                     auto stats = co_await _impl->recover(d, states[replay_position(d).shard_id()]);
                     if (stats.corrupt_bytes != 0) {
-                        rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
+                        rlogger.warn("Corrupted file: {}. {} bytes skipped. {}", f, stats.corrupt_bytes, stats.corruption);
                     }
                     if (stats.truncated_at != 0) {
                         rlogger.warn("Truncated file: {} at position {}.", f, stats.truncated_at);
