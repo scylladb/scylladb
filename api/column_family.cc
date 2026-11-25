@@ -59,7 +59,7 @@ std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
 
 table_info parse_table_info(const sstring& name, const replica::database& db) {
     auto [ks, cf] = parse_fully_qualified_cf_name(name);
-    return table_info{ .name = cf, .id = validate_table(db, ks, cf) };
+    return table_info{ .name = cf, .id = validate_table(db.as_data_dictionary(), ks, cf) };
 }
 
 static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db, const sstring& name,

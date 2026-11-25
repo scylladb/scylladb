@@ -842,7 +842,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     sharded<tasks::task_manager> task_manager;
-    api::http_context ctx(db);
+    api::http_context ctx;
     httpd::http_server_control prometheus_server;
     std::optional<utils::directories> dirs = {};
     sharded<gms::feature_service> feature_service;
@@ -1473,6 +1473,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // call stop on each db instance, but leave the shareded<database> pointers alive.
                 db.invoke_on_all(&replica::database::stop).get();
             });
+            ctx.data_dict = [&db] { return db.local().as_data_dictionary(); };
 
             // We need to init commitlog on shard0 before it is inited on other shards
             // because it obtains the list of pre-existing segments for replay, which must

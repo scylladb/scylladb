@@ -10,6 +10,10 @@
 #include <seastar/http/httpd.hh>
 #include <seastar/core/future.hh>
 
+#include <functional>
+
+#include "data_dictionary/data_dictionary.hh"
+
 #include "gms/gossip_address_map.hh"
 #include "replica/database_fwd.hh"
 #include "tasks/task_manager.hh"
@@ -90,12 +94,12 @@ struct http_context {
     sstring api_dir;
     sstring api_doc;
     httpd::http_server_control http_server;
-    sharded<replica::database>& db;
 
-    http_context(sharded<replica::database>& _db)
-            : db(_db)
-    {
-    }
+    // Hands out the data dictionary of the shard it is called on. The API
+    // server listens on every shard, so a handler cannot be given a handle
+    // bound to one of them. Set once the database is up; until then calling
+    // it throws.
+    std::function<data_dictionary::database()> data_dict;
 };
 
 future<> set_server_init(http_context& ctx);

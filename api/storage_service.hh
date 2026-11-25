@@ -46,7 +46,7 @@ sstring validate_keyspace(const http_context& ctx, const std::unique_ptr<http::r
 
 // verify that the keyspace:table is found, otherwise a bad_param_exception exception is thrown
 // returns the table_id of the table if found
-table_id validate_table(const replica::database& db, sstring ks_name, sstring table_name);
+table_id validate_table(data_dictionary::database db, sstring ks_name, sstring table_name);
 
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
