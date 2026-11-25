@@ -6,8 +6,10 @@
 
 #include <boost/test/unit_test.hpp>
 #include <stdint.h>
+#include <algorithm>
 #include <limits>
 #include <random>
+#include <span>
 
 #include <seastar/core/align.hh>
 #include <seastar/core/future-util.hh>
@@ -586,6 +588,49 @@ SEASTAR_TEST_CASE(test_iovec_read_reaching_end_of_data) {
     BOOST_REQUIRE_EQUAL(std::string_view(buf.get(), data_len), std::string(data_len, 'x'));
 
     co_await f.close();
+}
+
+static future<temporary_buffer<char>> read_through_encryption(const std::string& path, ::shared_ptr<symmetric_key> k, bool zero_blocks_read_as_zeros, size_t len) {
+    file f(make_encrypted_file(co_await open_file_dma(path, open_flags::ro), std::move(k), zero_blocks_read_as_zeros));
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), len);
+    auto n = co_await f.dma_read(0, buf.get_write(), len);
+    co_await f.close();
+    BOOST_REQUIRE_EQUAL(n, len);
+    co_return buf;
+}
+
+// Block 0 is written through the encryption and block 1 is raw zeros, like the
+// zero-filled tail of a commitlog segment. Only zero_blocks_read_as_zeros reads
+// the raw zeros back as zeros. Block 0 decrypts the same either way.
+SEASTAR_TEST_CASE(test_zero_blocks_read_as_zeros) {
+    key_info kinfo{"AES/CBC", 256};
+    auto k = ::make_shared<symmetric_key>(kinfo);
+    constexpr auto& filename = "zero_blocks_read_as_zeros";
+    constexpr size_t bs = 4096;
+
+    auto written = generate_random<char>(bs, bs);
+    {
+        auto [f, _] = co_await make_file(filename, open_flags::create | open_flags::wo, k);
+        co_await f.dma_write(0, written.get(), written.size());
+        co_await f.close();
+    }
+    auto [path, _] = make_filename(filename, k);
+    {
+        auto raw = co_await open_file_dma(path, open_flags::wo);
+        auto zeros = temporary_buffer<char>::aligned(raw.memory_dma_alignment(), bs);
+        std::fill_n(zeros.get_write(), bs, 0);
+        co_await raw.dma_write(bs, zeros.get(), bs);
+        co_await raw.close();
+    }
+
+    auto is_zero = [] (char c) { return c == 0; };
+    auto decrypted = co_await read_through_encryption(path, k, false, 2 * bs);
+    BOOST_REQUIRE_EQUAL(std::string_view(decrypted.get(), bs), std::string_view(written.get(), bs));
+    BOOST_REQUIRE(!std::ranges::all_of(std::span(decrypted.get() + bs, bs), is_zero));
+
+    auto zeroed = co_await read_through_encryption(path, k, true, 2 * bs);
+    BOOST_REQUIRE_EQUAL(std::string_view(zeroed.get(), bs), std::string_view(written.get(), bs));
+    BOOST_REQUIRE(std::ranges::all_of(std::span(zeroed.get() + bs, bs), is_zero));
 }
 
 // Reproducer for https://github.com/scylladb/scylladb/issues/22236

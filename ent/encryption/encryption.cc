@@ -959,6 +959,10 @@ class encryption_commitlog_file_extension : public db::commitlog_file_extension 
     static const inline std::regex prop_expr = std::regex("^([^=]+)=(\\S+)$");
     static const inline sstring id_key = "key_id";
     static const inline std::string end_of_file_mark = "#-- end of file";
+    // Replay takes an all-zero sector for the end of the data. The commitlog fills the tail of a new or
+    // shortened segment file with raw zeros, or leaves holes, before it wraps the file, so those zeros
+    // must read as zeros.
+    static constexpr bool zero_blocks_read_as_zeros = true;
 
 public:
     encryption_commitlog_file_extension(::shared_ptr<encryption_context> ctxt, options opts)
@@ -1018,7 +1022,7 @@ public:
                     logg.debug("Open commitlog segment {} using {} (id: {})", filename, *provider, id);
                     auto info = make_shared<key_info>(get_key_info(opts));
                     return provider->key(*info, id).then([f, info](std::tuple<shared_ptr<symmetric_key>, opt_bytes> k) {
-                        return make_ready_future<file>(make_encrypted_file(f, std::get<0>(k)));
+                        return make_ready_future<file>(make_encrypted_file(f, std::get<0>(k), zero_blocks_read_as_zeros));
                     });
                 });
             });
@@ -1040,7 +1044,7 @@ public:
                 logg.debug("Creating commitlog segment {} using {} (id: {})", filename, provider, id);
 
                 return write_text_file_fully(cfg_file, ss.str()).then([f, k] {
-                    return make_ready_future<file>(make_encrypted_file(f, k));
+                    return make_ready_future<file>(make_encrypted_file(f, k, zero_blocks_read_as_zeros));
                 });
             });
         }

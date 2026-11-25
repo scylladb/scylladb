@@ -8,6 +8,8 @@
  */
 
 #include <fcntl.h>
+#include <algorithm>
+#include <span>
 #include <fmt/format.h>
 #include <seastar/core/align.hh>
 #include <seastar/core/file.hh>
@@ -84,6 +86,7 @@ struct block_encryption_base {
 class encrypted_file_impl : public seastar::file_impl, block_encryption_base {
     file _file;
     bytes _hash_salt;
+    bool _zero_blocks_read_as_zeros;
 
     std::optional<uint64_t> _file_length;
 
@@ -98,7 +101,7 @@ class encrypted_file_impl : public seastar::file_impl, block_encryption_base {
     void clear_length();
 
 public:
-    encrypted_file_impl(file, ::shared_ptr<symmetric_key>);
+    encrypted_file_impl(file, ::shared_ptr<symmetric_key>, bool zero_blocks_read_as_zeros);
 
     future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent*) override;
     future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override;
@@ -149,9 +152,10 @@ block_encryption_base::block_encryption_base(::shared_ptr<symmetric_key> key)
     , _block_key(generate_block_key(_key))
 {}
 
-encrypted_file_impl::encrypted_file_impl(file f, ::shared_ptr<symmetric_key> key)
+encrypted_file_impl::encrypted_file_impl(file f, ::shared_ptr<symmetric_key> key, bool zero_blocks_read_as_zeros)
     : block_encryption_base(std::move(key))
     , _file(std::move(f))
+    , _zero_blocks_read_as_zeros(zero_blocks_read_as_zeros)
 {
     _memory_dma_alignment = std::max<unsigned>(_file.memory_dma_alignment(), block_size);
     _disk_read_dma_alignment = std::max<unsigned>(_file.disk_read_dma_alignment(), block_size);
@@ -258,6 +262,13 @@ size_t encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t l
             // distance to end of data for a buffer that stopped short would hand
             // the caller bytes this read never wrote.
             return std::min(decoded, std::max(l, pos) - pos);
+        }
+        // AES output is all zeros with negligible probability, so an all-zero block was never
+        // encrypted: a file hole or a raw zero fill.
+        if (m == mode::decrypt && _zero_blocks_read_as_zeros
+                && std::ranges::all_of(std::span(i + off, block_size), [] (char c) { return c == 0; })) {
+            std::fill_n(o + off, block_size, 0);
+            continue;
         }
         _key->transform_unpadded(m, i + off, block_size, o + off, iv.data());
     }
@@ -455,25 +466,27 @@ std::unique_ptr<file_handle_impl> encrypted_file_impl::dup() {
         seastar::file_handle _handle;
         key_info _info;
         bytes _key;
+        bool _zero_blocks_read_as_zeros;
     public:
-        my_file_handle_impl(seastar::file_handle h, const key_info& info, const bytes& key)
+        my_file_handle_impl(seastar::file_handle h, const key_info& info, const bytes& key, bool zero_blocks_read_as_zeros)
             : _handle(std::move(h))
             , _info(info)
             , _key(key)
+            , _zero_blocks_read_as_zeros(zero_blocks_read_as_zeros)
         {}
         std::unique_ptr<file_handle_impl> clone() const override {
-            return std::make_unique<my_file_handle_impl>(_handle, _info, _key);
+            return std::make_unique<my_file_handle_impl>(_handle, _info, _key, _zero_blocks_read_as_zeros);
         }
         seastar::shared_ptr<file_impl> to_file() && override {
-            return seastar::make_shared<encrypted_file_impl>(_handle.to_file(), ::make_shared<symmetric_key>(_info, _key));
+            return seastar::make_shared<encrypted_file_impl>(_handle.to_file(), ::make_shared<symmetric_key>(_info, _key), _zero_blocks_read_as_zeros);
         }
     };
 
-    return std::make_unique<my_file_handle_impl>(_file.dup(), _key->info(), _key->key());
+    return std::make_unique<my_file_handle_impl>(_file.dup(), _key->info(), _key->key(), _zero_blocks_read_as_zeros);
 }
 
-shared_ptr<file_impl> make_encrypted_file(file f, ::shared_ptr<symmetric_key> k) {
-    return ::make_shared<encrypted_file_impl>(std::move(f), std::move(k));
+shared_ptr<file_impl> make_encrypted_file(file f, ::shared_ptr<symmetric_key> k, bool zero_blocks_read_as_zeros) {
+    return ::make_shared<encrypted_file_impl>(std::move(f), std::move(k), zero_blocks_read_as_zeros);
 }
 
 class indirect_encrypted_file_impl : public file_impl {
