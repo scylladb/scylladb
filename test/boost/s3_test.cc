@@ -203,10 +203,10 @@ static future<uint32_t> create_file(const std::string& path, size_t file_size) {
  * with s3_test_fixture creating per-test buckets for isolation
  */
 
-void client_put_get_object(const client_maker_function& client_maker) {
+void client_put_get_object(const client_maker_function& client_maker, std::string_view object_name = "testobject") {
     s3_test_fixture guard(client_maker);
     auto cln = guard.client();
-    const auto name = guard.object_path("testobject");
+    const auto name = guard.object_path(object_name);
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890").release();
@@ -247,15 +247,29 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_proxy) {
     client_put_get_object(make_proxy_client);
 }
 
-void do_test_client_multipart_upload(const client_maker_function& client_maker, bool with_copy_upload) {
+// A key with characters that SigV4 URI encoding changes, including a valid
+// escape ("%41"), '?', '#' and UTF-8 bytes. Without the encoding of the path
+// and of x-amz-copy-source, the requests for it fail (SCYLLADB-5827).
+static constexpr std::string_view special_characters_object_name = "backup(2026)/it's!*+=,;:@$&?# %41obj-zażółć";
+
+SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_with_special_characters_minio) {
+    client_put_get_object(make_minio_client, special_characters_object_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_with_special_characters_proxy) {
+    client_put_get_object(make_proxy_client, special_characters_object_name);
+}
+
+void do_test_client_multipart_upload(const client_maker_function& client_maker, bool with_copy_upload,
+        std::optional<std::string_view> object_name = {}, unsigned chunks = 128 * 1024) {
     s3_test_fixture guard(client_maker);
     auto cln = guard.client();
-    const auto name = guard.object_path(fmt::format("test{}object", with_copy_upload ? "jumbo" : "large"));
+    const auto name = guard.object_path(object_name.value_or(with_copy_upload ? "testjumboobject" : "testlargeobject"));
 
     testlog.info("Upload object (with copy = {})\n", with_copy_upload);
     auto out = output_stream<char>(
-        // Make it 3 parts per piece, so that 128Mb buffer below
-        // would be split into several 15Mb pieces
+        // Make it 3 parts per piece, so that the data below
+        // is split into 15Mb pieces
         with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name)
     );
     auto close = seastar::deferred_close(out);
@@ -263,7 +277,7 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
     static constexpr unsigned chunk_size = 1000;
     auto rnd = tests::random::get_bytes(chunk_size);
     uint64_t object_size = 0;
-    for (unsigned ch = 0; ch < 128 * 1024; ch++) {
+    for (unsigned ch = 0; ch < chunks; ch++) {
         out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
         object_size += rnd.size();
     }
@@ -309,6 +323,15 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_minio) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_proxy) {
     do_test_client_multipart_upload(make_proxy_client, true);
+}
+
+// About 16 MB: a 15 MiB piece and a 640 KiB piece, both copied with UploadPartCopy.
+SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_object_with_special_characters_minio) {
+    do_test_client_multipart_upload(make_minio_client, true, special_characters_object_name, 16 * 1024);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_object_with_special_characters_proxy) {
+    do_test_client_multipart_upload(make_proxy_client, true, special_characters_object_name, 16 * 1024);
 }
 
 // A zero-byte component is not hypothetical. BTI's Rows.db is empty for an
@@ -587,11 +610,10 @@ static std::unordered_set<sstring> populate_bucket(shared_ptr<s3::client> client
     return names;
 }
 
-void client_list_objects(const client_maker_function& client_maker) {
+void client_list_objects(const client_maker_function& client_maker, const sstring& prefix = "testprefix/") {
     s3_test_fixture guard(client_maker);
     auto client = guard.client();
     const sstring& bucket = guard.bucket();
-    const sstring prefix("testprefix/");
 
     // Put extra object to check list-by-prefix filters it out
     temporary_buffer<char> data = sstring("1234567890").release();
@@ -616,6 +638,14 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_minio) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_list_objects_proxy) {
     client_list_objects(make_proxy_client);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_with_special_characters_minio) {
+    client_list_objects(make_minio_client, fmt::format("{}/", special_characters_object_name));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_with_special_characters_proxy) {
+    client_list_objects(make_proxy_client, fmt::format("{}/", special_characters_object_name));
 }
 
 void client_list_objects_incomplete(const client_maker_function& client_maker) {
@@ -861,11 +891,11 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_proxy) {
     test_chunked_download_data_source(make_proxy_client, 20_MiB);
 }
 
-void test_object_copy(const client_maker_function& client_maker, size_t chunk_size, size_t chunks) {
+void test_object_copy(const client_maker_function& client_maker, std::string_view object_name, size_t chunk_size, size_t chunks) {
     s3_test_fixture guard(client_maker);
     auto cln = guard.client();
-    const auto name = guard.object_path("testobject");
-    const auto name_copy = guard.object_path("testobject-copy");
+    const auto name = guard.object_path(object_name);
+    const auto name_copy = guard.object_path(fmt::format("{}-copy", object_name));
 
     auto out = output_stream<char>(cln->make_upload_sink(name));
     auto rnd = tests::random::get_bytes(chunk_size);
@@ -892,19 +922,35 @@ void test_object_copy(const client_maker_function& client_maker, size_t chunk_si
 }
 
 SEASTAR_THREAD_TEST_CASE(test_small_object_copy) {
-    test_object_copy(make_minio_client, 1000, 2);
+    test_object_copy(make_minio_client, "testobject", 1000, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_large_object_copy) {
-    test_object_copy(make_minio_client, 1_MiB, 6);
+    test_object_copy(make_minio_client, "testobject", 1_MiB, 6);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_small_object_copy_proxy) {
-    test_object_copy(make_proxy_client, 1000, 2);
+    test_object_copy(make_proxy_client, "testobject", 1000, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_large_object_copy_proxy) {
-    test_object_copy(make_proxy_client, 1_MiB, 6);
+    test_object_copy(make_proxy_client, "testobject", 1_MiB, 6);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_small_object_copy_with_special_characters) {
+    test_object_copy(make_minio_client, special_characters_object_name, 1000, 2);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_object_copy_with_special_characters) {
+    test_object_copy(make_minio_client, special_characters_object_name, 1_MiB, 6);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_small_object_copy_with_special_characters_proxy) {
+    test_object_copy(make_proxy_client, special_characters_object_name, 1000, 2);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_object_copy_with_special_characters_proxy) {
+    test_object_copy(make_proxy_client, special_characters_object_name, 1_MiB, 6);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_creds) {
