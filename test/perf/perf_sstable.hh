@@ -21,6 +21,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/random_utils.hh"
+#include "test/perf/perf.hh"
 #include <boost/accumulators/framework/accumulator_set.hpp>
 #include <boost/accumulators/framework/features.hpp>
 #include <boost/accumulators/statistics/mean.hpp>
@@ -82,6 +83,20 @@ public:
             } catch (std::exception& e) {}
             return empty_test_dir(p);
         });
+    }
+};
+
+// Result of one run of a mode that also measures the work it does per unit processed.
+struct counted_run {
+    double units_per_sec = 0;
+    uint64_t units = 0;
+    perf_sample sample;
+
+    counted_run& operator+=(const counted_run& o) {
+        units_per_sec += o.units_per_sec;
+        units += o.units;
+        sample += o.sample;
+        return *this;
     }
 };
 
@@ -332,9 +347,9 @@ public:
         });
     }
 
-    future<double> compaction(int idx) {
+    future<counted_run> compaction(int idx) {
         return test_setup::create_empty_test_dir(dir()).then([this] {
-            return sstables::test_env::do_with_async_returning<double>([this] (sstables::test_env& env) {
+            return sstables::test_env::do_with_async_returning<counted_run>([this] (sstables::test_env& env) {
                 auto sst_gen = [this] () mutable {
                     return _env.make_sstable(s, dir(), _env.new_generation(), sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
                 };
@@ -360,8 +375,6 @@ public:
                 // A table's compaction groups must be stopped before they are destroyed.
                 auto stop_cf = deferred_stop(*cf);
 
-                auto start = perf_sstable_test_env::now();
-
                 auto descriptor = compaction::compaction_descriptor(std::move(ssts));
                 descriptor.enable_garbage_collection(cf->get_sstable_set());
                 descriptor.creator = [sst_gen = std::move(sst_gen)] (unsigned dummy) mutable {
@@ -371,8 +384,11 @@ public:
                 descriptor.gc_state = cf->try_get_compaction_group_view_with_static_sharding().get_tombstone_gc_state();
                 auto cdata = compaction::compaction_manager::create_compaction_data();
                 compaction::compaction_progress_monitor progress_monitor;
-                auto ret = compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
-                auto end = perf_sstable_test_env::now();
+                perf_sampler sampler;
+                compaction::compaction_result ret;
+                auto sample = sampler.measure([&] {
+                    ret = compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
+                });
 
                 auto partitions_per_sstable = this->partitions_per_sstable();
                 if (_cfg.compaction_strategy != compaction::compaction_strategy_type::time_window) {
@@ -383,10 +399,14 @@ public:
                 });
                 SCYLLA_ASSERT(total_keys_written >= partitions_per_sstable);
 
-                auto duration = std::chrono::duration<double>(end - start).count();
                 // The output size depends on how much the input overlaps, so report
                 // input rows, which are the same for all layouts.
-                return double(partitions_per_sstable) * _cfg.rows_per_partition * _cfg.sstables / duration;
+                uint64_t input_rows = uint64_t(partitions_per_sstable) * _cfg.rows_per_partition * _cfg.sstables;
+                return counted_run{
+                    .units_per_sec = input_rows / sample.time.count(),
+                    .units = input_rows,
+                    .sample = sample,
+                };
             });
         });
     }
@@ -439,22 +459,37 @@ public:
 };
 
 // The function func should carry on with the test, and return the number of units (partitions by default) processed
-// per second. time_runs will then map reduce it, and return the aggregate units / sec for the whole system.
+// per second, or a counted_run. time_runs will then map reduce it, and return the aggregate units / sec for the whole
+// system. For a counted_run, it also reports the instructions and allocations per unit.
 template <typename Func>
-future<> time_runs(unsigned iterations, unsigned parallelism, sharded<perf_sstable_test_env>& dt, Func func, std::string_view unit = "partitions") {
+future<> time_runs(unsigned iterations, unsigned parallelism, sharded<perf_sstable_test_env>& dt, Func func, std::string_view unit = "partitions", std::string_view unit_singular = "partition") {
     using namespace boost::accumulators;
+    using result_type = typename std::invoke_result_t<Func, perf_sstable_test_env&, int>::value_type;
+    constexpr bool counted = std::is_same_v<result_type, counted_run>;
     auto acc = make_lw_shared<accumulator_set<double, features<tag::mean, tag::error_of<tag::mean>>>>();
+    auto total = make_lw_shared<counted_run>();
     auto idx = std::views::iota(0, int(iterations));
-    return do_for_each(idx.begin(), idx.end(), [parallelism, acc, &dt, func] (auto iter) {
+    return do_for_each(idx.begin(), idx.end(), [parallelism, acc, total, &dt, func] (auto iter) {
         auto idx = std::views::iota(0, int(parallelism));
-        return parallel_for_each(idx.begin(), idx.end(), [&dt, func, acc] (auto idx) {
-            return dt.map_reduce(adder<double>(), func, std::move(idx)).then([acc] (double result) {
+        return parallel_for_each(idx.begin(), idx.end(), [&dt, func, acc, total] (auto idx) {
+            return dt.map_reduce(adder<result_type>(), func, std::move(idx)).then([acc, total] (result_type result) {
                 auto& a = *acc;
-                a(result);
+                if constexpr (counted) {
+                    a(result.units_per_sec);
+                    *total += result;
+                } else {
+                    a(result);
+                }
                 return make_ready_future<>();
             });
         });
-    }).then([acc, iterations, parallelism, unit] {
-        std::cout << format("{:.2f}", mean(*acc)) << " +- " << format("{:.2f}", error_of<tag::mean>(*acc)) << " " << unit << " / sec (" << iterations << " runs, " << parallelism << " concurrent ops)\n";
+    }).then([=] {
+        std::cout << format("{:.2f}", mean(*acc)) << " +- " << format("{:.2f}", error_of<tag::mean>(*acc)) << " " << unit << " / sec (";
+        if constexpr (counted) {
+            std::cout << format("{:.0f} insns/{}, {:.1f} allocs/{}, ",
+                    double(total->sample.instructions) / total->units, unit_singular,
+                    double(total->sample.allocations) / total->units, unit_singular);
+        }
+        std::cout << iterations << " runs, " << parallelism << " concurrent ops)\n";
     });
 }

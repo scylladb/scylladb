@@ -36,7 +36,7 @@ future<> test_compaction(sharded<perf_sstable_test_env>& dt) {
         dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.prepare_compaction_input();
         }).then([&dt] {
-            return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::compaction, "input rows");
+            return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::compaction, "input rows", "row");
         }).get();
     });
 }
