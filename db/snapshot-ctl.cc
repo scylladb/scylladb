@@ -36,17 +36,6 @@ using namespace std::chrono_literals;
 
 logging::logger snap_log("snapshots");
 
-template <>
-struct fmt::formatter<db::snapshot_dc_location> : fmt::formatter<string_view> {
-    template <typename FormatContext>
-    auto format(const db::snapshot_dc_location& e, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), 
-            "{{ {}, {}, {} }}",
-            e.endpoint, e.bucket, e.prefix
-        );
-    }
-};
-
 namespace db {
 
 snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>& sp, sharded<cql3::query_processor>& qp, netw::messaging_service& ms, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)

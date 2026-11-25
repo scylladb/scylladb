@@ -112,7 +112,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             filter = db::snapshot_state::remote;
         }
         if (loc.state >= db::snapshot_state::remote_and_local) {
-            snap_log.warn("Snapshot {} for {} is already backed up: {}:{}", snapshot_name, loc.datacenter, loc.location.bucket, loc.location.prefix);
+            snap_log.warn("Snapshot {} for {} is already backed up: {}", snapshot_name, loc.datacenter, loc.location);
             dc_locations.erase(loc.datacenter);
         }
 
@@ -294,7 +294,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             auto& [dst, info] = pair;
             auto& repair_master = repair_masters[dst];
 
-            snap_log.info("Generate manifest for {} {}:{} ({}:{}/{})", snapshot_name, keyspace, table, dst.endpoint, dst.bucket, dst.prefix);
+            snap_log.info("Generate manifest for {} {}:{} ({})", snapshot_name, keyspace, table, dst);
 
             manifest_json manifest;
 

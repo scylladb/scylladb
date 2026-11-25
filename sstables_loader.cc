@@ -1034,7 +1034,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
 
     auto snapshot_info = co_await sth.get_snapshot_remote_location(snapshot_name, datacenter);
-    llog.info("Downloading sstables for tablet {} from {}@{}/{}", tid, snapshot_name, snapshot_info.location.endpoint, snapshot_info.location.bucket);
+    llog.info("Downloading sstables for tablet {} from {}@{}", tid, snapshot_name, snapshot_info.location);
     auto sst_infos = co_await sth.get_snapshot_sstables(snapshot_name, keyspace_name, table_name, datacenter, rack,
             db::consistency_level::QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);

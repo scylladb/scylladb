@@ -198,3 +198,11 @@ struct snapshot_entries {
 };
 
 } // namespace db
+
+template <>
+struct fmt::formatter<db::snapshot_dc_location> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_dc_location& l, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}:{}/{}", l.endpoint, l.bucket, l.prefix);
+    }
+};

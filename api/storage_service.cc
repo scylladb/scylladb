@@ -491,15 +491,17 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
                 throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
             }
 
-            apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
-                        keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
+            auto loc = db::snapshot_dc_location{
+                .endpoint = std::move(endpoint),
+                .bucket = std::move(bucket),
+                .prefix = std::string(prefix),
+            };
+
+            apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} location={} manifests_count={}",
+                        keyspace, table, snapshot, dc, loc, manifests.size());
 
             auto [_, inserted] = restore_locations.emplace(std::move(dc), tablet_restore_location{
-                .location = db::snapshot_dc_location{
-                    .endpoint = std::move(endpoint),
-                    .bucket = std::move(bucket),
-                    .prefix = std::string(prefix),
-                },
+                .location = std::move(loc),
                 .manifests = std::move(manifests),
             });
             if (!inserted) {
