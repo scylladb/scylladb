@@ -831,21 +831,21 @@ public:
     }
 };
 
-future<> sstables_loader::download_and_stream(download_progress& progress, const sstring& endpoint, const sstring& bucket, const sstring& ks, const sstring& cf,
-        const sstring& prefix, const std::vector<sstring>& sstable_names, stream_scope scope, primary_replica_only primary_replica, abort_source& as) {
+future<> sstables_loader::download_and_stream(download_progress& progress, const db::snapshot_dc_location& location, const sstring& ks, const sstring& cf,
+        const std::vector<sstring>& sstable_names, stream_scope scope, primary_replica_only primary_replica, abort_source& as) {
     // Load-and-stream reads the entire content from SSTables, therefore it can afford to discard the bloom filter
     // that might otherwise consume a significant amount of memory.
     sstables::sstable_open_config cfg {
         .load_bloom_filter = false,
     };
-    llog.debug("Loading sstables from {}({}/{})", endpoint, bucket, prefix);
+    llog.debug("Loading sstables from {}", location);
 
-    auto ep_type = _storage_manager.get_endpoint_type(endpoint);
+    auto ep_type = _storage_manager.get_endpoint_type(location.endpoint);
     std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
     auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_db, ks, cf, sstable_names, [&] {
-        return data_dictionary::make_object_storage_options(endpoint, ep_type, bucket, prefix, &shard_aborts[this_shard_id()]);
+        return data_dictionary::make_object_storage_options(location.endpoint, ep_type, location.bucket, location.prefix, &shard_aborts[this_shard_id()]);
     }, cfg);
-    llog.debug("Streaming sstables from {}({}/{})", endpoint, bucket, prefix);
+    llog.debug("Streaming sstables from {}", location);
     std::exception_ptr ex;
     named_gate g("sstables_loader::download_and_stream");
     try {
@@ -923,17 +923,17 @@ future<> sstables_loader::stop() {
 }
 
 future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring prefix, std::vector<sstring> sstables,
-            sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica) {
-    if (!_storage_manager.is_known_endpoint(endpoint)) {
-        throw std::invalid_argument(format("endpoint {} not found", endpoint));
+            db::snapshot_dc_location location, std::vector<sstring> sstables,
+            stream_scope scope, bool primary_replica) {
+    if (!_storage_manager.is_known_endpoint(location.endpoint)) {
+        throw std::invalid_argument(format("endpoint {} not found", location.endpoint));
     }
     // For now, only the tablet-aware restore supports a table on object storage.
     if (_db.local().find_column_family(ks_name, cf_name).get_storage_options().is_object_storage_type()) {
         throw std::invalid_argument(format("Cannot restore {}.{} with /storage_service/restore: the table keeps its sstables on object storage, use /storage_service/tablets/restore",
                 ks_name, cf_name));
     }
-    llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
+    llog.info("Restore sstables from {} to {}.{} using scope={}, primary_replica={}", location, ks_name, cf_name, scope, primary_replica);
 
     auto progress = make_lw_shared<download_progress>();
     tasks::task_manager::task_builder task_builder{_task_manager_module, download_sstables_task_type};
@@ -949,9 +949,9 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
                 .set_finalizer([progress] () noexcept {
                     return progress->stop();
                 });
-    auto task = co_await std::move(task_builder).build([this, progress, endpoint = std::move(endpoint), bucket = std::move(bucket), ks_name = std::move(ks_name), cf_name = std::move(cf_name),
-            prefix = std::move(prefix), sstables = std::move(sstables), scope, primary_replica] (tasks::task_manager::task::impl& self) {
-        return download_and_stream(*progress, endpoint, bucket, ks_name, cf_name, prefix, sstables, scope, primary_replica_only(primary_replica), self.get_abort_source());
+    auto task = co_await std::move(task_builder).build([this, progress, location = std::move(location), ks_name = std::move(ks_name), cf_name = std::move(cf_name),
+            sstables = std::move(sstables), scope, primary_replica] (tasks::task_manager::task::impl& self) {
+        return download_and_stream(*progress, location, ks_name, cf_name, sstables, scope, primary_replica_only(primary_replica), self.get_abort_source());
     });
     co_return task->id();
 }
