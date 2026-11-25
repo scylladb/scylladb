@@ -9,12 +9,14 @@
 #include <fmt/ranges.h>
 #include "column_family.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "api/api.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "api/api-doc/compaction_manager.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/system.json.hh"
 #include <vector>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/http/exception.hh>
 #include "sstables/sstables.hh"
 #include "sstables/metadata_collector.hh"
@@ -297,6 +299,37 @@ future<json::json_return_type> node_disk_space_used(sharded<replica::database>& 
     }, uint64_t(0), std::plus<>()).then([] (uint64_t val) {
         return make_ready_future<json::json_return_type>(val);
     });
+}
+
+// The values of the `consistency` filter of /storage_service/keyspaces.
+enum class keyspace_consistency_filter {
+    all,
+    eventual,
+    global,
+};
+
+keyspace_consistency_filter parse_keyspace_consistency_filter(const sstring& value) {
+    if (value.empty() || value == "all") {
+        return keyspace_consistency_filter::all;
+    }
+    if (value == "eventual") {
+        return keyspace_consistency_filter::eventual;
+    }
+    if (value == "global") {
+        return keyspace_consistency_filter::global;
+    }
+    throw bad_param_exception(fmt::format("Invalid consistency: {}", value));
+}
+
+data_dictionary::consistency_config_option to_consistency_config_option(keyspace_consistency_filter filter) {
+    switch (filter) {
+    case keyspace_consistency_filter::eventual:
+        return data_dictionary::consistency_config_option::eventual;
+    case keyspace_consistency_filter::global:
+        return data_dictionary::consistency_config_option::global;
+    default:
+        on_internal_error(apilog, fmt::format("Unexpected keyspace consistency filter: {}", std::to_underlying(filter)));
+    }
 }
 
 future<json::json_return_type> map_reduce_cf_time_histogram(sharded<replica::database>& db, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f) {
@@ -1322,6 +1355,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     ss::get_keyspaces.set(r, [&db] (const_req req) {
         auto type = req.get_query_param("type");
         auto replication = req.get_query_param("replication");
+        const auto consistency = parse_keyspace_consistency_filter(req.get_query_param("consistency"));
         std::vector<sstring> keyspaces;
         if (type == "user") {
             keyspaces = db.local().get_user_keyspaces();
@@ -1329,6 +1363,14 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
             keyspaces = db.local().get_non_local_strategy_keyspaces();
         } else {
             keyspaces = db.local().get_all_keyspaces();
+        }
+        if (consistency != keyspace_consistency_filter::all) {
+            const auto wanted = to_consistency_config_option(consistency);
+            std::erase_if(keyspaces, [&db, wanted] (const sstring& ks) {
+                // A keyspace without the consistency option is eventually consistent.
+                const auto option = db.local().find_keyspace(ks).metadata()->consistency_option();
+                return option.value_or(data_dictionary::consistency_config_option::eventual) != wanted;
+            });
         }
         if (replication.empty() || replication == "all") {
             return keyspaces;
