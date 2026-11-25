@@ -105,7 +105,7 @@ enum class compaction_input_layout {
     // Every sstable holds the same partitions with the same rows and cells.
     identical,
     // Every sstable holds its own partitions. Partition keys are dealt out to the
-    // sstables in token order, so the sstables' partitions interleave.
+    // sstables round-robin; since tokens are hashes, the sstables' partitions interleave.
     interleaved_partitions,
     // Every sstable holds all partitions, but each holds its own rows. Clustering
     // keys are dealt out to the sstables in order, so the sstables' rows interleave.
@@ -157,8 +157,6 @@ private:
     std::uniform_int_distribution<char> _distribution;
     lw_shared_ptr<replica::memtable> _mt;
     std::vector<shared_sstable> _sst;
-    // Partition keys for the compaction input layouts that generate each sstable's data separately.
-    std::vector<dht::decorated_key> _compaction_keys;
 
     bool has_clustering_key() const {
         return _cfg.rows_per_partition > 1 || _cfg.compaction_layout == compaction_input_layout::interleaved_rows;
@@ -184,6 +182,48 @@ private:
         return mut;
     }
 
+    // Partition key number `index`. Keys are generated on demand rather than kept
+    // around, so that their memory doesn't limit the data set size; the memtable
+    // sorts them. A key is unique by construction, as it ends with its index; the
+    // rest of it is pseudo-random filler.
+    dht::decorated_key make_partition_key(uint64_t index) const {
+        static constexpr char first_char = '@', last_char = '~';
+        auto index_digits = fmt::format("{:x}", index);
+        if (index_digits.size() > _cfg.key_size) {
+            throw std::runtime_error(fmt::format("key_size {} is too small for {} partitions", _cfg.key_size, _cfg.partitions));
+        }
+        auto key = uninitialized_string<bytes>(_cfg.key_size);
+        auto filler_size = _cfg.key_size - index_digits.size();
+        uint64_t state = index;
+        uint64_t random_bits = 0;
+        for (size_t i = 0; i < filler_size; ++i) {
+            if (i % 8 == 0) {
+                // splitmix64
+                uint64_t z = (state += 0x9e3779b97f4a7c15);
+                z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
+                z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
+                random_bits = z ^ (z >> 31);
+            }
+            key[i] = first_char + (random_bits & 0xff) % (last_char - first_char + 1);
+            random_bits >>= 8;
+        }
+        std::ranges::copy(index_digits, key.begin() + filler_size);
+        return dht::decorate_key(*s, partition_key::from_single_value(*s, std::move(key)));
+    }
+
+    // Calls func(n, key) for the first `count` partition keys owned by this shard,
+    // with n counting them from 0. Must be called in a seastar thread.
+    template <typename Func>
+    void for_each_local_partition_key(uint64_t count, Func func) const {
+        for (uint64_t index = 0, n = 0; n < count; ++index) {
+            auto dk = make_partition_key(index);
+            if (dht::static_shard_of(*s, dk.token()) == this_shard_id()) {
+                func(n++, std::move(dk));
+                thread::maybe_yield();
+            }
+        }
+    }
+
     // Must be called in a seastar thread.
     lw_shared_ptr<replica::memtable> make_compaction_input_memtable(unsigned sstable_index) {
         auto mt = make_lw_shared<replica::memtable>(s);
@@ -192,16 +232,16 @@ private:
         case compaction_input_layout::identical:
             throw std::logic_error("identical compaction input is written from the shared memtable");
         case compaction_input_layout::interleaved_partitions:
-            for (size_t i = sstable_index; i < _compaction_keys.size(); i += sstables) {
-                mt->apply(make_partition(_compaction_keys[i], 0, 1));
-                thread::maybe_yield();
-            }
+            for_each_local_partition_key(uint64_t(partitions_per_sstable()) * sstables, [&] (uint64_t n, dht::decorated_key dk) {
+                if (n % sstables == sstable_index) {
+                    mt->apply(make_partition(dk, 0, 1));
+                }
+            });
             break;
         case compaction_input_layout::interleaved_rows:
-            for (auto& dk : _compaction_keys) {
+            for_each_local_partition_key(partitions_per_sstable(), [&] (uint64_t, dht::decorated_key dk) {
                 mt->apply(make_partition(dk, sstable_index, sstables));
-                thread::maybe_yield();
-            }
+            });
             break;
         }
         return mt;
@@ -289,26 +329,18 @@ public:
     }
 
     future<> fill_memtable() {
-        auto idx = std::views::iota(0, int(_cfg.partitions / _cfg.sstables));
-        auto local_keys = tests::generate_partition_keys(int(_cfg.partitions / _cfg.sstables), s, local_shard_only::yes, tests::key_size{_cfg.key_size, _cfg.key_size});
-        return do_for_each(idx.begin(), idx.end(), [this, local_keys = std::move(local_keys)] (auto iteration) {
-            this->_mt->apply(make_partition(local_keys.at(iteration), 0, 1));
-            return make_ready_future<>();
+        return seastar::async([this] {
+            for_each_local_partition_key(partitions_per_sstable(), [this] (uint64_t, dht::decorated_key dk) {
+                _mt->apply(make_partition(dk, 0, 1));
+            });
         });
     }
 
     // Every layout gives each input sstable partitions_per_sstable() partitions
     // with rows_per_partition rows each, so they all compact the same amount of input.
     future<> prepare_compaction_input() {
-        switch (_cfg.compaction_layout) {
-        case compaction_input_layout::identical:
+        if (_cfg.compaction_layout == compaction_input_layout::identical) {
             return fill_memtable();
-        case compaction_input_layout::interleaved_partitions:
-            _compaction_keys = tests::generate_partition_keys(partitions_per_sstable() * _cfg.sstables, s, local_shard_only::yes, tests::key_size{_cfg.key_size, _cfg.key_size});
-            break;
-        case compaction_input_layout::interleaved_rows:
-            _compaction_keys = tests::generate_partition_keys(partitions_per_sstable(), s, local_shard_only::yes, tests::key_size{_cfg.key_size, _cfg.key_size});
-            break;
         }
         return make_ready_future<>();
     }
