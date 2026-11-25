@@ -25,7 +25,8 @@ EXTENSION = "TABLETS_ROUTING_V1"
 PAYLOAD_KEY = "tablets-routing-v1"
 
 
-# Opens a connection to the server, which negotiates the protocol extension.
+# Opens a connection to the server. It negotiates the protocol extension unless
+# told otherwise.
 @pytest.fixture(scope="module")
 def connect(request, host, scylla_only):
     if request.config.getoption("--ssl"):
@@ -38,8 +39,8 @@ def connect(request, host, scylla_only):
     if int(supported["SCYLLA_NR_SHARDS"][0]) < 2:
         skip_env("The tests need a shard other than the one of the partition")
 
-    def open_connection(version: int = 4):
-        return cql_frames.connection(host, port, {EXTENSION: ""}, version)
+    def open_connection(negotiate: bool = True, version: int = 4):
+        return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {}, version)
     return open_connection
 
 
