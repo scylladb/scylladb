@@ -2887,7 +2887,7 @@ static future<> run_export(
         auto data_object_key = fmt::format("{}data/{}.json.gz", s3_key_prefix, data_file_name);
 
         try {
-            // Create empty _started object
+            // As DynamoDB does, write this empty object first. It shows that the bucket is writable.
             co_await client->put_object(s3_object_name(fmt::format("{}_started", s3_key_prefix)), temporary_buffer<char>(), s3::object_metadata{}, &as);
         }
         catch (const storage_io_error& e) {
@@ -2916,7 +2916,6 @@ static future<> run_export(
         // The time of the next read of the export row in the item callback below. The first item
         // reads it.
         auto next_owner_check = lowres_clock::time_point::min();
-        // Scan the table and feed items through the pipeline
         auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(),
                 [&pipeline, &item_count, &stats, &as, &sdks, &row, &next_owner_check](rjson::value item) -> future<> {
             utils::get_local_injector().inject("alternator_export_to_s3_in_item_handler",

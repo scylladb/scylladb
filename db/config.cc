@@ -1718,10 +1718,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     // (see DynamoDB's documentation for BatchWriteItem command)
     , alternator_max_items_in_batch_write(this, "alternator_max_items_in_batch_write", value_status::Used, 100, "Maximum amount of items in single BatchItemWrite call.")
     , alternator_max_concurrent_exports_per_shard(this, "alternator_max_concurrent_exports_per_shard", liveness::LiveUpdate, value_status::Used, 10,
-        "Maximum number of ExportTableToPointInTime exports running at the same time on a single shard. "
-        "Every running export scans an entire table and holds an S3 multipart upload open for as long as it runs, "
-        "so their number has to be bounded - DynamoDB limits the number of concurrent exports too. "
-        "A request which would exceed the limit is rejected with LimitExceededException and can be retried later.")
+        "The maximum number of exports to S3 (ExportTableToPointInTime) that run at the same time on one shard. "
+        "Each export scans a full table and keeps an S3 multipart upload open. "
+        "A request above the limit gets LimitExceededException. The client can send it again later.")
     , alternator_allow_system_table_write(this, "alternator_allow_system_table_write", liveness::LiveUpdate, value_status::Used,
         false,
         "Allow writing to system tables using the .scylla.alternator.system prefix")

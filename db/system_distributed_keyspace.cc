@@ -826,18 +826,16 @@ static alternator_export_table_helper::client_token_row to_client_token_row(cons
     };
 }
 
-// Runs the conditional (LWT) `query` on the shard that owns partition `key` (a single text
-// partition key) of `table`. On a different shard, LWT returns bounce_to_shard, which
-// execute_internal() does not handle: the result holds no rows, and the `one()` call below then
-// fails with "One row required, 0 found". A reader who removes the `invoke_on()` thus gets that
-// unclear error, not a message about the shard.
-// `make_values` returns the bound values, and runs on the
-// target shard: a data_value holds a data_type, which is a per-shard thread_local shared_ptr,
-// so a data_value must not cross shards. Returns nullopt if the condition was met. If it was not,
-// returns the row that the statement returns together with `[applied]`, converted by
-// `convert_row`, which also runs on the target shard.
-// Only `IF NOT EXISTS` returns all columns of the existing row. With a column condition, the
-// statement returns the columns of that condition only.
+// Runs the conditional (LWT) statement `query` for partition `key` of `table`. `key` is the
+// single text partition key.
+// Result: nullopt if the statement applied. Otherwise, the row that the statement returns
+// with `[applied]`, converted by `convert_row`. `IF NOT EXISTS` returns all columns of the
+// existing row. A column condition returns only the columns of the condition.
+// Shard: the statement must run on the shard that owns `key`. On another shard, LWT returns
+// bounce_to_shard, which execute_internal() does not follow. Then the result has no rows,
+// and `one()` throws "One row required, 0 found".
+// `make_values` returns the bound values. It runs on that shard, because a data_value holds
+// a data_type, which is a shared_ptr of one shard. `convert_row` also runs on that shard.
 template <typename MakeValues, typename ConvertRow>
 requires std::same_as<std::invoke_result_t<MakeValues>, query_data_vector>
 static future<std::optional<std::invoke_result_t<ConvertRow, const cql3::untyped_result_set_row&>>>
@@ -923,7 +921,8 @@ alternator_export_table_helper::insert_client_token(const client_token_row& row)
 
 // Returns the query state for a statement on the export tables:
 // - If `qs` is set, it is the query state of the client request. The statement uses the
-//   tracing and the admission permit of that request.
+//   tracing, the admission permit and the timeouts of that request. These are the CQL
+//   timeouts of the client state, not alternator_timeout_in_ms.
 // - If `qs` is null (for example, in the garbage collector), it is the internal query
 //   state of system_distributed, with 10-second timeouts.
 static service::query_state& export_table_query_state(service::query_state* qs) {
