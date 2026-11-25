@@ -100,6 +100,7 @@ private:
     // that holds the tablet's data.
     future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema,
         const dht::token& token,
+        db::consistency_level cl,
         abort_source& as,
         bool needs_leader,
         const tracing::trace_state_ptr& trace_state);

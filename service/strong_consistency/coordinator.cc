@@ -450,7 +450,8 @@ static std::exception_ptr check_aborted(abort_on_expiry<db::timeout_clock>& aoe,
     return aoe.abort_source().abort_requested_exception_ptr();
 }
 
-auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool needs_leader,
+auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, db::consistency_level cl,
+        abort_source& as, bool needs_leader,
         const tracing::trace_state_ptr& trace_state)
     -> future<value_or_redirect<operation_ctx>>
 {
@@ -496,7 +497,7 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         const auto target = replicas.closest_replica(_gossiper);
         if (!target) {
             return make_exception_future<value_or_redirect<operation_ctx>>(exceptions::unavailable_exception(
-                    format("All replicas of tablet {} are down", replicas.tablet_id()), db::consistency_level::ONE, 1, 0));
+                    format("All replicas of tablet {} are down", replicas.tablet_id()), cl, 1, 0));
         }
         tracing::trace(trace_state, "This shard isn't a serving replica of tablet {} of raft group {}{}, "
                 "redirecting to the closest serving replica {}{}",
@@ -643,7 +644,7 @@ auto coordinator::mutate(schema_ptr schema,
     };
 
     auto op_result_future = co_await coroutine::as_future(
-            create_operation_ctx(*schema, token, aoe.abort_source(), true, trace_state));
+            create_operation_ctx(*schema, token, cl, aoe.abort_source(), true, trace_state));
 
     if (op_result_future.failed()) {
         co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
@@ -879,6 +880,7 @@ auto coordinator::query(schema_ptr schema,
     auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
         *schema,
         ranges[0].start()->value().token(),
+        cl,
         aoe.abort_source(),
         rtype == read_type::linearizable,
         trace_state));
