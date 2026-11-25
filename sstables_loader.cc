@@ -1571,6 +1571,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
+    std::vector<db::snapshot_remote_location_entry> remote_locations;
 
     for (auto& [dc, loc] : locations) {
         auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.location, snap_name, dc, std::move(loc.manifests));
@@ -1582,9 +1583,18 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
         }
         summary.nr_sstables += loc_summary.nr_sstables;
 
-        // TODO: update state when all restored...
-        co_await sth.insert_snapshot_remote_location(snap_name, dc, loc.location.endpoint, loc.location.bucket, loc.location.prefix, db::snapshot_state::remote);
+        remote_locations.push_back(db::snapshot_remote_location_entry{
+            .snapshot_name = snap_name,
+            .datacenter = dc,
+            .endpoint = std::move(loc.location.endpoint),
+            .bucket = std::move(loc.location.bucket),
+            .prefix = std::move(loc.location.prefix),
+            .state = db::snapshot_state::remote,
+        });
     }
+
+    // TODO: update state when all restored...
+    co_await sth.insert_snapshot_remote_locations(remote_locations);
 
     // Persist the schema of the target table in system_distributed.snapshot_tables
     // before the restore task pins the tablet hints, so the original hints survive a

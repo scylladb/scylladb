@@ -899,19 +899,6 @@ future<> snapshot_table_helper::update_sstable_download_status(sstring snapshot_
                                   cql3::query_processor::cache_internal::no);
 }
 
-future<> snapshot_table_helper::insert_snapshot_remote_location(sstring snapshot_name, sstring datacenter, sstring endpoint, sstring bucket, sstring prefix, snapshot_state state, db::consistency_level cl) {
-    co_await insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry>({
-        snapshot_remote_location_entry{
-            .snapshot_name = std::move(snapshot_name),
-            .datacenter = std::move(datacenter),
-            .endpoint = std::move(endpoint),
-            .bucket = std::move(bucket),
-            .prefix = std::move(prefix),
-            .state = state,
-        }
-    }), cl);
-}
-
 future<snapshot_remote_location_entry> snapshot_table_helper::get_snapshot_remote_location(sstring snapshot_name, sstring datacenter, db::consistency_level cl) const {
     static const sstring query = format("SELECT endpoint, bucket, prefix, state FROM {}.{} WHERE snapshot_name = ? AND datacenter = ?", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS);
     auto rs = co_await _qp.execute_internal(query, cl, internal_distributed_query_state(), {snapshot_name, datacenter}, cql3::query_processor::cache_internal::yes);
