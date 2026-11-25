@@ -1472,6 +1472,7 @@ scylla_core = (['message/messaging_service.cc',
                )
 
 api = ['api/api.cc',
+       'api/data_dictionary.cc',
        Json2Code('api/api-doc/storage_service.json'),
        Json2Code('api/api-doc/lsa.json'),
        'api/storage_service.cc',

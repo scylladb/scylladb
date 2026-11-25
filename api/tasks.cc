@@ -12,6 +12,7 @@
 #include <fmt/ranges.h>
 
 #include "api/api.hh"
+#include "api/data_dictionary.hh"
 #include "api/storage_service.hh"
 #include "api/scrub_status.hh"
 #include "api/api-doc/tasks.json.hh"
