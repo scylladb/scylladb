@@ -450,8 +450,10 @@ Exports differ from DynamoDB as follows:
   after the last upload. Only the ExportStatus tells whether an export
   completed. FAILED does not always mean that the export stopped: after a
   restart of gossip, or if its node was unreachable for more than an hour
-  but kept running, the export continues to write. Thus, before the
-  cleanup, deny `s3:PutObject` on
+  but kept running, the export continues to write until it reads its
+  FAILED state. It reads it about once a minute, and before it uploads the
+  manifests, but not while its node cannot reach the other nodes. Thus,
+  before the cleanup, deny `s3:PutObject` on
   `arn:aws:s3:::<bucket>/<key prefix>AWSDynamoDB/<export id>/*` with a
   bucket policy (or restart all nodes, which stops their exports). The key
   prefix is S3Prefix, followed by `/` unless S3Prefix is empty or ends with

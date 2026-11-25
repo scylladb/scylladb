@@ -2811,6 +2811,20 @@ static sstring format_manifest_time(db_clock::time_point tp) {
     return fmt::format("{:%FT%T}.{:03}Z", fmt::gmtime(db_clock::to_time_t(tp)), millis);
 }
 
+// A garbage collector can mark a running export FAILED: after a restart of gossip on its node,
+// or after its node was unreachable for an hour. Then the export must stop, because a FAILED
+// export must not continue to write to the bucket. Thus this reads the export `row` and throws
+// if it is not IN_PROGRESS under this node any more. A failed read does not stop the export: the
+// node may not reach the other nodes, and the garbage collector may not take the row.
+static future<> stop_if_collected(db::system_distributed_keyspace& sdks, const export_row& row) {
+    auto current = co_await coroutine::as_future(get_export(sdks, row.export_arn));
+    if (current.failed()) {
+        xlogger.debug("Export {}: failed to read the export row: {}", row.export_arn, current.get_exception());
+    } else if (auto r = current.get(); !r || r->export_status != "IN_PROGRESS" || r->node_id != row.node_id) {
+        throw std::runtime_error("A garbage collector marked the export FAILED");
+    }
+}
+
 // The fiber of one export. The state is the pair (export_status, node_id) of the export row.
 // The worker changes the row from IN_PROGRESS to COMPLETED or FAILED. The garbage collector
 // changes the row of a dead incarnation from IN_PROGRESS to FAILED. Each write is
@@ -2897,8 +2911,12 @@ static future<> run_export(
         // the bucket. Only an abort aborts the multipart upload.
         auto pipeline = co_await create_sink_pipeline(s3_target_config{ client, s3_object_name(data_object_key), &as }, gzip_compression{});
 
+        // The time of the next read of the export row in the item callback below. The first item
+        // reads it.
+        auto next_owner_check = lowres_clock::time_point::min();
         // Scan the table and feed items through the pipeline
-        auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(), [&pipeline, &item_count, &stats, &as](rjson::value item) -> future<> {
+        auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(),
+                [&pipeline, &item_count, &stats, &as, &sdks, &row, &next_owner_check](rjson::value item) -> future<> {
             utils::get_local_injector().inject("alternator_export_to_s3_in_item_handler",
                     [] { throw std::runtime_error("injected failure alternator_export_to_s3_in_item_handler"); });
             // Stops the export fiber during the scan, so that a test can interrupt a running
@@ -2916,6 +2934,11 @@ static future<> run_export(
                         co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5}, &as);
                     });
 
+            // Read the export row about once a minute, see stop_if_collected().
+            if (lowres_clock::now() >= next_owner_check) {
+                next_owner_check = lowres_clock::now() + std::chrono::minutes(1);
+                co_await stop_if_collected(sdks, row);
+            }
             rjson::value wrapper = rjson::empty_object();
             rjson::add(wrapper, "Item", std::move(item));
             co_await pipeline->process(wrapper);
@@ -2936,6 +2959,10 @@ static future<> run_export(
         row.item_count = item_count;
         // ScyllaDB does not bill exports.
         row.billed_size_bytes = 0;
+
+        // The scan can take hours. Do not upload the manifests of an export that a garbage
+        // collector took during the scan.
+        co_await stop_if_collected(sdks, row);
 
         // Make and upload the manifest files.
         // manifest-files.json - JSON lines, one object for each data file.

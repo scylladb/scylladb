@@ -3001,10 +3001,11 @@ def test_export_error_injection_final_write_retried(dynamodb, scylla_only, rest_
                 assert wait_for_export(client, arn)['ExportStatus'] == 'COMPLETED'
 
 
-# Test that the export fiber does not overwrite its row after a garbage collector took it. The
-# garbage collector of another node takes the export of a node which it cannot reach, and that node
-# can still run the export. The final write of the fiber is conditional, so it does not apply.
-def test_export_fiber_keeps_a_collected_row(dynamodb, cql, scylla_only, rest_api, metrics, s3):
+# Test that the export fiber stops after a garbage collector took its row, and does not overwrite the
+# row. The garbage collector of another node takes the export of a node which it cannot reach, and
+# that node can still run the export. The fiber reads its row during the scan, and stops before it
+# uploads the manifests. Its final write is conditional, so it does not apply.
+def test_export_fiber_stops_after_its_row_was_collected(dynamodb, cql, scylla_only, rest_api, metrics, s3):
     with new_table_s(dynamodb) as table, new_s3_bucket(s3) as bucket:
         # One item, so that the export stops once (see paused_exports()).
         table.put_item(Item={'p': 'item'})
@@ -3021,6 +3022,7 @@ def test_export_fiber_keeps_a_collected_row(dynamodb, cql, scylla_only, rest_api
                 " node_id = %s WHERE export_arn = %s IF export_status = 'IN_PROGRESS'",
                 consistency_level=ConsistencyLevel.ONE), [f'{uuid.uuid4()}:1', export_arn]).one()
             assert applied[0], applied
+            items_before = get_metric(metrics, 'scylla_alternator_s3_exported_items')
             release_paused()
         # The fiber holds its export slot until its final write ends, so the gauge of the running
         # exports goes to 0 after that write.
@@ -3032,6 +3034,11 @@ def test_export_fiber_keeps_a_collected_row(dynamodb, cql, scylla_only, rest_api
         assert desc['ExportStatus'] == 'FAILED', desc
         assert desc['FailureCode'] == 'NodeFailure', desc
         assert 'ExportManifest' not in desc
+        # The export stopped: it did not upload the manifests.
+        keys = [obj['Key'] for obj in s3.list_objects_v2(Bucket=bucket).get('Contents', [])]
+        assert not [key for key in keys if 'manifest' in key], keys
+        # The export stopped at its paused item, before it scanned that item.
+        assert get_metric(metrics, 'scylla_alternator_s3_exported_items') == items_before
 
 
 # ---------------------------------------------------------------------------

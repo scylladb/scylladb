@@ -2388,6 +2388,36 @@ async def test_export_fails_when_the_node_stops(manager: ScyllaClusterManager, o
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_stops_after_a_restart_of_gossip(manager: ScyllaClusterManager, object_storage_factory):
+    """A restart of gossip during an export makes the export FAILED, and the export stops.
+
+    A stop and a start of gossip raise the gossip generation of the node. Then the garbage
+    collector takes the export as one of an earlier incarnation, and marks it FAILED with
+    NodeFailure. The export reads its row again before it uploads the manifests, so it stops
+    before them.
+    """
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory)
+    server = servers[0]
+    await manager.api.client.delete('/storage_service/gossiping', host=server.ip_addr)
+    await manager.api.client.post('/storage_service/gossiping', host=server.ip_addr)
+    # Start a garbage collection round now, not after the periodic timeout.
+    gc_wakeup_injection = 'alternator_export_to_s3_gc_wakeup'
+    await manager.api.enable_injection(server.ip_addr, gc_wakeup_injection, one_shot=False)
+    await manager.api.message_injection(server.ip_addr, gc_wakeup_injection)
+    desc = await describe_finished_export(server, export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'NodeFailure', desc
+    # Release the export, and wait for the end of its fiber.
+    await manager.api.message_injection(server.ip_addr, export_pause_injection)
+    async def export_fiber_ended():
+        metrics = await manager.metrics.query(server.ip_addr)
+        return True if metrics.get('scylla_alternator_s3_exports_running') == 0 else None
+    assert await wait_for(export_fiber_ended, time.time() + 60)
+    keys = export_object_keys(object_storage)
+    assert not [key for key in keys if 'manifest' in key], keys
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_export_refused_until_all_nodes_support_it(manager: ScyllaClusterManager, object_storage_factory):
     """ExportTableToPointInTime is refused in a rolling upgrade, until ALTERNATOR_EXPORT_TO_S3 is enabled.
 
