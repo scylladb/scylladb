@@ -1520,7 +1520,7 @@ future<> sstables_loader::do_restore_tablets(tablet_restore_progress& progress, 
 
 // Every datacenter the table replicates to restores from its own backup location,
 // so the locations must map one-to-one to the replicated-to datacenters.
-static void check_datacenter_coverage(const replica::table& t, const std::vector<tablet_restore_location>& locations) {
+static void check_datacenter_coverage(const replica::table& t, const std::unordered_map<sstring, tablet_restore_location>& locations) {
     auto& rs = t.get_effective_replication_map()->get_replication_strategy();
     const auto* nts = dynamic_cast<const locator::network_topology_strategy*>(&rs);
     if (!nts) {
@@ -1532,11 +1532,8 @@ static void check_datacenter_coverage(const replica::table& t, const std::vector
         | std::ranges::to<std::set<sstring>>();
 
     auto location_dcs = locations
-        | std::views::transform(&tablet_restore_location::datacenter)
+        | std::views::keys
         | std::ranges::to<std::set<sstring>>();
-    if (location_dcs.size() != locations.size()) {
-        throw std::invalid_argument("Duplicate datacenters in backup locations");
-    }
 
     if (location_dcs != replicated_dcs) {
         throw std::invalid_argument(fmt::format("Backup locations datacenters [{}] don't match the datacenters [{}] keyspace {} replicates to",
@@ -1547,20 +1544,20 @@ static void check_datacenter_coverage(const replica::table& t, const std::vector
 // Restore into a table on object storage copies the backup sstables inside the
 // object storage. An object storage can copy an object only inside one endpoint,
 // so every backup location must use the endpoint of the table.
-static void check_endpoints(const replica::table& t, const std::vector<tablet_restore_location>& locations) {
+static void check_endpoints(const replica::table& t, const std::unordered_map<sstring, tablet_restore_location>& locations) {
     auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&t.get_storage_options().value);
     if (!os) {
         return;
     }
-    for (const auto& loc : locations) {
-        if (loc.endpoint != os->endpoint) {
+    for (const auto& [dc, loc] : locations) {
+        if (loc.location.endpoint != os->endpoint) {
             throw std::invalid_argument(fmt::format("Backup location of datacenter '{}' uses endpoint {}, but table {}.{} keeps its sstables on endpoint {}. An object storage cannot copy across endpoints",
-                loc.datacenter, loc.endpoint, t.schema()->ks_name(), t.schema()->cf_name(), os->endpoint));
+                dc, loc.location.endpoint, t.schema()->ks_name(), t.schema()->cf_name(), os->endpoint));
         }
     }
 }
 
-future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
+future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::unordered_map<sstring, tablet_restore_location> locations) {
     if (!_db.local().features().tablet_aware_restore) {
         throw std::runtime_error("Cannot restore tablets. Feature 'TABLET_AWARE_RESTORE' is not available in cluster");
     }
@@ -1575,18 +1572,18 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
 
-    for (auto& loc : locations) {
-        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests));
+    for (auto& [dc, loc] : locations) {
+        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.location.endpoint, loc.location.bucket, loc.location.prefix, snap_name, dc, std::move(loc.manifests));
         if (summary.tablet_count == 0) {
             summary.tablet_count = loc_summary.tablet_count;
         } else if (summary.tablet_count != loc_summary.tablet_count) {
             throw std::runtime_error(fmt::format("Inconsistent tablet_count values across backup locations: expected {}, datacenter '{}' has {}",
-                summary.tablet_count, loc.datacenter, loc_summary.tablet_count));
+                summary.tablet_count, dc, loc_summary.tablet_count));
         }
         summary.nr_sstables += loc_summary.nr_sstables;
 
         // TODO: update state when all restored...
-        co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
+        co_await sth.insert_snapshot_remote_location(snap_name, dc, loc.location.endpoint, loc.location.bucket, loc.location.prefix, db::snapshot_state::remote);
     }
 
     // Persist the schema of the target table in system_distributed.snapshot_tables

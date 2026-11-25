@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <vector>
+#include <unordered_map>
 #include <seastar/core/sharded.hh>
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token.hh"
@@ -17,6 +18,7 @@
 #include "sstables/shared_sstable.hh"
 #include "tasks/task_manager.hh"
 #include "db/consistency_level_type.hh"
+#include "db/snapshot_types.hh"
 #include "locator/tablets.hh"
 #include "service/topology_guard.hh"
 #include "utils/assert.hh"
@@ -52,13 +54,11 @@ class tablet_metadata_guard;
 }
 
 // A single backup location for tablet-aware restore: where in the object
-// storage the sstables of one datacenter's backup live, and the datacenter
-// of the restored cluster they are to be loaded into.
+// storage the sstables of one datacenter's backup live. The datacenter
+// of the restored cluster they are to be loaded into is the key in the
+// map of locations.
 struct tablet_restore_location {
-    sstring datacenter;
-    sstring endpoint;
-    sstring bucket;
-    sstring prefix;
+    db::snapshot_dc_location location;
     utils::chunked_vector<sstring> manifests;
 };
 
@@ -177,7 +177,7 @@ public:
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
 
     // Takes one backup location per datacenter the keyspace replicates to.
-    future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations);
+    future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, std::unordered_map<sstring, tablet_restore_location> locations);
 
     replica::database& local_db() {
         return _db.local();

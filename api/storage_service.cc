@@ -468,7 +468,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             return sstring(rjson::to_string_view(location[name]));
         };
 
-        std::vector<tablet_restore_location> restore_locations;
+        std::unordered_map<sstring, tablet_restore_location> restore_locations;
         for (const auto& location : parsed.GetArray()) {
             if (!location.IsObject()) {
                 throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
@@ -494,13 +494,17 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
                         keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
 
-            restore_locations.push_back(tablet_restore_location{
-                .datacenter = std::move(dc),
-                .endpoint = std::move(endpoint),
-                .bucket = std::move(bucket),
-                .prefix = sstring(prefix),
+            auto [_, inserted] = restore_locations.emplace(std::move(dc), tablet_restore_location{
+                .location = db::snapshot_dc_location{
+                    .endpoint = std::move(endpoint),
+                    .bucket = std::move(bucket),
+                    .prefix = std::string(prefix),
+                },
                 .manifests = std::move(manifests),
             });
+            if (!inserted) {
+                throw httpd::bad_param_exception("Duplicate datacenters in backup locations");
+            }
         }
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
