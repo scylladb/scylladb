@@ -10,11 +10,14 @@
 // reads and writes, and of the execution engine of ImportTable (alternator/import.cc): ImportTable
 // runs the import in the background, and these tests check its result - the import row in
 // system_distributed.alternator_import_from_s3_imports, the target table and its items. The source
-// of the imports is in memory (make_in_memory_import_source()), so the tests need no S3.
+// of the imports is in memory (make_in_memory_import_source()), so the tests need no S3, except those
+// of make_s3_import_source(), which run against the S3 server which test.py starts.
 
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/error_injection.hh"
+#include "test/lib/s3_fixture.hh"
+#include "test/lib/test_utils.hh"
 
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
@@ -37,13 +40,16 @@
 #include "utils/error_injection.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/rjson.hh"
+#include "utils/s3/client.hh"
 #include "utils/UUID_gen.hh"
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/testing/test_fixture.hh>
 #include <seastar/util/defer.hh>
 
 #include <atomic>
@@ -55,6 +61,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 #include <zlib.h>
 
 namespace {
@@ -1088,6 +1095,244 @@ SEASTAR_TEST_CASE(test_import_refuses_invalid_utf8) {
         rjson::replace_with_string_name(rjson::get(invalid_bucket, "S3BucketSource"), "S3Bucket", rjson::from_string("bucket-\xff"));
         require_refused(std::move(invalid_bucket));
         BOOST_REQUIRE(!db::alternator_import_table_helper(e.qp().local()).get_client_token("token-invalid-bucket").get());
+    });
+}
+
+// --- Tests of make_s3_import_source(), against the S3 server which test.py starts ---
+
+namespace {
+
+shared_ptr<s3::client> make_test_s3_client() {
+    s3::endpoint_config cfg = {
+        .port = static_cast<unsigned>(std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST"))),
+        .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
+        .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
+    };
+    return s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+}
+
+// The bucket of the test, which s3_fixture creates and drops with its objects.
+sstring test_s3_bucket() {
+    return tests::getenv_safe("S3_BUCKET_FOR_TEST");
+}
+
+// Runs `f` with a client of its own, closed before this returns: s3_fixture's client must be the only
+// one on the endpoint when it drops the bucket, as a second client on the same endpoint and shard
+// fails to register its metrics.
+void with_test_s3_client(std::function<void(shared_ptr<s3::client>)> f) {
+    auto client = make_test_s3_client();
+    auto close_client = defer([&] noexcept { client->close().get(); });
+    f(client);
+}
+
+// Puts the objects {key, content} into the bucket of the test.
+void put_test_s3_objects(s3::client& client, const std::vector<std::pair<sstring, std::string>>& objects) {
+    parallel_for_each(objects, [&client] (const std::pair<sstring, std::string>& object) {
+        return client.put_object(seastar::format("/{}/{}", test_s3_bucket(), object.first),
+                temporary_buffer<char>(object.second.data(), object.second.size()));
+    }).get();
+}
+
+// Makes the imports run on this shard read `bucket` through `client`, under the S3KeyPrefix of the
+// request.
+void set_s3_source(alternator_test_executor& exec, shared_ptr<s3::client> client, sstring bucket) {
+    exec.set_source_factory_on_this_shard([client, bucket] (sstring, sstring s3_key_prefix, abort_source& as) {
+        return make_ready_future<std::unique_ptr<alternator::import_source>>(
+                alternator::make_s3_import_source(client, bucket, std::move(s3_key_prefix), as));
+    });
+}
+
+rjson::value make_s3_import_table_request(std::string_view table_name, std::string_view client_token, std::string_view s3_key_prefix) {
+    auto request = make_import_table_request(table_name, client_token);
+    rjson::replace_with_string_name(rjson::get(request, "S3BucketSource"), "S3KeyPrefix", rjson::from_string(s3_key_prefix));
+    return request;
+}
+
+// Lists the objects of `source`, as {key, size}.
+std::vector<std::pair<sstring, uint64_t>> list_import_source(alternator::import_source& source) {
+    std::vector<std::pair<sstring, uint64_t>> objects;
+    while (auto object = source.next_object().get()) {
+        objects.emplace_back(object->key, object->size);
+    }
+    return objects;
+}
+
+} // anonymous namespace
+
+// An import reads every object whose key starts with the prefix, also those under a deeper
+// "directory" and one whose key has characters which the request has to encode, and skips an
+// empty object and blank lines, also those of CRLF line ends. Objects whose keys do not start with the prefix are not read, also one whose key
+// starts with the prefix's "directory" name.
+SEASTAR_TEST_CASE(test_import_s3_prefix, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        with_test_s3_client([&] (shared_ptr<s3::client> client) {
+            const std::string first = item_line("a", 1, "x") + item_line("a", 2, "y");
+            const std::string deeper = "\r\n" + item_line("b", 1, "z") + " \t\n";
+            const std::string special = item_line("c", 1, "w");
+            put_test_s3_objects(*client, {
+                {"import/00000.json", first},
+                {"import/deeper/00001.json", deeper},
+                {"import/empty.json", ""},
+                {"import/it's (1)+%41 zażółć.json", special},
+                {"import-other/00000.json", item_line("outside", 1, "v")},
+                {"impor.json", item_line("outside", 2, "v")},
+            });
+            set_s3_source(exec, client, test_s3_bucket());
+
+            auto response = exec.import_table_successfully(make_s3_import_table_request("s3_prefix", "token-s3-prefix", "import/"));
+            auto row = wait_for_import(e, response);
+            BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+            BOOST_REQUIRE_EQUAL(row.processed_item_count, 4);
+            BOOST_REQUIRE_EQUAL(row.imported_item_count, 4);
+            BOOST_REQUIRE_EQUAL(row.error_count, 0);
+            BOOST_REQUIRE_EQUAL(row.processed_size_bytes.value_or(-1), int64_t(first.size() + deeper.size() + special.size()));
+            BOOST_REQUIRE_EQUAL(exec.get_item_v("s3_prefix", "a", "1"), "x");
+            BOOST_REQUIRE_EQUAL(exec.get_item_v("s3_prefix", "a", "2"), "y");
+            BOOST_REQUIRE_EQUAL(exec.get_item_v("s3_prefix", "b", "1"), "z");
+            BOOST_REQUIRE_EQUAL(exec.get_item_v("s3_prefix", "c", "1"), "w");
+            BOOST_REQUIRE(!exec.get_item("s3_prefix", "outside", "1"));
+            BOOST_REQUIRE(!exec.get_item("s3_prefix", "outside", "2"));
+        });
+    });
+}
+
+// An import reads the objects of more than one page of the listing.
+SEASTAR_TEST_CASE(test_import_s3_more_than_one_listing_page, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        with_test_s3_client([&] (shared_ptr<s3::client> client) {
+            // make_s3_import_source() lists 100 objects per page.
+            constexpr int object_count = 101;
+            std::vector<std::pair<sstring, std::string>> objects;
+            for (int i = 0; i < object_count; ++i) {
+                objects.emplace_back(seastar::format("import/{:05}.json", i), item_line("p", i, "v"));
+            }
+            put_test_s3_objects(*client, objects);
+            set_s3_source(exec, client, test_s3_bucket());
+
+            auto response = exec.import_table_successfully(make_s3_import_table_request("s3_pages", "token-s3-pages", "import/"));
+            auto row = wait_for_import(e, response);
+            BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+            BOOST_REQUIRE_EQUAL(row.imported_item_count, object_count);
+            BOOST_REQUIRE(exec.get_item("s3_pages", "p", "0"));
+            BOOST_REQUIRE(exec.get_item("s3_pages", "p", fmt::format("{}", object_count - 1)));
+        });
+    });
+}
+
+// Objects which are not item data, such as the manifest of an export, are read as data, as in
+// DynamoDB: each counts as an error, and the others are imported. Also with GZIP, where a zero-length
+// object is not a gzip stream, but holds no items.
+SEASTAR_TEST_CASE(test_import_s3_invalid_objects, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        with_test_s3_client([&] (shared_ptr<s3::client> client) {
+            put_test_s3_objects(*client, {
+                {"plain/00000.json", item_line("plain", 1, "v")},
+                {"plain/manifest-summary.json", R"({"version": "2020-06-30", "itemCount": 1})" "\n"},
+                {"plain/manifest-summary.md5", "0123456789abcdef\n"},
+                {"gzip/00000.json.gz", gzip_compress(item_line("gzip", 1, "v"))},
+                {"gzip/00001.json.gz", ""},
+                {"gzip/manifest-files.json", R"({"itemCount": 1})" "\n"},
+            });
+            set_s3_source(exec, client, test_s3_bucket());
+
+            auto response = exec.import_table_successfully(make_s3_import_table_request("s3_invalid_plain", "token-s3-invalid-plain", "plain/"));
+            auto row = wait_for_import(e, response);
+            BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+            BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ItemValidationError");
+            BOOST_REQUIRE_EQUAL(row.imported_item_count, 1);
+            BOOST_REQUIRE_EQUAL(row.error_count, 2);
+            BOOST_REQUIRE(exec.get_item("s3_invalid_plain", "plain", "1"));
+
+            auto request = make_s3_import_table_request("s3_invalid_gzip", "token-s3-invalid-gzip", "gzip/");
+            rjson::add(request, "InputCompressionType", rjson::from_string("GZIP"));
+            row = wait_for_import(e, exec.import_table_successfully(std::move(request)));
+            BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+            BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ItemValidationError");
+            BOOST_REQUIRE_EQUAL(row.imported_item_count, 1);
+            BOOST_REQUIRE_EQUAL(row.error_count, 1);
+            BOOST_REQUIRE(exec.get_item("s3_invalid_gzip", "gzip", "1"));
+        });
+    });
+}
+
+// An import of a bucket which does not exist fails with S3NoSuchBucket, as in DynamoDB, and leaves no
+// table.
+SEASTAR_TEST_CASE(test_import_s3_missing_bucket, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        with_test_s3_client([&] (shared_ptr<s3::client> client) {
+            set_s3_source(exec, client, seastar::format("no-such-bucket-{}", ::getpid()));
+            auto response = exec.import_table_successfully(make_s3_import_table_request("s3_missing_bucket", "token-s3-missing-bucket", "import/"));
+            auto row = wait_for_import(e, response);
+            BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+            BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "S3NoSuchBucket");
+            BOOST_REQUIRE(std::holds_alternative<alternator::api_error>(exec.describe_table("s3_missing_bucket")));
+        });
+    });
+}
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+// An import whose listing fails otherwise, e.g. because access is denied, fails with S3AccessError,
+// and leaves no table.
+SEASTAR_TEST_CASE(test_import_s3_access_error, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        with_test_s3_client([&] (shared_ptr<s3::client> client) {
+            set_s3_source(exec, client, test_s3_bucket());
+            // Fails every S3 request with HTTP 401, until the end of the scope - before s3_fixture drops the bucket.
+            scoped_error_injection fail_authorization("s3_client_fail_authorization");
+            auto response = exec.import_table_successfully(make_s3_import_table_request("s3_access_error", "token-s3-access-error", "import/"));
+            auto row = wait_for_import(e, response);
+            BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+            BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "S3AccessError");
+            BOOST_REQUIRE(std::holds_alternative<alternator::api_error>(exec.describe_table("s3_access_error")));
+        });
+    });
+}
+#endif // SCYLLA_ENABLE_ERROR_INJECTION
+
+// The source lists every object whose key starts with the prefix - which is not a directory - with
+// its size; with an empty prefix, every object of the bucket. A prefix which matches no object
+// lists nothing.
+SEASTAR_TEST_CASE(test_s3_import_source_lists_the_prefix, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return seastar::async([] {
+        with_test_s3_client([] (shared_ptr<s3::client> client) {
+            put_test_s3_objects(*client, {
+                {"data/exp.json", "1"},
+                {"data/export-1/00000.json", "22"},
+                {"data/other.json", "333"},
+            });
+            auto list = [&] (sstring prefix) {
+                abort_source as;
+                auto source = alternator::make_s3_import_source(client, test_s3_bucket(), std::move(prefix), as);
+                auto close_source = defer([&] noexcept { source->close().get(); });
+                return list_import_source(*source);
+            };
+            using objects = std::vector<std::pair<sstring, uint64_t>>;
+            BOOST_REQUIRE(list("data/exp") == (objects{{"data/exp.json", 1}, {"data/export-1/00000.json", 2}}));
+            BOOST_REQUIRE(list("") == (objects{{"data/exp.json", 1}, {"data/export-1/00000.json", 2}, {"data/other.json", 3}}));
+            BOOST_REQUIRE(list("nothing/").empty());
+        });
+    });
+}
+
+// An aborted listing fails with the exception of the abort - which the import reports as its
+// interruption - and not with an import_failure.
+SEASTAR_TEST_CASE(test_s3_import_source_abort, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return seastar::async([] {
+        with_test_s3_client([] (shared_ptr<s3::client> client) {
+            put_test_s3_objects(*client, {{"data/00000.json", item_line("a", 1, "x")}});
+            abort_source as;
+            auto source = alternator::make_s3_import_source(client, test_s3_bucket(), "data/", as);
+            auto close_source = defer([&] noexcept { source->close().get(); });
+            as.request_abort();
+            BOOST_REQUIRE_THROW(source->next_object().get(), abort_requested_exception);
+        });
     });
 }
 

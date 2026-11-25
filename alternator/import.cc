@@ -44,8 +44,10 @@
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/rjson.hh"
+#include "utils/s3/client.hh"
 #include "utils/utf8.hh"
 
 namespace alternator {
@@ -72,6 +74,9 @@ static constexpr std::string_view failure_write_failed = "WriteFailed";
 static constexpr std::string_view failure_import_interrupted = "ImportInterrupted";
 static constexpr std::string_view failure_internal_error = "InternalError";
 static constexpr std::string_view failure_not_implemented = "NotImplemented";
+// The FailureCode of DynamoDB for a bucket which does not exist.
+static constexpr std::string_view failure_s3_no_such_bucket = "S3NoSuchBucket";
+static constexpr std::string_view failure_s3_access_error = "S3AccessError";
 
 static bool is_terminal_status(std::string_view status) {
     return status == import_status_completed || status == import_status_failed;
@@ -529,6 +534,65 @@ public:
     }
 };
 
+class s3_import_source : public import_source {
+    shared_ptr<s3::client> _client;
+    sstring _bucket;
+    sstring _prefix;
+    abort_source& _as;
+    s3::client::bucket_lister _lister;
+
+    [[noreturn]] void rethrow_listing_failure(std::exception_ptr ex) {
+        // run() reports an abort as the interruption of the import only if it is not an
+        // import_failure.
+        _as.check();
+        try {
+            std::rethrow_exception(std::move(ex));
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const storage_io_error& e) {
+            // A listing of an existing bucket finds no object rather than failing with ENOENT.
+            if (e.code().value() == ENOENT) {
+                throw import_failure(std::string(failure_s3_no_such_bucket), fmt::format("The S3 bucket {} does not exist: {}", _bucket, e.what()));
+            }
+            throw import_failure(std::string(failure_s3_access_error), fmt::format("Failed to list the objects of the S3 bucket {} under the prefix '{}': {}",
+                    _bucket, _prefix, e.what()));
+        } catch (...) {
+            throw import_failure(std::string(failure_s3_access_error), fmt::format("Failed to list the objects of the S3 bucket {} under the prefix '{}': {}",
+                    _bucket, _prefix, std::current_exception()));
+        }
+    }
+public:
+    s3_import_source(shared_ptr<s3::client> client, sstring bucket, sstring prefix, abort_source& as)
+        : _client(client)
+        , _bucket(bucket)
+        , _prefix(prefix)
+        , _as(as)
+        , _lister(std::move(client), std::move(bucket), std::move(prefix), 100, 512 / sizeof(std::optional<s3::client::bucket_lister::entry>), &as)
+    {}
+    future<std::optional<import_source_object>> next_object() override {
+        std::optional<s3::client::bucket_lister::entry> entry;
+        try {
+            entry = co_await _lister.get_entry();
+        } catch (...) {
+            rethrow_listing_failure(std::current_exception());
+        }
+        if (!entry) {
+            co_return std::nullopt;
+        }
+        // The lister names an object by what follows the prefix in its key.
+        co_return import_source_object{ .key = _prefix + entry->name, .size = entry->size };
+    }
+    future<std::unique_ptr<import_pipeline_interface>> open(const import_source_object& object,
+            std::function<future<>(rjson::value)> on_item, compression_type compression) override {
+        // The key goes into the request as it is: the client URI-encodes the path of a request.
+        return create_source_pipeline(s3_target_config{ .client = _client, .object_name = seastar::format("/{}/{}", _bucket, object.key), .as = &_as },
+                std::move(on_item), compression);
+    }
+    future<> close() override {
+        return _lister.close();
+    }
+};
+
 } // anonymous namespace
 
 std::unique_ptr<import_source> make_in_memory_import_source(
@@ -536,13 +600,19 @@ std::unique_ptr<import_source> make_in_memory_import_source(
     return std::make_unique<in_memory_import_source>(std::move(objects));
 }
 
-// The source of the imports until reading S3 is implemented: it fails every import before it
-// creates the table.
-// FIXME: list the objects under the prefix with s3::client::bucket_lister, and read each of them
-// with create_source_pipeline() and s3_target_config (SCYLLADB-4047).
-static future<std::unique_ptr<import_source>> make_s3_import_source(sstring, sstring, abort_source&) {
+std::unique_ptr<import_source> make_s3_import_source(shared_ptr<s3::client> client, sstring s3_bucket, sstring s3_key_prefix,
+        abort_source& as) {
+    return std::make_unique<s3_import_source>(std::move(client), std::move(s3_bucket), std::move(s3_key_prefix), as);
+}
+
+// The source of the imports until S3Bucket can be mapped to one of the configured S3 endpoints: it
+// fails every import before it creates the table. The export needs the same mapping, which is not
+// settled yet.
+// FIXME: get the client of the endpoint of the bucket, as the export does once #32045 is merged (the
+// only S3 endpoint of object_storage_endpoints), and read the bucket with make_s3_import_source().
+static future<std::unique_ptr<import_source>> make_default_import_source(sstring, sstring, abort_source&) {
     return make_exception_future<std::unique_ptr<import_source>>(import_failure(std::string(failure_not_implemented),
-            "Reading the source of an import from S3 is not implemented yet."));
+            "Reading the source of an import from S3 is not implemented yet: an S3 bucket cannot be mapped to an S3 endpoint."));
 }
 
 // --- The import itself ---
@@ -1366,7 +1436,7 @@ public:
 
 executor::s3_imports::s3_imports(executor& e)
     : _e(e)
-    , _source_factory(make_s3_import_source)
+    , _source_factory(make_default_import_source)
 {}
 
 // Reads the live configuration on each call. If the limit decreases below the number of running

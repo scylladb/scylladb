@@ -27,6 +27,7 @@
 #include "utils/rjson.hh"
 
 namespace db { struct alternator_import_row; }
+namespace s3 { class client; }
 
 namespace alternator {
 
@@ -112,6 +113,15 @@ using import_source_factory = std::function<future<std::unique_ptr<import_source
 std::unique_ptr<import_source> make_in_memory_import_source(
         std::vector<std::pair<sstring, std::shared_ptr<in_memory_test_storage>>> objects);
 
+// A source over the objects of `s3_bucket` whose keys start with `s3_key_prefix` - with an empty
+// prefix, all objects of the bucket - read through `client`, in the order in which S3 lists them.
+// The objects are listed while they are read, so the listing is never held whole. A listing which
+// fails fails next_object() with import_failure: S3NoSuchBucket for a bucket which does not exist,
+// S3AccessError otherwise. An abort of `as` stops the listing and the reading of an object, and
+// fails them with the exception of the abort. `as` must outlive the source.
+std::unique_ptr<import_source> make_s3_import_source(shared_ptr<s3::client> client, sstring s3_bucket, sstring s3_key_prefix,
+        abort_source& as);
+
 // Fails an import with the FailureCode `code` and the FailureMessage what().
 class import_failure : public std::runtime_error {
     std::string _code;
@@ -196,7 +206,7 @@ public:
     // events, until stop(). executor::start() starts it on shard 0 of each node.
     future<> run_garbage_collector();
     // Replaces the source of the imports which start after the call. For tests: the default
-    // source does not read S3 yet.
+    // source cannot map S3Bucket to an S3 endpoint yet, see make_s3_import_source().
     void set_source_factory(import_source_factory factory) { _source_factory = std::move(factory); }
     // Aborts the fibers above and waits for them to finish.
     future<> stop();
