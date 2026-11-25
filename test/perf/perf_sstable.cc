@@ -34,9 +34,9 @@ future<> test_write(sharded<perf_sstable_test_env>& dt) {
 future<> test_compaction(sharded<perf_sstable_test_env>& dt) {
     return seastar::async([&dt] {
         dt.invoke_on_all([] (perf_sstable_test_env &t) {
-            return t.fill_memtable();
+            return t.prepare_compaction_input();
         }).then([&dt] {
-            return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::compaction);
+            return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::compaction, "input rows");
         }).get();
     });
 }
@@ -97,6 +97,12 @@ std::ostream& operator<<(std::ostream& os, test_modes mode) {
     SCYLLA_ASSERT(false && "unreachable");
 }
 
+static const std::unordered_map<sstring, compaction_input_layout> compaction_input_layouts = {
+    {"identical", compaction_input_layout::identical},
+    {"interleaved-partitions", compaction_input_layout::interleaved_partitions},
+    {"interleaved-rows", compaction_input_layout::interleaved_rows},
+};
+
 namespace perf {
 
 int scylla_sstable_main(int argc, char** argv) {
@@ -115,7 +121,11 @@ int scylla_sstable_main(int argc, char** argv) {
         ("testdir", bpo::value<sstring>()->default_value("/var/lib/scylla/perf-tests"), "directory in which to store the sstables")
         ("compaction-strategy", bpo::value<sstring>()->default_value("IncrementalCompactionStrategy"), "compaction strategy to use, one of "
              "(IncrementalCompactionStrategy, LeveledCompactionStrategy, TimeWindowCompactionStrategy)")
-        ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]");
+        ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]")
+        ("rows-per-partition", bpo::value<unsigned>()->default_value(1), "number of rows per partition (in each sstable, for compaction mode)")
+        ("compaction-input-layout", bpo::value<sstring>()->default_value("identical"), "how the input sstables of compaction mode share data, one of: "
+             "identical (all sstables hold the same data), interleaved-partitions (each sstable holds its own partitions), "
+             "interleaved-rows (each sstable holds its own rows of every partition)");
 
     return app.run(argc, argv, [&app] {
         return async([&app] {
@@ -140,6 +150,16 @@ int scylla_sstable_main(int argc, char** argv) {
             }
             cfg.compaction_strategy = compaction::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
             cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
+            cfg.rows_per_partition = app.configuration()["rows-per-partition"].as<unsigned>();
+            if (cfg.rows_per_partition == 0) {
+                throw boost::program_options::invalid_option_value("rows-per-partition must be positive");
+            }
+            auto layout_name = app.configuration()["compaction-input-layout"].as<sstring>();
+            auto layout = compaction_input_layouts.find(layout_name);
+            if (layout == compaction_input_layouts.end()) {
+                throw boost::program_options::invalid_option_value(layout_name);
+            }
+            cfg.compaction_layout = layout->second;
             auto scf = make_sstable_compressor_factory_for_tests_in_thread();
             test.start(std::move(cfg), std::ref(*scf)).get();
             auto stop_test = deferred_stop(test);
