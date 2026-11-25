@@ -75,7 +75,7 @@ future<> set_server_init(http_context& ctx) {
                 "The system related API");
         rb02->add_definitions_file(r, "metrics");
         rb02->add_definitions_file(r, "client_routes");
-        set_system(ctx, r);
+        set_system(r);
         rb->register_function(r, "error_injection",
             "The error injection API");
         set_error_injection(ctx, r);

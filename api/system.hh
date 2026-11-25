@@ -14,7 +14,6 @@ class routes;
 
 namespace api {
 
-struct http_context;
-void set_system(http_context& ctx, seastar::httpd::routes& r);
+void set_system(seastar::httpd::routes& r);
 
 }
