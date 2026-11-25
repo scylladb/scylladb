@@ -213,3 +213,93 @@ def test_requests_aborted(cql, hybrid_table, vector_store_mock):
 
     # The aborted call is counted when it unwinds, which may be after the query has returned.
     assert wait_for(lambda: requests_metric(cql, "ann", "aborted") == before + 1), "ann not counted as aborted"
+
+
+###############################################################################
+# Per-endpoint metrics, which show a broken Vector Store node even while the
+# failover to another one keeps the queries working:
+#   - scylla_vector_store_endpoint_requests{role, endpoint, ip, status}: one
+#     increment per attempt to one resolved address of an endpoint, with the
+#     same statuses as the per-call counter, taken from the HTTP exchange;
+#   - scylla_vector_store_endpoint_addresses{role, endpoint}: the number of
+#     addresses resolved for the endpoint, 0 when its host does not resolve.
+###############################################################################
+
+def endpoint_requests_metric(cql, endpoint, ip, status, role="primary"):
+    return ScyllaMetrics.query(cql).get("scylla_vector_store_endpoint_requests",
+                                        {"role": role, "endpoint": endpoint, "ip": ip, "status": status}) or 0
+
+
+def endpoint_addresses_metric(cql, endpoint, role="primary"):
+    return ScyllaMetrics.query(cql).get("scylla_vector_store_endpoint_addresses", {"role": role, "endpoint": endpoint})
+
+
+def test_endpoint_failover_counted(cql, vector_table, vector_store_mock):
+    """With a dead primary and a working secondary the query succeeds, and the dead endpoint is counted as
+    unavailable. The client tries the primary endpoints before the secondary ones, so one query reaches both."""
+    host = cql.hosts[0].endpoint.address
+    good = f"{host}:{vector_store_mock.port}"
+    dead = f"{host}:{closed_port(host)}"
+    vector_store_mock.set_next_ann_response(200, ann_response(5))
+
+    with config_value_context(cql, "vector_store_primary_uri", f"http://{dead}"), \
+         config_value_context(cql, "vector_store_secondary_uri", f"http://{good}"):
+        assert wait_for(lambda: endpoint_addresses_metric(cql, dead) == 1), "the dead endpoint did not resolve"
+        assert wait_for(lambda: endpoint_addresses_metric(cql, good, role="secondary") == 1), "the mock endpoint did not resolve"
+        dead_unavailable_before = endpoint_requests_metric(cql, dead, host, "unavailable")
+        good_ok_before = endpoint_requests_metric(cql, good, host, "ok", role="secondary")
+        ok_before = requests_metric(cql, "ann", "ok")
+        unavailable_before = requests_metric(cql, "ann", "unavailable")
+
+        cql.execute(ann_query(vector_table))
+
+        # The dead endpoint is tried once per retry round, so the exact count depends on the retry policy.
+        assert endpoint_requests_metric(cql, dead, host, "unavailable") > dead_unavailable_before
+        assert endpoint_requests_metric(cql, dead, host, "ok") == 0
+        assert endpoint_requests_metric(cql, good, host, "ok", role="secondary") == good_ok_before + 1
+        # The failover hides the dead endpoint from the per-call counter.
+        assert requests_metric(cql, "ann", "ok") == ok_before + 1
+        assert requests_metric(cql, "ann", "unavailable") == unavailable_before
+
+
+@pytest.mark.parametrize("status,body,want_call,want_endpoint,match", [
+    (HTTPStatus.NOT_FOUND, '"index not found"', "rejected", "rejected", "404"),
+    (HTTPStatus.SERVICE_UNAVAILABLE, '{"reason":"INDEX_BUILDING"}', "not_ready", "not_ready", "503"),
+    (HTTPStatus.INTERNAL_SERVER_ERROR, '"boom"', "error", "error", "500"),
+    # The endpoint status is that of the HTTP exchange: a 200 the client cannot parse is ok for the
+    # endpoint and an error for the call.
+    (HTTPStatus.OK, '{"primary_keys1":{}}', "error", "ok", "invalid JSON"),
+])
+def test_endpoint_reply_counted(cql, vector_table, vector_store_mock, status, body, want_call, want_endpoint, match):
+    """Each reply of an endpoint is counted under the status of its HTTP exchange."""
+    host = cql.hosts[0].endpoint.address
+    good = f"{host}:{vector_store_mock.port}"
+    vector_store_mock.set_next_ann_response(status, body)
+    before = endpoint_requests_metric(cql, good, host, want_endpoint)
+
+    assert_counted(cql, "ann", want_call, ann_query(vector_table), match=match)
+
+    assert endpoint_requests_metric(cql, good, host, want_endpoint) == before + 1, f"endpoint not counted as {want_endpoint}"
+
+
+def test_endpoint_series_follow_uris(cql, vector_store_mock):
+    """Each resolved address has its own attempt series, with every status from the start. A host that does not
+    resolve has only its address gauge, at 0. A removed URI loses its series."""
+    host = cql.hosts[0].endpoint.address
+    good = f"{host}:{vector_store_mock.port}"
+    unresolved = "vector-store.invalid:6080"
+
+    with config_value_context(cql, "vector_store_primary_uri", f"http://{good},http://{unresolved}"):
+        # The gauge of the new URI shows the config was applied; the series of `good` may still wait
+        # for the first DNS refresh when this test runs alone.
+        assert wait_for(lambda: endpoint_addresses_metric(cql, unresolved) == 0), "the new URI has no gauge"
+        assert wait_for(lambda: ScyllaMetrics.query(cql).label_values("scylla_vector_store_endpoint_requests", "endpoint") == {good}), \
+            "the mock endpoint has no request series"
+
+        metrics = ScyllaMetrics.query(cql)
+
+        assert metrics.label_values("scylla_vector_store_endpoint_requests", "ip") == {host}
+        assert metrics.label_values("scylla_vector_store_endpoint_requests", "status") == ALL_STATUSES
+        assert endpoint_addresses_metric(cql, good) == 1
+
+    assert wait_for(lambda: endpoint_addresses_metric(cql, unresolved) is None), "the removed URI kept its gauge"

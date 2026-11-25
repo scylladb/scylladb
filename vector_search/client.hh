@@ -11,8 +11,10 @@
 #include "error.hh"
 #include "utils/log.hh"
 #include "utils/updateable_value.hh"
+#include <array>
 #include <chrono>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/http/client.hh>
@@ -26,7 +28,7 @@
 namespace vector_search {
 
 /// Outcome of a request to the Vector Store, exported as the `status` label of the
-/// requests metric. Each value says who has to act.
+/// requests and endpoint_requests metrics. Each value says who has to act.
 enum class request_status {
     ok,          ///< 2xx: nobody.
     rejected,    ///< 400, 404 or 422, the query or the index is wrong: the user.
@@ -58,6 +60,9 @@ public:
     using request_error = std::variant<aborted_error, service_unavailable_error>;
     using request_result = std::expected<response, request_error>;
 
+    /// The number of attempts to the address of this client, by request_status.
+    using attempt_counters = std::array<uint64_t, size_t(request_status::num_statuses)>;
+
     explicit client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,
             ::shared_ptr<seastar::tls::certificate_credentials> credentials);
 
@@ -72,6 +77,17 @@ public:
 
     bool is_up() const {
         return !is_checking_status_in_progress();
+    }
+
+    /// Where record_attempt() counts. Set by `clients`, which exports the counters.
+    void set_attempt_counters(seastar::lw_shared_ptr<attempt_counters> counters) {
+        _attempts = std::move(counters);
+    }
+
+    void record_attempt(request_status status) {
+        if (_attempts) {
+            ++(*_attempts)[size_t(status)];
+        }
     }
 
 private:
@@ -89,6 +105,7 @@ private:
     seastar::abort_source _as;
     logging::logger& _logger;
     utils::updateable_value<uint32_t> _unreachable_node_detection_time_in_ms;
+    seastar::lw_shared_ptr<attempt_counters> _attempts;
 };
 
 } // namespace vector_search
