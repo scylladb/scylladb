@@ -352,6 +352,10 @@ public:
         return _serving.find_replica(host);
     }
 
+    size_t quorum() const {
+        return raft::configuration::voter_count(expected_raft_config(_tablet_info, _trinfo)) / 2 + 1;
+    }
+
     // The live replica the request may be served by that is closest to this node,
     // preferring the same rack. Nullopt if none is alive: there is no node worth
     // forwarding to.
@@ -496,8 +500,9 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         }
         const auto target = replicas.closest_replica(_gossiper);
         if (!target) {
+            const int32_t required = needs_leader ? replicas.quorum() : 1;
             return make_exception_future<value_or_redirect<operation_ctx>>(exceptions::unavailable_exception(
-                    format("All replicas of tablet {} are down", replicas.tablet_id()), cl, 1, 0));
+                    format("All replicas of tablet {} are down", replicas.tablet_id()), cl, required, 0));
         }
         tracing::trace(trace_state, "This shard isn't a serving replica of tablet {} of raft group {}{}, "
                 "redirecting to the closest serving replica {}{}",
