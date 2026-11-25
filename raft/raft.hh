@@ -390,16 +390,14 @@ struct append_reply {
     // as a heartbeat.
     index_t commit_idx;
     std::variant<rejected, accepted> result;
-    // LeaseGuard: true if this node's bounded clock was usable as of its last
-    // tick, i.e. it could hold a lease and serve local reads were it the leader.
-    // Lets a leader whose own clock has failed hand leadership to a node that
-    // can still use leases, rather than lead a group that has silently lost
-    // them.
+    // True if this node would take the leadership: it has not declined it, see
+    // fsm::decline_leadership(), and, with LeaseGuard leases on, its bounded
+    // clock was usable as of its last tick, i.e. it could hold a lease. The
+    // leader hands the leadership over only to a node which reports true.
     //
     // Purely advisory: it is never used to prove anything about time, only to
     // pick a leadership-transfer target, so a wrong value costs a pointless
-    // transfer and nothing more. False on a node with leases disabled, and on
-    // one that predates this field.
+    // transfer and nothing more. False on a node that predates this field.
     bool clock_ok = false;
     // Set if the in-memory log of the follower has no room under
     // max_follower_log_size for the next entry, so it will refuse further

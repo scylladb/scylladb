@@ -4554,6 +4554,10 @@ BOOST_AUTO_TEST_CASE(test_leader_waits_for_a_preferred_server_to_catch_up) {
     election_timeout(A);
     communicate(A, C);
     BOOST_CHECK(A.is_leader());
+    // B reports clock_ok, so that it is only its log which holds A back.
+    A.step(B_id, raft::append_reply{A.get_current_term(), index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}, /* clock_ok = */ true});
+    (void)A.get_output();
     BOOST_CHECK(!ticks_until_handover(A, handover_limit));
     BOOST_CHECK(!A.leadership_transfer_active());
 
@@ -4862,4 +4866,29 @@ BOOST_AUTO_TEST_CASE(test_server_which_declines_leadership_starts_no_election) {
     }
     BOOST_CHECK(A.is_follower());
     BOOST_CHECK_EQUAL(A.get_current_term(), term);
+}
+
+// The leadership a leaving preferred leader gives away doesn't come back.
+BOOST_AUTO_TEST_CASE(test_leadership_does_not_return_to_a_leaving_leader) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    const std::vector<server_id> prefer{A_id, B_id};
+    auto A = create_follower(A_id, raft::log(log), prefer);
+    auto B = create_follower(B_id, raft::log(log), prefer);
+    auto C = create_follower(C_id, raft::log(log), prefer);
+
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_REQUIRE(A.is_leader());
+
+    A.decline_leadership();
+    A.transfer_leadership(ELECTION_TIMEOUT);
+    communicate(A, B, C);
+    BOOST_REQUIRE(B.is_leader());
+
+    BOOST_CHECK(!ticks_until_handover(B, handover_limit));
+    BOOST_CHECK(!B.leadership_transfer_active());
 }
