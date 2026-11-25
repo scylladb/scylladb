@@ -23,6 +23,23 @@
 
 namespace ser {
 
+// Copies a deserialization stream.
+template <typename Stream>
+Stream copy_stream(const Stream& s) {
+    return s;
+}
+
+// Copies a simple stream with two 8-byte loads. Streams are typically written field by
+// field (skip(), read_substream()) just before they are copied, and a 16-byte load of
+// them would not be store-forwarded. The asm statement keeps the compiler from merging
+// the loads.
+inline seastar::simple_memory_input_stream copy_stream(const seastar::simple_memory_input_stream& s) {
+    auto p = s.begin();
+    auto n = s.size();
+    asm ("" : "+r"(p), "+r"(n));
+    return seastar::simple_memory_input_stream(p, n);
+}
+
 /// A fragmented view of an opaque buffer in a stream of serialised data
 ///
 /// This class allows reading large, fragmented blobs serialised by the IDL
