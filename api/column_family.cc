@@ -61,6 +61,24 @@ table_info parse_table_info(const sstring& name, const replica::database& db) {
     return table_info{ .name = cf, .id = validate_table(db, ks, cf) };
 }
 
+class autocompaction_toggle_guard {
+    replica::database& _db;
+public:
+    autocompaction_toggle_guard(replica::database& db) : _db(db) {
+        SCYLLA_ASSERT(this_shard_id() == 0);
+        if (!_db._enable_autocompaction_toggle) {
+            throw std::runtime_error("Autocompaction toggle is busy");
+        }
+        _db._enable_autocompaction_toggle = false;
+    }
+    autocompaction_toggle_guard(const autocompaction_toggle_guard&) = delete;
+    autocompaction_toggle_guard(autocompaction_toggle_guard&&) = default;
+    ~autocompaction_toggle_guard() {
+        SCYLLA_ASSERT(this_shard_id() == 0);
+        _db._enable_autocompaction_toggle = true;
+    }
+};
+
 static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db, const sstring& name,
         int64_t replica::column_family_stats::*f) {
     return map_reduce_cf(db, name, int64_t(0), [f](const replica::column_family& cf) {
@@ -87,24 +105,6 @@ static future<json::json_return_type> for_tables_on_all_shards(sharded<replica::
         return make_ready_future<json::json_return_type>(json_void());
     });
 }
-
-class autocompaction_toggle_guard {
-    replica::database& _db;
-public:
-    autocompaction_toggle_guard(replica::database& db) : _db(db) {
-        SCYLLA_ASSERT(this_shard_id() == 0);
-        if (!_db._enable_autocompaction_toggle) {
-            throw std::runtime_error("Autocompaction toggle is busy");
-        }
-        _db._enable_autocompaction_toggle = false;
-    }
-    autocompaction_toggle_guard(const autocompaction_toggle_guard&) = delete;
-    autocompaction_toggle_guard(autocompaction_toggle_guard&&) = default;
-    ~autocompaction_toggle_guard() {
-        SCYLLA_ASSERT(this_shard_id() == 0);
-        _db._enable_autocompaction_toggle = true;
-    }
-};
 
 static future<json::json_return_type> set_tables_autocompaction(sharded<replica::database>& db, std::vector<table_info> tables, bool enabled) {
     apilog.info("set_tables_autocompaction: enabled={} tables={}", enabled, tables);
