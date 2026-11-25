@@ -209,6 +209,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     bool _auto_rf_needed = false;
     bool _auto_rf_needed_stale = true;
 
+    // Auto-RF runs where rack lists are enforced: only there are its keyspaces created
+    // on tablets, and every keyspace they follow names its racks.
+    bool auto_rf_enabled() const {
+        return _feature_service.auto_replication_factor && _db.get_config().enforce_rack_list();
+    }
+
     // Records the outcome of a keyspace_rf_change for the backoff above. Operator
     // ALTERs of other keyspaces go through the same handler and are not backed off.
     void record_auto_rf_change_outcome(const sstring& ks_name, bool failed) {
@@ -1760,7 +1766,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         requires_schema_changes = plan.requires_schema_changes();
                     } else if (!tm->tablets().is_idle()) {
                         error = "tablet resize in progress";
-                    } else if (_feature_service.auto_replication_factor && co_await auto_rf_change_ongoing(_topo_sm._topology, _sys_ks, guard)) {
+                    } else if (auto_rf_enabled() && co_await auto_rf_change_ongoing(_topo_sm._topology, _sys_ks, guard)) {
                         // Typically the change scheduled above, queued behind this request.
                         error = "auto-RF change in progress";
                     }
@@ -2178,56 +2184,41 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         rtlogger.info("enabled features: {}", features_to_enable);
     }
 
-    // For each DC, the racks in which some non-auto-RF tablets keyspace places
-    // replicas. nullopt means every rack of the DC (a numeric RF was found).
-    // A DC missing from the map has no such keyspace.
-    using eligible_racks_map = std::unordered_map<sstring, std::optional<std::set<sstring>>>;
+    // Racks by DC.
+    using rack_map = std::unordered_map<sstring, std::set<sstring>>;
 
-    static bool is_rack_eligible(const eligible_racks_map& eligible, const sstring& dc, const sstring& rack) {
-        auto it = eligible.find(dc);
-        return it != eligible.end() && (!it->second.has_value() || it->second->contains(rack));
+    static bool contains_rack(const rack_map& racks, const sstring& dc, const sstring& rack) {
+        auto it = racks.find(dc);
+        return it != racks.end() && it->second.contains(rack);
     }
 
     // Where the auto-RF keyspaces may replicate, computed once per reconciler pass.
     struct auto_rf_racks {
-        // The racks the auto-RF keyspaces follow.
-        eligible_racks_map eligible;
+        // The racks some non-auto-RF tablets keyspace lists: the racks the auto-RF
+        // keyspaces follow.
+        rack_map eligible;
         // The eligible racks with a token-owning, non-excluded normal node: the racks
-        // an auto-RF keyspace may be extended into. Always a subset of `eligible`.
-        std::unordered_map<sstring, std::set<sstring>> allowed;
+        // an auto-RF keyspace may be extended into.
+        rack_map allowed;
     };
 
     auto_rf_racks get_auto_rf_racks() {
         auto_rf_racks racks;
         for (const auto& [ks_name, ks] : _db.get_keyspaces()) {
-            if (is_auto_rf_keyspace(ks_name)) {
-                continue;
-            }
             auto ks_md = ks->metadata();
-            if (!ks_md->uses_tablets()) {
+            if (is_auto_rf_keyspace(ks_name) || !ks_md->uses_tablets()) {
                 continue;
             }
             for (const auto& [dc, rf] : ks_md->strategy_options()) {
-                auto it = racks.eligible.find(dc);
-                if (it != racks.eligible.end() && !it->second.has_value()) {
-                    continue; // already every rack of the DC
-                }
-                auto rf_data = locator::replication_factor_data(rf);
-                if (rf_data.is_numeric()) {
-                    // RF 0 places no replicas in the DC. It is also how a DC is drained, and
-                    // must not pull the auto-RF keyspaces into the DC being emptied.
-                    if (rf_data.count() != 0) {
-                        racks.eligible[dc] = std::nullopt;
-                    }
-                } else {
-                    auto& entry = racks.eligible.try_emplace(dc, std::set<sstring>{}).first->second;
-                    entry->insert(rf_data.get_rack_list().begin(), rf_data.get_rack_list().end());
+                // Auto-RF runs where rack lists are enforced, so a numeric RF is not expected.
+                if (auto rf_data = locator::replication_factor_data(rf); rf_data.is_rack_based() && !rf_data.get_rack_list().empty()) {
+                    racks.eligible[dc].insert(rf_data.get_rack_list().begin(), rf_data.get_rack_list().end());
                 }
             }
         }
         const auto& excluded = _topo_sm._topology.excluded_tablet_nodes;
         for (const auto& [id, rs] : _topo_sm._topology.normal_nodes) {
-            if (rs.ring && !rs.ring->tokens.empty() && !excluded.contains(id) && is_rack_eligible(racks.eligible, rs.datacenter, rs.rack)) {
+            if (rs.ring && !rs.ring->tokens.empty() && !excluded.contains(id) && contains_rack(racks.eligible, rs.datacenter, rs.rack)) {
                 racks.allowed[rs.datacenter].insert(rs.rack);
             }
         }
@@ -2251,11 +2242,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     // The replication options auto-RF gives the keyspace next, or nullopt if it has
     // nothing to change. One step per change, tried in this order: add a rack to a DC
-    // below the goal, add a DC. A DC with a numeric RF is left alone.
+    // below the goal, add a DC. Auto-RF manages rack lists only: a keyspace with a
+    // numeric RF is left alone.
     static std::optional<locator::replication_strategy_config_options> next_auto_rf_change(
             const data_dictionary::keyspace_metadata& ks_md, size_t goal, const auto_rf_racks& racks) {
         const auto& ks_name = ks_md.name();
         const auto& options = ks_md.strategy_options();
+        if (!locator::uses_rack_list_exclusively(options)) {
+            return std::nullopt;
+        }
 
         auto with_racks = [&] (const sstring& dc, locator::rack_list rack_list) {
             auto new_options = options;
@@ -2264,12 +2259,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         };
 
         for (const auto& [dc, rf] : options) {
-            auto rf_data = locator::replication_factor_data(rf);
+            auto rack_list = locator::replication_factor_data(rf).get_rack_list();
             auto it = racks.allowed.find(dc);
-            if (!rf_data.is_rack_based() || rf_data.get_rack_list().size() >= goal || it == racks.allowed.end()) {
+            if (rack_list.size() >= goal || it == racks.allowed.end()) {
                 continue;
             }
-            auto rack_list = rf_data.get_rack_list();
             // The allowed racks the keyspace does not replicate to yet.
             std::vector<sstring> missing_racks;
             std::ranges::set_difference(it->second, rack_list | std::ranges::to<std::set<sstring>>(), std::back_inserter(missing_racks));
@@ -2292,7 +2286,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Whether auto-RF has a change to make, regardless of backoff, ongoing changes
     // and dead nodes.
     bool auto_rf_change_needed() {
-        if (!_feature_service.auto_replication_factor) {
+        if (!auto_rf_enabled()) {
             return false;
         }
         const auto racks = get_auto_rf_racks();
@@ -2313,6 +2307,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     future<std::optional<rf_change_candidate>> find_auto_rf_change(const group0_guard& guard, std::optional<lowres_clock::time_point>& retry_at) {
         if (!_feature_service.auto_replication_factor) {
             rtlogger.debug("auto_replication_factor feature is disabled, skipping auto RF change check");
+            co_return std::nullopt;
+        }
+        if (!_db.get_config().enforce_rack_list()) {
+            // Not a state ScyllaDB creates: the keyspaces go to tablets only where the
+            // option is set, so it was turned off later or differs between the nodes.
+            auto unmanaged = auto_rf_keyspaces() | std::views::transform(&auto_rf_keyspace::name)
+                    | std::views::filter([&] (const sstring& ks_name) { return bool(auto_rf_keyspace_metadata(ks_name)); })
+                    | std::ranges::to<std::vector<sstring>>();
+            if (!unmanaged.empty()) {
+                static thread_local logger::rate_limit unmanaged_rate_limit{std::chrono::hours(1)};
+                rtlogger.log(log_level::warn, unmanaged_rate_limit,
+                        "auto-rf: {} use tablets but enforce_rack_list is not set on this node, so their replication is not managed",
+                        fmt::join(unmanaged, ", "));
+            }
             co_return std::nullopt;
         }
         // Honour the tablet balancing switch: an operator who disabled balancing must not
