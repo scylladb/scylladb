@@ -33,7 +33,7 @@ def test_repair_all_single_keyspace_tablets(nodetool):
     id2 = "ef1b7a61-66c8-494c-bb03-6f65724e6eef"
     res = nodetool("cluster", "repair", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"}, response=[]),
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=["ks1"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets", "consistency": "eventual"}, response=["ks1"]),
         expected_request("GET", "/column_family", response=[{"ks": "ks1", "cf": "table1"}, {"ks": "ks1", "cf": "table2"}]),
         expected_request(
             "POST",
@@ -72,7 +72,7 @@ def test_repair_all_two_keyspaces_tablets(nodetool):
     id2 = "ef1b7a61-66c8-494c-bb03-6f65724e6eef"
     res = nodetool("cluster", "repair", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"}, response=[]),
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=["ks1", "ks2"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets", "consistency": "eventual"}, response=["ks1", "ks2"]),
         expected_request("GET", "/column_family", response=[{"ks": "ks1", "cf": "table1"}, {"ks": "ks2", "cf": "table2"}]),
         expected_request(
             "POST",
@@ -112,6 +112,7 @@ def test_repair_keyspace_tablets(nodetool):
     res = nodetool("cluster", "repair", "ks", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
         expected_request("GET", "/column_family", response=[{"ks": "ks", "cf": "table1"}, {"ks": "ks2", "cf": "table3"}, {"ks": "ks", "cf": "table2"}]),
         expected_request(
             "POST",
@@ -155,6 +156,7 @@ def test_repair_keyspace_tablets_with_colocated_table(nodetool):
     res = nodetool("cluster", "repair", "ks", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
         expected_request("GET", "/column_family", response=[{"ks": "ks", "cf": "table1"}, {"ks": "ks", "cf": "mv"}, {"ks": "ks", "cf": "table2"}]),
         expected_request(
             "POST",
@@ -206,6 +208,7 @@ def test_repair_one_table_tablets(nodetool):
     res = nodetool("cluster", "repair", "ks", "table1", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
         expected_request(
             "POST",
             "/storage_service/tablets/repair",
@@ -231,6 +234,7 @@ def test_repair_two_tables_tablets(nodetool):
     res = nodetool("cluster", "repair", "ks", "table1", "table2", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
         expected_request(
             "POST",
             "/storage_service/tablets/repair",
@@ -272,6 +276,7 @@ def test_repair_failed_tablets(nodetool):
         {"expected_requests": [
             expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
             expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+            expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
             expected_request("GET", "/column_family", response=[{"ks": "ks", "cf": "table1"}]),
             expected_request(
                 "POST",
@@ -306,6 +311,7 @@ def _do_test_repair_options_tablets(
     expected_requests = [
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
         expected_request("GET", "/column_family", response=[{"ks": "ks", "cf": "table"}])
     ]
 
@@ -390,7 +396,7 @@ def test_repair_options_tokens_tablets(nodetool, tokens):
 def test_repair_all_with_vnode_keyspace(nodetool):
     id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
     res = nodetool("cluster", "repair", expected_requests=[
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=["ks1"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets", "consistency": "eventual"}, response=["ks1"]),
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"}, response=["ks2"]),
         expected_request("GET", "/column_family", response=[{"ks": "ks1", "cf": "table1"}, {"ks": "ks2", "cf": "table2"}]),
         expected_request(
@@ -429,6 +435,7 @@ def test_repair_incremenatal_repair(nodetool, mode):
     res = nodetool("cluster", "repair", "--incremental-mode", mode, "ks", "table1", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
         expected_request(
             "POST",
             "/storage_service/tablets/repair",
@@ -454,6 +461,7 @@ def test_cluster_repair_table_dropped(nodetool):
     res = nodetool("cluster", "repair", "ks", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
         expected_request("GET", "/column_family", response=[{"ks": "ks", "cf": "table1"}, {"ks": "ks", "cf": "table2"}]),
         expected_request(
             "POST",
@@ -490,6 +498,7 @@ def test_cluster_repair_specified_table_dropped(nodetool):
             {"expected_requests": [
                 expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
                 expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+                expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
                 expected_request(
                     "POST",
                     "/storage_service/tablets/repair",
@@ -513,3 +522,63 @@ def test_cluster_repair_specified_table_dropped(nodetool):
                 ]
             },
             [f"Can't find a column family table1 in keyspace ks"])
+
+
+def test_repair_all_with_strongly_consistent_keyspace(nodetool):
+    # Repairing all keyspaces lists only the eventually consistent ones, so it
+    # leaves out the strongly consistent keyspace sc, which repair doesn't apply
+    # to. The mock fails the test on any request for sc.
+    id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
+    id2 = "ef1b7a61-66c8-494c-bb03-6f65724e6eef"
+    res = nodetool("cluster", "repair", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"}, response=[]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets", "consistency": "eventual"}, response=["ks1", "ks2"]),
+        expected_request("GET", "/column_family", response=[
+            {"ks": "ks1", "cf": "table1"}, {"ks": "sc", "cf": "table1"}, {"ks": "ks2", "cf": "table2"}]),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks1",
+                "table": "table1",
+                "tokens": "all"},
+            response={"tablet_task_id": id1}),
+        expected_request(
+            "GET",
+            f"/task_manager/wait_task/{id1}",
+            response={"state": "done"}),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks2",
+                "table": "table2",
+                "tokens": "all"},
+            response={"tablet_task_id": id2}),
+        expected_request(
+            "GET",
+            f"/task_manager/wait_task/{id2}",
+            response={"state": "done"}),
+        ])
+
+    assert _remove_log_timestamp(res.stdout) == f"""\
+Starting repair with task_id={id1} keyspace=ks1 table=table1
+Repair with task_id={id1} finished
+Starting repair with task_id={id2} keyspace=ks2 table=table2
+Repair with task_id={id2} finished
+"""
+
+def test_repair_strongly_consistent_keyspace(nodetool):
+    # Repairing a strongly consistent keyspace by name fails before any repair
+    # is requested.
+    check_nodetool_fails_with(
+            nodetool,
+            ("cluster", "repair", "sc"),
+            {"expected_requests": [
+                expected_request("GET", "/storage_service/keyspaces", response=["sc"]),
+                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["sc"]),
+                expected_request("GET", "/storage_service/keyspaces", params={"consistency": "eventual"}, response=["ks"]),
+                ]
+            },
+            ["error processing arguments: Cannot repair keyspace sc because it is strongly consistent. "
+             "Repair is not supported for strongly consistent keyspaces."])
