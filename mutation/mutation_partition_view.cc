@@ -36,7 +36,7 @@ using atomic_cell_variant = boost::variant<ser::live_cell_view,
                                            ser::counter_cell_view,
                                            ser::unknown_variant_type>;
 
-atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, atomic_cell::collection_member cm = atomic_cell::collection_member::no)
+atomic_cell read_atomic_cell(const abstract_type& type, const atomic_cell_variant& cv, atomic_cell::collection_member cm = atomic_cell::collection_member::no)
 {
     class atomic_cell_visitor : public boost::static_visitor<atomic_cell> {
         const abstract_type& _type;
@@ -44,16 +44,16 @@ atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, 
     public:
         explicit atomic_cell_visitor(const abstract_type& t, atomic_cell::collection_member cm)
             : _type(t), _collection_member(cm) { }
-        atomic_cell operator()(ser::live_cell_view& lcv) const {
+        atomic_cell operator()(const ser::live_cell_view& lcv) const {
             return atomic_cell::make_live(_type, lcv.created_at(), lcv.value().view(), _collection_member);
         }
-        atomic_cell operator()(ser::expiring_cell_view& ecv) const {
+        atomic_cell operator()(const ser::expiring_cell_view& ecv) const {
             return atomic_cell::make_live(_type, ecv.c().created_at(), ecv.c().value().view(), ecv.expiry(), ecv.ttl(), _collection_member);
         }
-        atomic_cell operator()(ser::dead_cell_view& dcv) const {
+        atomic_cell operator()(const ser::dead_cell_view& dcv) const {
             return atomic_cell::make_dead(dcv.tomb().timestamp(), dcv.tomb().deletion_time());
         }
-        atomic_cell operator()(ser::counter_cell_view& ccv) const {
+        atomic_cell operator()(const ser::counter_cell_view& ccv) const {
             class counter_cell_visitor : public boost::static_visitor<atomic_cell> {
                 api::timestamp_type _created_at;
             public:
@@ -79,7 +79,7 @@ atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, 
             auto v = ccv.value();
             return boost::apply_visitor(counter_cell_visitor(ccv.created_at()), v);
         }
-        atomic_cell operator()(ser::unknown_variant_type&) const {
+        atomic_cell operator()(const ser::unknown_variant_type&) const {
             throw std::runtime_error("Trying to deserialize cell in unknown state");
         }
     };
@@ -121,22 +121,22 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
     }
 }
 
-row_marker read_row_marker(boost::variant<ser::live_marker_view, ser::expiring_marker_view, ser::dead_marker_view, ser::no_marker_view, ser::unknown_variant_type> rmv)
+row_marker read_row_marker(const boost::variant<ser::live_marker_view, ser::expiring_marker_view, ser::dead_marker_view, ser::no_marker_view, ser::unknown_variant_type>& rmv)
 {
     struct row_marker_visitor : boost::static_visitor<row_marker> {
-        row_marker operator()(ser::live_marker_view& lmv) const {
+        row_marker operator()(const ser::live_marker_view& lmv) const {
             return row_marker(lmv.created_at());
         }
-        row_marker operator()(ser::expiring_marker_view& emv) const {
+        row_marker operator()(const ser::expiring_marker_view& emv) const {
             return row_marker(emv.lm().created_at(), emv.ttl(), emv.expiry());
         }
-        row_marker operator()(ser::dead_marker_view& dmv) const {
+        row_marker operator()(const ser::dead_marker_view& dmv) const {
             return row_marker(dmv.tomb());
         }
-        row_marker operator()(ser::no_marker_view&) const {
+        row_marker operator()(const ser::no_marker_view&) const {
             return row_marker();
         }
-        row_marker operator()(ser::unknown_variant_type&) const {
+        row_marker operator()(const ser::unknown_variant_type&) const {
             throw std::runtime_error("Trying to deserialize unknown row marker type");
         }
     };
