@@ -417,11 +417,10 @@ SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_object_with_special_characters_
     do_test_client_multipart_upload(make_proxy_client, true, special_characters_object_name, 16 * 1024);
 }
 
-// A recognizable exception to abort the uploads below with. Asserting on it
-// rather than on seastar's default abort_requested_exception keeps the checks
-// from being satisfied by an unrelated failure -- in particular not by the
-// "Failed to parse ETag list. Aborting multipart upload." error, which is what
-// the sink reports today when a part upload is cancelled.
+// The exception that aborts the uploads below. The checks look for this marker,
+// not for seastar's default abort_requested_exception, so that no other failure
+// can pass them. An example is the "Failed to upload part <n> of <object>" error
+// of a part that the abort made fail.
 class upload_cancelled_marker : public std::exception {
 public:
     const char* what() const noexcept override { return "upload_cancelled_marker"; }
@@ -430,12 +429,10 @@ public:
 // Cancelling an upload has to stop it and reach the caller as the cancellation
 // itself.
 //
-// Part uploads are issued in the background and their failures are only logged,
-// so an aborted part leaves its ETag unset and finalize_upload() then reports
-// the resulting hole in the ETag list instead of the abort. The jumbo sink adds
-// another layer of the same: the child sink's entire flush path runs in the
-// background and its exception is consumed after the piece is closed and its
-// temporary object deleted.
+// Parts upload in the background. An aborted part fails, and finalize_upload()
+// gets its failure. finalize_upload() must report the abort, not that failure.
+// The jumbo sink adds one more level: the flush of each piece also runs in the
+// background. The jumbo sink keeps the failure of a piece after the piece closes.
 void do_test_client_multipart_upload_abort(const client_maker_function& client_maker, bool with_copy_upload) {
     s3_test_fixture guard(client_maker);
     auto cln = guard.client();
@@ -703,8 +700,39 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_pieces_s3) {
     do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 40_MiB, 3, 5);
 }
 
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+// Returns a check for the error of an upload of object. The error must name part
+// part_number (the S3 part number), and the printed text of its nested failure
+// must contain cause.
+static auto part_failure(unsigned part_number, std::string object, std::string cause) {
+    return [=] (const std::runtime_error& e) {
+        const auto* nested = dynamic_cast<const std::nested_exception*>(&e);
+        return e.what() == fmt::format("Failed to upload part {} of {}", part_number, object)
+                && nested && nested->nested_ptr()
+                && fmt::format("{}", nested->nested_ptr()).contains(cause);
+    };
+}
+
+// Fails the upload of the part with index 1 of each multipart upload until you destroy
+// the returned object.
+static auto fail_upload_of_part_1() {
+    utils::get_local_injector().enable("s3_upload_part_fail", false, {{"value", "1"}});
+    return defer([] () noexcept { utils::get_local_injector().disable("s3_upload_part_fail"); });
+}
+
+// Puts 12 MiB in buffers of 512 KiB. A sink uploads this data as parts of 5, 5 and 2 MiB.
+static void put_three_parts(data_sink& sink) {
+    for (size_t offset = 0; offset < 12_MiB; offset += 512_KiB) {
+        temporary_buffer<char> buf(512_KiB);
+        std::fill_n(buf.get_write(), buf.size(), 'x');
+        sink.put(std::move(buf)).get();
+    }
+}
+#endif
+
 // A single piece copied in 4 ranges, the copy of the second one fails: its part has no
-// ETag, so the flush fails, no object is produced, and the piece object is still removed.
+// ETag, so the flush fails with that failure nested in its error, no object is produced,
+// and the piece object is still removed.
 SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_failure_s3) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to lower the copy part size limit and fail a copy");
@@ -729,13 +757,64 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_failure_s3) {
         std::fill_n(buf.get_write(), buf.size(), 'x');
         sink.put(std::move(buf)).get();
     }
-    auto is_etag_list_failure = [] (const std::runtime_error& e) {
-        return std::string_view(e.what()).contains("Failed to parse ETag list");
-    };
-    BOOST_REQUIRE_EXCEPTION(sink.flush().get(), std::runtime_error, is_etag_list_failure);
+    const auto is_second_range_failure = part_failure(2, name, "injected failure of the copy of part 1");
+    BOOST_REQUIRE_EXCEPTION(sink.flush().get(), std::runtime_error, is_second_range_failure);
     close.close_now();
-    BOOST_REQUIRE_EXCEPTION(etag_f.get(), std::runtime_error, is_etag_list_failure);
+    BOOST_REQUIRE_EXCEPTION(etag_f.get(), std::runtime_error, is_second_range_failure);
 
+    BOOST_REQUIRE(!cln->object_exists(name).get());
+    BOOST_REQUIRE(!cln->object_exists(piece_name).get());
+#endif
+}
+
+// A plain sink uploads 3 parts, and the upload of the second part fails. The flush
+// and the ETag future must fail with that failure nested in their error. The object
+// must not exist. Reproduces SCYLLADB-5550.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_sink_part_failure_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to fail a part upload");
+#else
+    auto disable_injection = fail_upload_of_part_1();
+    s3_test_fixture guard(make_s3_client);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testsinkpartfailureobject");
+
+    auto [sink, etag_f] = cln->make_upload_sink_and_get_etag(name);
+    auto close = seastar::deferred_close(sink);
+    put_three_parts(sink);
+    const auto is_second_part_failure = part_failure(2, name, "injected failure of the upload of part 1");
+    BOOST_REQUIRE_EXCEPTION(sink.flush().get(), std::runtime_error, is_second_part_failure);
+    close.close_now();
+    BOOST_REQUIRE_EXCEPTION(etag_f.get(), std::runtime_error, is_second_part_failure);
+    BOOST_REQUIRE(!cln->object_exists(name).get());
+#endif
+}
+
+// A jumbo sink writes a single piece of 3 parts, which takes part 1 of the object, and
+// the upload of the second part of the piece fails. The flush and the ETag future must
+// fail with the error of the piece nested in their error, and the failure of the part
+// nested in the error of the piece. Neither the object nor the piece must exist.
+// Reproduces SCYLLADB-5550.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_piece_failure_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to fail a part upload");
+#else
+    auto disable_injection = fail_upload_of_part_1();
+    s3_test_fixture guard(make_s3_client);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testjumbopiecefailureobject");
+    const auto piece_name = name + "_0";
+
+    auto [sink, etag_f] = cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, std::nullopt);
+    auto close = seastar::deferred_close(sink);
+    put_three_parts(sink);
+    const auto is_piece_failure = [is_piece_part = part_failure(1, name, fmt::format("Failed to upload part 2 of {}", piece_name)),
+                                   is_injected = part_failure(1, name, "injected failure of the upload of part 1")] (const std::runtime_error& e) {
+        return is_piece_part(e) && is_injected(e);
+    };
+    BOOST_REQUIRE_EXCEPTION(sink.flush().get(), std::runtime_error, is_piece_failure);
+    close.close_now();
+    BOOST_REQUIRE_EXCEPTION(etag_f.get(), std::runtime_error, is_piece_failure);
     BOOST_REQUIRE(!cln->object_exists(name).get());
     BOOST_REQUIRE(!cln->object_exists(piece_name).get());
 #endif
@@ -885,6 +964,28 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_file_single_part_proxy) {
     const size_t part_size = 5_MiB;
     const size_t total_size = part_size / 2;
     test_client_upload_file(make_proxy_client, total_size);
+}
+
+// upload_file() uploads a 12 MiB file in parts of 5, 5 and 2 MiB, and the upload of
+// the second part fails. upload_file() must fail with that failure nested in its error,
+// and the object must not exist. Reproduces SCYLLADB-5550.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_file_part_failure_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to fail a part upload");
+#else
+    tmpdir tmp;
+    const auto file_path = tmp.path() / "test";
+    create_file(file_path, 12_MiB).get();
+
+    auto disable_injection = fail_upload_of_part_1();
+    s3_test_fixture guard(make_s3_client);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testuploadfilepartfailureobject");
+
+    BOOST_REQUIRE_EXCEPTION(cln->upload_file(file_path, name, std::nullopt, 5_MiB).get(), std::runtime_error,
+            part_failure(2, name, "injected failure of the upload of part 1"));
+    BOOST_REQUIRE(!cln->object_exists(name).get());
+#endif
 }
 
 void client_readable_file(const client_maker_function& client_maker) {
@@ -1350,6 +1451,31 @@ SEASTAR_THREAD_TEST_CASE(test_small_object_copy_with_special_characters_proxy) {
 
 SEASTAR_THREAD_TEST_CASE(test_large_object_copy_with_special_characters_proxy) {
     test_object_copy(make_proxy_client, special_characters_object_name, 1_MiB, 6);
+}
+
+// Copies a 6 MiB object in parts of 5 MiB and 1 MiB, and fails the copy of the second
+// part. copy_object() must fail with that failure nested in its error, and the copy
+// must not exist. Reproduces SCYLLADB-5550.
+SEASTAR_THREAD_TEST_CASE(test_object_copy_part_failure_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to fail a copy");
+#else
+    utils::get_local_injector().enable("s3_copy_part_fail", false, {{"value", "1"}});
+    auto disable_injection = defer([] () noexcept { utils::get_local_injector().disable("s3_copy_part_fail"); });
+
+    s3_test_fixture guard(make_s3_client);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testcopypartfailure");
+    const auto name_copy = guard.object_path("testcopypartfailure-copy");
+
+    temporary_buffer<char> buf(6_MiB);
+    std::fill_n(buf.get_write(), buf.size(), 'x');
+    cln->put_object(name, std::move(buf)).get();
+
+    BOOST_REQUIRE_EXCEPTION(cln->copy_object(name, name_copy, s3::object_metadata{}, 5_MiB).get(), std::runtime_error,
+            part_failure(2, name_copy, "injected failure of the copy of part 1"));
+    BOOST_REQUIRE(!cln->object_exists(name_copy).get());
+#endif
 }
 
 SEASTAR_THREAD_TEST_CASE(test_creds) {

@@ -1049,8 +1049,8 @@ static const rapidxml::xml_node<>* get_node_safe(const rapidxml::xml_node<>* nod
 // Returns "" if the body isn't well-formed XML, and throws if it is XML but not a
 // CopyPartResult carrying an ETag.
 // Neither outcome propagates past the callers: both fail the request, whose failure
-// their handle_exception() merely logs, leaving the part's tag empty. The upload does
-// fail on it, but only later, when finalize_upload() finds that empty tag. In
+// their handle_exception() logs and keeps, leaving the part's tag empty. The upload
+// does fail on it, but only later, when finalize_upload() finds that empty tag. In
 // parse_multipart_upload_etag() below there is no such later failure, the upload having
 // already completed by the time it runs - see its own comment for what a missing tag
 // does there.
@@ -1125,6 +1125,18 @@ protected:
     std::optional<promise<sstring>> _etag;
     // The tag of the object produced, kept here until the flush producing it resolves.
     sstring _produced_etag;
+    // A failed part does not fail upload_part() or copy_part(). It leaves its
+    // ETag empty. remember_part_failure() keeps the first failure and the index
+    // of its part in _part_etags. finalize_upload() reports that failure.
+    std::exception_ptr _part_failure;
+    unsigned _failed_part = 0;
+
+    void remember_part_failure(unsigned part_number, std::exception_ptr ex) noexcept {
+        if (!_part_failure) {
+            _part_failure = std::move(ex);
+            _failed_part = part_number;
+        }
+    }
 
     future<> start_upload();
     future<> finalize_upload();
@@ -1134,8 +1146,8 @@ protected:
     // part_number (0-based) of this upload with an UploadPartCopy request, and
     // stores the ETag of that part in _part_etags[part_number].
     // The returned future does not fail when the copy does: as with the parts
-    // upload_part() sends in the background, the failure is only logged and the
-    // ETag stays empty, so finalize_upload() fails the whole upload.
+    // upload_part() sends in the background, the failure is logged and kept, and
+    // the ETag stays empty, so finalize_upload() fails the whole upload with it.
     future<> copy_part(sstring source_object, std::optional<s3::range> source_range, unsigned part_number);
     future<> abort_upload();
 
@@ -1361,6 +1373,16 @@ future<> client::multipart_upload::start_upload() {
     }, http::reply::status_type::ok, _as);
 }
 
+// Throws if the s3_upload_part_fail injection names this part index. The parts
+// upload at the same time, so the injection selects one part by its index. It is
+// separate from s3_copy_part_fail, because a jumbo piece and its target share
+// part indexes.
+static void maybe_inject_upload_part_failure(uint64_t part_number) {
+    if (utils::get_local_injector().inject_parameter<uint64_t>("s3_upload_part_fail") == part_number) {
+        throw std::runtime_error(seastar::format("injected failure of the upload of part {}", part_number));
+    }
+}
+
 future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     if (!upload_started()) {
         co_await start_upload();
@@ -1404,20 +1426,25 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     // limit not affecting other groups' requests concurrency
     //
     // In case part upload goes wrong and doesn't happen, the _part_etags[part]
-    // is not set, so the finalize_upload() sees it and aborts the whole thing.
+    // is not set, so the finalize_upload() sees it and aborts the whole thing,
+    // reporting the failure kept by remember_part_failure().
     auto gh = _bg_flushes.hold();
     (void)_client->make_request(std::move(req), [this, size, part_number] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto in = std::move(in_);
         if (auto possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(in))) {
             throw aws::aws_exception(std::move(possible_error.value()));
         }
+        maybe_inject_upload_part_failure(part_number);
         auto etag = rep.get_header("ETag");
+        if (etag.empty()) {
+            throw std::runtime_error("the reply to UploadPart has no ETag");
+        }
         s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
         _part_etags[part_number] = std::move(etag);
         gc.write_bytes += size;
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
-        // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
+        remember_part_failure(part_number, std::move(ex));
     }).finally([gh = std::move(gh), mpu = std::move(mpu)] {});
 }
 
@@ -1453,8 +1480,8 @@ future<> client::multipart_upload::copy_part(sstring source_object, std::optiona
         s3l.trace("copy-uploaded part {} -> etag = {} (upload id {})", part_number, etag, _upload_id);
         _part_etags[part_number] = std::move(etag);
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
-        // ... the exact exception only remains in logs
         s3l.warn("couldn't copy-upload part {}: {} (upload id {})", part_number, ex, _upload_id);
+        remember_part_failure(part_number, std::move(ex));
     });
 }
 
@@ -1479,15 +1506,23 @@ future<> client::multipart_upload::finalize_upload() {
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
     co_await _bg_flushes.close();
 
-    // Part uploads run in the background and only log their failures, so a part
+    // Part uploads run in the background and do not fail the caller, so a part
     // cancelled via _as leaves its ETag slot empty. Report the cancellation
-    // itself, not the hole it left in the list below.
+    // itself, not the failure of the part below.
     if (_as != nullptr && _as->abort_requested()) {
         co_await coroutine::return_exception_ptr(_as->abort_requested_exception_ptr());
     }
 
     unsigned parts_xml_len = prepare_multipart_upload_parts(_part_etags);
     if (parts_xml_len == 0) {
+        if (_part_failure) {
+            // Nest the failure of the part. Do not rethrow it. It is usually a
+            // storage_io_error, and the compaction manager stops on that type,
+            // while it retries other errors.
+            co_await coroutine::return_exception_ptr(make_nested_exception_ptr(
+                    std::runtime_error(seastar::format("Failed to upload part {} of {}", _failed_part + 1, _object_name)),
+                    _part_failure));
+        }
         co_await coroutine::return_exception(std::runtime_error("Failed to parse ETag list. Aborting multipart upload."));
     }
 
@@ -1701,9 +1736,11 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
             const uint64_t offset = i * part_size;
             return copy_part(piece._object_name, s3::range(offset, std::min(part_size, piece_size - offset)), first_part + i);
         });
-    }).then_wrapped([this, &piece] (auto f) {
+    }).then_wrapped([this, first_part, &piece] (auto f) {
         if (f.failed()) {
-            s3l.warn("couldn't flush piece {}: {} (upload id {})", piece._object_name, f.get_exception(), _upload_id);
+            auto ex = f.get_exception();
+            s3l.warn("couldn't flush piece {}: {} (upload id {})", piece._object_name, ex, _upload_id);
+            remember_part_failure(first_part, std::move(ex));
         }
         return _client->delete_object(piece._object_name).handle_exception([&piece] (auto ex) {
             s3l.warn("failed to remove copy-upload piece {}", piece._object_name);
@@ -2203,12 +2240,17 @@ class client::do_upload_file : private multipart_upload {
             if (auto possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(in))) {
                 throw aws::aws_exception(std::move(possible_error.value()));
             }
+            maybe_inject_upload_part_failure(part_number);
             auto etag = reply.get_header("ETag");
+            if (etag.empty()) {
+                throw std::runtime_error("the reply to UploadPart has no ETag");
+            }
             s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
             _part_etags[part_number] = std::move(etag);
             gc.write_bytes += part_size;
         }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
+            remember_part_failure(part_number, std::move(ex));
         });
     }
 
