@@ -249,8 +249,8 @@ SEASTAR_TEST_CASE(check_toc_func) {
     auto s = make_schema_for_compressed_sstable();
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", sstables::generation_type(1), [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_toc().get();
-        auto& sst1_c = sstables::test(sst1).get_components();
-        auto& sst2_c = sstables::test(sst2).get_components();
+        auto sst1_c = sstables::test(sst1).get_components();
+        auto sst2_c = sstables::test(sst2).get_components();
 
         BOOST_REQUIRE(sst1_c == sst2_c);
     });
@@ -988,9 +988,8 @@ static future<> test_component_digest_persistence(component_type component, ssta
         const auto muts = tests::generate_random_mutations(random_schema, 2).get();
         auto sst_original = make_sstable_containing(env.make_sstable(schema, version), muts).get();
 
-        auto& components = sstables::test(sst_original).get_components();
-        bool has_component = components.find(component) != components.end();
-        BOOST_REQUIRE(has_component);
+        bool has_comp = sst_original->has_component(component);
+        BOOST_REQUIRE(has_comp);
 
         auto toc_path = fmt::to_string(sst_original->toc_filename());
         auto entry_desc = sstables::parse_path(toc_path, schema->ks_name(), schema->cf_name()).value();
@@ -1120,7 +1119,7 @@ SEASTAR_TEST_CASE(test_read_malformed_crc_chunk_size) {
         auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
         const auto muts = tests::generate_random_mutations(random_schema, 1).get();
         auto sst = make_sstable_containing(env.make_sstable(random_schema.schema(), sstable::version_types::me), muts, validate::no).get();
-        BOOST_REQUIRE(sstables::test(sst).get_components().contains(component_type::CRC));
+        BOOST_REQUIRE(sst->has_component(component_type::CRC));
 
         auto& storage = sstables::test(sst).get_storage();
         auto write_crc = [&] (uint32_t chunk_size, std::vector<uint32_t> checksums) {

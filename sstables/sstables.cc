@@ -8,6 +8,7 @@
 
 #include "utils/log.hh"
 #include <atomic>
+#include <bit>
 #include <concepts>
 #include <cstdlib>
 #include <vector>
@@ -1009,7 +1010,7 @@ future<std::pair<std::vector<sstring>, uint32_t>> sstable::read_and_parse_toc(fi
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc(sstable_open_config cfg) noexcept {
-    if (_recognized_components.size()) {
+    if (_recognized_components) {
         co_return;
     }
 
@@ -1024,13 +1025,16 @@ future<> sstable::read_toc(sstable_open_config cfg) noexcept {
                     continue;
                 }
                 try {
-                    _recognized_components.insert(reverse_map(c, sstable_version_constants::get_component_map(_version)));
+                    add_component(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
-                    _unrecognized_components.push_back(c);
+                    if (!_unrecognized_components) {
+                        _unrecognized_components = std::make_unique<std::vector<sstring>>();
+                    }
+                    _unrecognized_components->push_back(c);
                     sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, toc_filename());
                 }
             }
-            if (!_recognized_components.size()) {
+            if (!_recognized_components) {
                 throw_malformed_sstable_exception("Empty TOC", toc_filename());
             }
         });
@@ -1044,26 +1048,26 @@ future<> sstable::read_toc(sstable_open_config cfg) noexcept {
 
 void sstable::generate_toc() {
     // Creating table of components.
-    _recognized_components.insert(component_type::TOC);
-    _recognized_components.insert(component_type::Statistics);
-    _recognized_components.insert(component_type::Digest);
+    add_component(component_type::TOC);
+    add_component(component_type::Statistics);
+    add_component(component_type::Digest);
     if (has_summary_and_index(_version)) {
-        _recognized_components.insert(component_type::Index);
-        _recognized_components.insert(component_type::Summary);
+        add_component(component_type::Index);
+        add_component(component_type::Summary);
     } else {
-        _recognized_components.insert(component_type::Partitions);
-        _recognized_components.insert(component_type::Rows);
+        add_component(component_type::Partitions);
+        add_component(component_type::Rows);
     }
-    _recognized_components.insert(component_type::Data);
+    add_component(component_type::Data);
     if (_schema->bloom_filter_fp_chance() != 1.0) {
-        _recognized_components.insert(component_type::Filter);
+        add_component(component_type::Filter);
     }
     if (!_schema->get_compressor_params().compression_enabled()) {
-        _recognized_components.insert(component_type::CRC);
+        add_component(component_type::CRC);
     } else {
-        _recognized_components.insert(component_type::CompressionInfo);
+        add_component(component_type::CompressionInfo);
     }
-    _recognized_components.insert(component_type::Scylla);
+    add_component(component_type::Scylla);
 }
 
 future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_components() const {
@@ -1160,15 +1164,17 @@ void sstable::write_toc(std::unique_ptr<crc32_digest_file_writer> w) {
     sstlog.debug("Writing TOC file {} ", toc_filename());
 
     do_write_simple(*w, [&] (version_types v, file_writer& w) {
-        for (auto&& key : _recognized_components) {
+        for_each_component([&] (component_type key) {
             // new line character is appended to the end of each component name.
             auto value = sstable_version_constants::get_component_map(v).at(key) + "\n";
             bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
             write(v, w, b);
-        }
+        });
     });
 
-    _components_digests.map[component_type::TOC] = w->full_checksum();
+    // The TOC digest is also computed on read (read_toc); the writer records it
+    // in the Scylla metadata's ComponentsDigests map via _toc_digest.
+    _toc_digest = w->full_checksum();
 }
 
 void sstable::write_crc(const checksum& c) {
@@ -1185,7 +1191,6 @@ void sstable::write_digest(uint32_t full_checksum) {
         auto digest = to_sstring<bytes>(full_checksum);
         write(v, w, digest);
     }, buffer_size);
-    _components_digests.map[component_type::Data] = full_checksum;
 }
 
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
@@ -1196,7 +1201,7 @@ future<> sstable::do_read_simple(component_type type,
     auto component_name = filename(type);
     sstlog.trace("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), component_name);
     try {
-        file fi = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
+        file fi = co_await new_sstable_component_file(_error_handlers.read, type, open_flags::ro);
         uint64_t size = co_await fi.size();
 
         co_await read_component(_version, std::move(fi), size);
@@ -1355,13 +1360,12 @@ future<> sstable::read_compression() {
     _components->compression.discard_hidden_options();
 }
 
-void sstable::write_compression() {
+std::optional<uint32_t> sstable::write_compression() {
     if (!has_component(component_type::CompressionInfo)) {
-        return;
+        return std::nullopt;
     }
 
-    auto digest = write_simple_with_digest<component_type::CompressionInfo>(_components->compression);
-    _components_digests.map[component_type::CompressionInfo] = digest;
+    return write_simple_with_digest<component_type::CompressionInfo>(_components->compression);
 }
 
 void sstable::validate_partitioner() {
@@ -1387,7 +1391,7 @@ void sstable::validate_partitioner() {
 
 future<uint32_t> sstable::read_scylla_file_digest() const {
     constexpr size_t digest_size = sizeof(uint32_t);
-    auto f = co_await new_sstable_component_file(_read_error_handler, component_type::Scylla, open_flags::ro);
+    auto f = co_await new_sstable_component_file(_error_handlers.read, component_type::Scylla, open_flags::ro);
     auto size = co_await f.size();
 
     if (size < digest_size) {
@@ -1414,7 +1418,7 @@ future<uint32_t> sstable::read_scylla_file_digest() const {
 }
 
 future<uint32_t> sstable::compute_component_file_digest(component_type type, std::optional<abort_source&> as) const {
-    auto f = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
+    auto f = co_await new_sstable_component_file(_error_handlers.read, type, open_flags::ro);
     auto size = co_await f.size();
     if (type == component_type::Scylla && _components->scylla_metadata->digest) {
         // For Scylla metadata, the digest is stored at the end of the file, so we need to exclude it from the checksum calculation.
@@ -1694,9 +1698,8 @@ future<> sstable::read_partitions_db_footer() {
     }
 }
 
-void sstable::write_statistics() {
-    auto digest = write_simple_with_digest<component_type::Statistics>(_components->statistics);
-    _components_digests.map[component_type::Statistics] = digest;
+uint32_t sstable::write_statistics() {
+    return write_simple_with_digest<component_type::Statistics>(_components->statistics);
 }
 
 void sstable::mark_as_being_repaired(const service::session_id& id) {
@@ -1795,12 +1798,12 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
     return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_id] {
         // Serialize with the other on-disk mutations of this sstable (change_state(),
-        // snapshot(), pick_up_from_upload(), unlink()), which all take _mutate_sem too.
+        // snapshot(), pick_up_from_upload(), unlink()), which all take mutate_sem() too.
         // Without this lock a concurrent change_state() -- e.g. the view update generator
         // moving a staging sstable to the base directory -- can relocate this sstable's
         // component files while we resolve their paths, hard-link them and read the Scylla
         // component below, causing a file-not-found abort. See SCYLLADB-3263.
-        auto lock = get_units(_mutate_sem, 1).get();
+        auto lock = get_units(mutate_sem(), 1).get();
 
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
@@ -1881,7 +1884,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         new_sst->seal_sstable(false).get();
         new_sst->open_data().get();
 
-        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        _cloned_to_sstable_filename = std::make_unique<sstring>(new_sst->component_basename(component_type::Data));
         return new_sst;
     });
 }
@@ -1890,8 +1893,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 // This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
 // 1. Update Scylla metadata sstable identifier.
 // 2. Apply the modifier.
-// 3. Write the component file (e.g., Statistics-*.db)
-//    - This calculates and stores the component's digest in _components_digests.map[type]
+// 3. Write the component file (e.g., Statistics-*.db) and obtain its digest
 // 4. Update the Scylla metadata's ComponentsDigests map with the new component digest
 // 5. Calculate the Scylla metadata's own digest based on its updated data
 void sstable::write_component_with_metadata_and_modifier(component_type type, std::function<void(sstable&)> modifier) {
@@ -1918,8 +1920,7 @@ void sstable::write_component_with_metadata_and_modifier(component_type type, st
     modifier(*this);
 
     if (type != component_type::Scylla) {
-        write_component(type);
-        metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+        metadata.get_or_create_components_digests().map[type] = write_component(type);
     }
 
     metadata.digest = serialized_checksum(_version, metadata.data);
@@ -1966,7 +1967,7 @@ future<> sstable::read_summary() noexcept {
 }
 
 future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) const noexcept {
-    return new_sstable_component_file(_read_error_handler, type, flags, opts);
+    return new_sstable_component_file(_error_handlers.read, type, flags, opts);
 }
 
 future<> sstable::open_or_create_data(open_flags oflags, file_open_options options) noexcept {
@@ -1997,10 +1998,6 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
         co_await utils::clear_gently(sm->token_ranges.elements);
         sm->token_ranges.elements = {};
     }
-    auto* ld_stats = _components->scylla_metadata->data.get<scylla_metadata_type::LargeDataStats, scylla_metadata::large_data_stats>();
-    if (ld_stats) {
-        _large_data_stats.emplace(*ld_stats);
-    }
     auto* ld_records = _components->scylla_metadata->data.get<scylla_metadata_type::LargeDataRecords, scylla_metadata::large_data_records>();
     if (ld_records) {
         _large_data_records.emplace(*ld_records);
@@ -2008,10 +2005,6 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     auto* origin = _components->scylla_metadata->data.get<scylla_metadata_type::SSTableOrigin, scylla_metadata::sstable_origin>();
     if (origin) {
         _origin = sstring(to_string_view(bytes_view(origin->value)));
-    }
-    auto* ts_stats = _components->scylla_metadata->data.get<scylla_metadata_type::ExtTimestampStats, scylla_metadata::ext_timestamp_stats>();
-    if (ts_stats) {
-        _ext_timestamp_stats.emplace(*ts_stats);
     }
     _open_mode.emplace(open_flags::ro);
     _stats.on_open_for_reading();
@@ -2099,7 +2092,9 @@ future<> sstable::drop_caches() {
     if (_cached_rows_file) {
         co_await _cached_rows_file->evict_gently();
     }
-    co_await _index_cache->evict_gently();
+    if (_index_cache) {
+        co_await _index_cache->evict_gently();
+    }
 }
 
 // Return the filter format for the given sstable version
@@ -2124,17 +2119,16 @@ future<> sstable::read_filter(sstable_open_config cfg) {
     });
 }
 
-void sstable::write_filter() {
+std::optional<uint32_t> sstable::write_filter() {
     if (!has_component(component_type::Filter)) {
-        return;
+        return std::nullopt;
     }
 
     auto f = downcast_ptr<utils::filter::murmur3_bloom_filter>(_components->filter.get());
 
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
-    auto digest = write_simple_with_digest<component_type::Filter>(filter_ref);
-    _components_digests.map[component_type::Filter] = digest;
+    return write_simple_with_digest<component_type::Filter>(filter_ref);
 }
 
 void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
@@ -2330,11 +2324,10 @@ bool sstable::is_component_rewrite_supported(component_type type) {
     }
 }
 
-void sstable::write_component(component_type type) {
+uint32_t sstable::write_component(component_type type) {
     switch (type) {
     case component_type::Statistics:
-        write_statistics();
-        break;
+        return write_statistics();
     default:
         on_internal_error(sstlog, fmt::format("Writing component {} is not supported.", component_name(*this, type)));
     }
@@ -2375,15 +2368,15 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
     static_assert(std::is_nothrow_move_constructible_v<sstables::foreign_sstable_open_info>);
     co_await read_toc();
     set_components(std::move(info.components));
-    _data_file = make_checked_file(_read_error_handler, info.data.to_file());
+    _data_file = make_checked_file(_error_handlers.read, info.data.to_file());
   if (info.index) {
-    _index_file = make_checked_file(_read_error_handler, info.index->to_file());
+    _index_file = make_checked_file(_error_handlers.read, info.index->to_file());
   }
     if (info.partitions) {
-        _partitions_file = make_checked_file(_read_error_handler, info.partitions->to_file());
+        _partitions_file = make_checked_file(_error_handlers.read, info.partitions->to_file());
     }
     if (info.rows) {
-        _rows_file = make_checked_file(_read_error_handler, info.rows->to_file());
+        _rows_file = make_checked_file(_error_handlers.read, info.rows->to_file());
     }
     _shards = std::move(info.owners);
     _metadata_size_on_disk = info.metadata_size_on_disk;
@@ -2660,6 +2653,7 @@ static sstable_column_kind to_sstable_column_kind(column_kind k) {
 
 void
 sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
+        scylla_metadata::components_digests components_digests,
         std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
         std::optional<scylla_metadata::large_data_records> ld_records) {
     auto&& first_key = get_first_decorated_key();
@@ -2730,7 +2724,7 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sstable_schema.columns.elements.push_back(sstable_column_description{to_sstable_column_kind(col.kind), {col.name()}, {to_bytes(col.type->name())}});
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
-    _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
+    _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(std::move(components_digests));
 
     _components->scylla_metadata->set_scrub_time(db_clock::now());
 
@@ -2988,7 +2982,7 @@ future<> sstable::generate_summary() {
         }
     };
 
-    auto index_file = co_await new_sstable_component_file(_read_error_handler, component_type::Index, open_flags::ro);
+    auto index_file = co_await new_sstable_component_file(_error_handlers.read, component_type::Index, open_flags::ro);
     auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::generate_summary()",
             reader_concurrency_semaphore::register_metrics::no);
 
@@ -3183,35 +3177,38 @@ sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& 
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
     std::vector<std::pair<component_type, sstring>> all;
-    all.reserve(_recognized_components.size() + _unrecognized_components.size());
-    for (auto& c : _recognized_components) {
+    size_t unrecognized_size = _unrecognized_components ? _unrecognized_components->size() : 0;
+    all.reserve(std::popcount(_recognized_components.mask()) + unrecognized_size);
+    for_each_component([&] (component_type c) {
         all.push_back(std::make_pair(c, sstable_version_constants::get_component_map(_version).at(c)));
-    }
-    for (auto& c : _unrecognized_components) {
-        all.push_back(std::make_pair(component_type::Unknown, c));
+    });
+    if (_unrecognized_components) {
+        for (auto& c : *_unrecognized_components) {
+            all.push_back(std::make_pair(component_type::Unknown, c));
+        }
     }
     return all;
 }
 
 future<> sstable::snapshot(const sstring& name) const {
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     co_await _storage->snapshot(*this, name, incremental_backup::no);
 }
 
 future<> sstable::finalize_snapshot(const sstring& name) const {
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     co_await _storage->finalize_snapshot(*this, name);
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     co_await _storage->change_state(*this, to, _generation, delay_commit);
     _state = to;
 }
 
 future<> sstable::pick_up_from_upload(sstable_state to, generation_type new_generation) {
     // just in case, not really needed as the sstable is not yet in use while in the upload dir
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
     _state = to;
@@ -3614,7 +3611,7 @@ future<std::optional<uint32_t>> sstable::read_digest() {
     }
     // Serialize with change_state()/unlink(): the component is opened by name, so a concurrent
     // move would leave us with a stale path and a file-not-found abort (SCYLLADB-4526).
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     if (_components->digest) {
         co_return *_components->digest;
     }
@@ -3711,7 +3708,7 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
         co_return _components->checksum->shared_from_this();
     }
     // See read_digest().
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     if (_components->checksum) {
         co_return _components->checksum->shared_from_this();
     }
@@ -4218,7 +4215,7 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 future<>
 sstable::unlink(const atomic_deletion* deletion) noexcept {
     // Serialize with other calls to unlink or potentially ongoing mutations.
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     if (_unlinked_at) {
         co_return;
     }
@@ -4230,7 +4227,7 @@ sstable::unlink(const atomic_deletion* deletion) noexcept {
 
     try {
         if (_cloned_to_sstable_filename) {
-            co_await get_large_data_handler().maybe_update_large_data_entries_sstable_name(shared_from_this(), _cloned_to_sstable_filename.value());
+            co_await get_large_data_handler().maybe_update_large_data_entries_sstable_name(shared_from_this(), *_cloned_to_sstable_filename);
         } else {
             co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
         }
@@ -4405,11 +4402,8 @@ sstable::sstable(schema_ptr schema,
     , _storage(make_storage(manager, _schema, storage, _state))
     , _version(v)
     , _format(f)
-    , _index_cache(std::make_unique<partition_index_cache>(
-            manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region(), manager.get_cache_tracker().get_partition_index_cache_stats()))
     , _now(now)
-    , _read_error_handler(error_handler_gen(sstable_read_error))
-    , _write_error_handler(error_handler_gen(sstable_write_error))
+    , _error_handlers(error_handler_gen())
     , _large_data_handler(large_data_handler)
     , _corrupt_data_handler(corrupt_data_handler)
     , _manager(manager)
@@ -4417,6 +4411,14 @@ sstable::sstable(schema_ptr schema,
     , _ignore_component_digest_mismatch(_manager.get_config().ignore_component_digest_mismatch)
 {
     manager.add(this);
+}
+
+partition_index_cache& sstable::index_cache() {
+    if (!_index_cache) {
+        auto& ct = _manager.get_cache_tracker();
+        _index_cache = std::make_unique<partition_index_cache>(ct.get_lru(), ct.region(), ct.get_partition_index_cache_stats());
+    }
+    return *_index_cache;
 }
 
 file sstable::uncached_index_file() {
@@ -4448,7 +4450,9 @@ future<> sstable::destroy() {
         ex = std::current_exception();
     }
 
-    co_await _index_cache->evict_gently();
+    if (_index_cache) {
+        co_await _index_cache->evict_gently();
+    }
     if (_cached_index_file) {
         co_await _cached_index_file->evict_gently();
     }
@@ -4460,9 +4464,10 @@ future<> sstable::destroy() {
 }
 
 std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_type t) const noexcept {
-    if (_large_data_stats) {
-        auto it = _large_data_stats->map.find(t);
-        if (it != _large_data_stats->map.end()) {
+    const auto& sm = _components->scylla_metadata;
+    if (auto* ld_stats = sm ? sm->data.get<scylla_metadata_type::LargeDataStats, scylla_metadata::large_data_stats>() : nullptr) {
+        auto it = ld_stats->map.find(t);
+        if (it != ld_stats->map.end()) {
             return std::make_optional<large_data_stats_entry>(it->second);
         }
     }
@@ -4470,8 +4475,9 @@ std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_ty
 }
 
 scylla_metadata::ext_timestamp_stats::map_type sstable::get_ext_timestamp_stats() const noexcept {
-    if (_ext_timestamp_stats) {
-        return _ext_timestamp_stats->map;
+    const auto& sm = _components->scylla_metadata;
+    if (auto* ts_stats = sm ? sm->get_ext_timestamp_stats() : nullptr) {
+        return ts_stats->map;
     }
     return scylla_metadata::ext_timestamp_stats::map_type{};
 }

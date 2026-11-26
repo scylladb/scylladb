@@ -261,14 +261,22 @@ void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type compo
     auto close_f = deferred_close(f);
     const auto mem_align = f.memory_dma_alignment();
     const auto dma_align = f.disk_write_dma_alignment();
+    const bool is_toc = component == component_type::TOC;
     const bool scylla_with_digest = component == component_type::Scylla && sst->get_component_digest(component_type::Scylla);
     // Modify the last byte of the data itself, not the digest that follows it.
     // That byte may be in an earlier block than the last byte of the file, so
     // the block to rewrite is found from it.
     auto corrupt_offset = size - 1 - (scylla_with_digest ? sizeof(uint32_t) : 0);
-    auto block_offset = align_down(corrupt_offset, dma_align);
+    auto block_offset = is_toc ? uint64_t(0) : align_down(corrupt_offset, dma_align);
     auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
     f.dma_read(block_offset, buf.get_write(), dma_align).get();
+    if (is_toc) {
+        // Corrupt the first entry that isn't Scylla.db: dropping the Scylla
+        // component would skip TOC digest validation.
+        std::string_view toc(buf.get(), std::min(size, uint64_t(dma_align)));
+        constexpr std::string_view scylla_entry = "Scylla.db\n";
+        corrupt_offset = toc.starts_with(scylla_entry) ? scylla_entry.size() : 0;
+    }
     // Flip one bit of that byte to corrupt the file minimally. Using a
     // single-bit flip avoids creating values that overflow during parsing.
     buf.get_write()[corrupt_offset - block_offset] ^= 1u;
