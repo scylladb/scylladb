@@ -14,6 +14,7 @@
 #include "compaction/compaction_garbage_collector.hh"
 #include "mutation_query.hh"
 #include "utils/assert.hh"
+#include "utils/big_decimal.hh"
 #include "utils/hashers.hh"
 #include "utils/preempt.hh"
 #include "utils/xx_hasher.hh"
@@ -474,6 +475,52 @@ SEASTAR_THREAD_TEST_CASE(test_collection_freeze_unfreeze_round_trip) {
     }
 }
 
+// The gentle ordered unfreeze resumes after each large collection; the rows and
+// range tombstones around them must come back in order.
+SEASTAR_THREAD_TEST_CASE(test_collection_freeze_unfreeze_rows_and_range_tombstones) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("st", int32_type, column_kind::static_column)
+            .with_column("a", int32_type)
+            .with_column("m", map_type_impl::get_instance(int32_type, bytes_type, true))
+            .with_column("v", int32_type)
+            .build();
+    const auto& mdef = *s->get_column_definition(to_bytes("m"));
+    const auto now = gc_clock::now();
+    auto ck = [&] (int32_t i) { return clustering_key::from_single_value(*s, int32_type->decompose(i)); };
+    // Just above gentle_collection_min_size, so both rows take the gentle path.
+    auto large = [&] (char fill) {
+        collection_mutation_writer w({});
+        for (int i = 0; i < 34; ++i) {
+            w.push_back(managed_bytes_view(int32_type->decompose(int32_t(i))), atomic_cell::make_live(*bytes_type, 10, bytes(4096, fill), atomic_cell::collection_member::yes));
+        }
+        auto cm = std::move(w).finish();
+        BOOST_REQUIRE(collection_mutation_view(cm).data.size_bytes() > gentle_collection_min_size);
+        return cm;
+    };
+    mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(int32_t(0))));
+    m.set_static_cell(to_bytes("st"), data_value(int32_t(1)), 1);
+    m.partition().apply_delete(*s, range_tombstone(ck(1), bound_kind::incl_start, ck(2), bound_kind::incl_end, tombstone(2, now)));
+    m.set_clustered_cell(ck(3), to_bytes("a"), data_value(int32_t(3)), 1);
+    m.set_clustered_cell(ck(3), mdef, atomic_cell_or_collection(large('x')));
+    m.partition().apply_delete(*s, range_tombstone(ck(4), bound_kind::incl_start, ck(5), bound_kind::incl_end, tombstone(3, now)));
+    m.set_clustered_cell(ck(6), mdef, atomic_cell_or_collection(large('y')));
+    m.set_clustered_cell(ck(6), to_bytes("v"), data_value(int32_t(6)), 1);
+    m.partition().apply_delete(*s, range_tombstone(ck(7), bound_kind::incl_start, ck(8), bound_kind::incl_end, tombstone(4, now)));
+    m.set_clustered_cell(ck(9), to_bytes("a"), data_value(int32_t(9)), 1);
+    m.set_clustered_cell(ck(9), to_bytes("v"), data_value(int32_t(9)), 1);
+
+    auto fm = freeze(m);
+    BOOST_REQUIRE(freeze_gently(m).get().representation() == fm.representation());
+    assert_that(fm.unfreeze(s)).is_equal_to(m);
+    assert_that(unfreeze_gently(fm, s).get()).is_equal_to(m);
+    mutation_rebuilder_v2 rebuilder(s);
+    auto rebuilt = fm.consume_gently(s, rebuilder).get().result;
+    BOOST_REQUIRE(rebuilt);
+    assert_that(std::move(*rebuilt)).is_equal_to(m);
+}
+
 // difference() skips the inputs' common prefix and suffix; the result must match the
 // element-by-element definition however much of a and b is common.
 SEASTAR_THREAD_TEST_CASE(test_collection_difference_equivalence) {
@@ -615,6 +662,78 @@ SEASTAR_THREAD_TEST_CASE(test_collection_merge_near_identical_equivalence) {
         collection_fast_path_min_size = 0;
         auto got = merge(*set_type, ca, cb);
         BOOST_REQUIRE_MESSAGE(bytes_of(got) == bytes_of(expected), fmt::format("iter {} n {} b {} tomb {}", iter, a.size(), b.size(), t));
+    }
+}
+
+// Keys equal under the comparator but not bytewise (decimal 1.0 vs 1.00): the fast
+// paths must keep the general merge's tie rules (a's key, a's cell only if greater).
+SEASTAR_THREAD_TEST_CASE(test_collection_merge_comparator_equal_keys) {
+    auto map_type = map_type_impl::get_instance(decimal_type, int32_type, true);
+    const auto now = gc_clock::now();
+    using element = std::pair<bytes, atomic_cell>;
+
+    auto key = [] (std::string_view text) { return decimal_type->decompose(big_decimal(text)); };
+    auto cell = [] (api::timestamp_type ts, int32_t v) {
+        return atomic_cell::make_live(*int32_type, ts, int32_type->decompose(v), atomic_cell::collection_member::yes);
+    };
+    BOOST_REQUIRE(key("1.0") != key("1.00"));
+    BOOST_REQUIRE(decimal_type->equal(key("1.0"), key("1.00")));
+    auto make = [&] (const std::vector<element>& elements, tombstone tomb) {
+        collection_mutation_writer w(tomb);
+        for (auto& [k, c] : elements) {
+            w.push_back(managed_bytes_view(k), atomic_cell_view(c));
+        }
+        return std::move(w).finish();
+    };
+    // Keys -100..99, with 1 encoded as `one`; element 101 is key 1.
+    auto many = [&] (std::string_view one) {
+        std::vector<element> v;
+        for (int i = -100; i < 100; ++i) {
+            v.emplace_back(i == 1 ? key(one) : key(std::to_string(i)), cell(10, i));
+        }
+        return v;
+    };
+    auto bytes_of = [] (const collection_mutation& m) { return managed_bytes(collection_mutation_view(m).data); };
+    auto check = [&] (bool diff, const collection_mutation& a, const collection_mutation& b, const std::string& what) {
+        auto run = [&] { return diff ? difference(*map_type, a, b) : merge(*map_type, a, b); };
+        collection_fast_path_min_size = std::numeric_limits<size_t>::max();
+        auto expected = run();
+        collection_fast_path_min_size = 0;
+        auto got = run();
+        BOOST_REQUIRE_MESSAGE(bytes_of(got) == bytes_of(expected), what);
+    };
+
+    const auto saved = collection_fast_path_min_size;
+    auto restore = seastar::defer([saved] () noexcept { collection_fast_path_min_size = saved; });
+    // merge_into_large(): the large side holds 1.00 at timestamp 10 with value 1.
+    for (auto large_tomb : {tombstone(), tombstone(7, now)}) {
+        for (api::timestamp_type ts : {5, 10, 15}) {
+            for (int32_t v : {0, 1, 2}) {
+                std::vector<element> small;
+                for (auto k : {"1.0", "2.5", "3", "1000"}) {
+                    small.emplace_back(key(k), cell(ts, v));
+                }
+                auto cl = make(many("1.00"), large_tomb);
+                auto cs = make(small, tombstone());
+                const auto what = fmt::format("large_tomb {} ts {} v {}", large_tomb, ts, v);
+                check(false, cl, cs, what + " large first");
+                check(false, cs, cl, what + " small first");
+            }
+        }
+    }
+    // merge_near_identical() and difference(): the sides differ only in the encoding of key 1.
+    for (auto t : {tombstone(), tombstone(7, now)}) {
+        for (api::timestamp_type ts : {5, 10, 15}) {
+            auto b_elements = many("1.00");
+            b_elements[101].second = cell(ts, 1);
+            auto ca = make(many("1.0"), t);
+            auto cb = make(b_elements, t);
+            const auto what = fmt::format("tomb {} ts {}", t, ts);
+            for (bool diff : {false, true}) {
+                check(diff, ca, cb, what + " a first");
+                check(diff, cb, ca, what + " b first");
+            }
+        }
     }
 }
 
