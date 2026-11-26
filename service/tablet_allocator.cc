@@ -4112,6 +4112,8 @@ public:
     plan_generator make_internode_plan(dc_rack_plan_state& state, migration_plan& plan, node_load_map& nodes,
                                             const std::unordered_set<host_id>& nodes_to_drain,
                                             host_id target) {
+        size_t planned = 0; // Migration groups and drain failures added to the plan so far.
+
         // Prepare candidate nodes and shards for heap-based balancing.
 
         // Any given node is either in nodes_by_load or nodes_by_load_dst, but not both.
@@ -4162,7 +4164,7 @@ public:
         const size_t max_skipped_migrations = nodes[target].shards.size() * 2;
         size_t skipped_migrations = 0;
         auto shuffle = in_shuffle_mode();
-        while (plan.size() < batch_size) {
+        while (planned < batch_size) {
             co_await coroutine::maybe_yield();
 
             if (nodes_by_load.empty()) {
@@ -4325,6 +4327,7 @@ public:
                                     tablet, src, nodes_to_drain, nodes_by_load_dst, replicas);
                         lblogger.warn("{}", reason);
                         plan.add(drain_failure(src_node_info.id, reason));
+                        planned++;
                         return;
                     }
                     lblogger.debug("Adding replica {} of candidate {} to skipped list with the viable targets {}", src, candidate, skip.viable_targets);
@@ -4352,6 +4355,7 @@ public:
 
             if (src_node_info.req && *src_node_info.req == topology_request::leave && src_node_info.excluded) {
                 plan.add(drain_failure(src_node_info.id, "Node was marked as excluded"));
+                planned++;
                 break;
             }
 
@@ -4370,6 +4374,7 @@ public:
                 lblogger.debug("Adding migration: {} size: {}", mig, source_tablets.tablet_set_disk_size);
                 state.stats->migrations_produced++;
                 mark_as_scheduled(mig);
+                planned++;
                 plan.add(std::move(mig));
                 produced = true;
 
@@ -4409,11 +4414,11 @@ public:
             }
         }
 
-        if (plan.size() == batch_size) {
+        if (planned == batch_size) {
             state.stats->stop_batch_size++;
         }
 
-        if (plan.empty()) {
+        if (planned == 0) {
             // Due to replica collocation constraints, it may not be possible to balance the cluster evenly.
             // For example, if nodes have different number of shards. Nodes which have more shards will be
             // replicas for more tablets which rules out more candidates on other nodes with a higher per-shard load.
