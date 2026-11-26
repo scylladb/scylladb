@@ -96,7 +96,7 @@ async def test_simple_backup(manager: ScyllaClusterManager, object_storage, move
         # all components in the "backup" snapshot should have been moved into bucket if move_files
         assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}')) == 0 if move_files else len(files)
 
-        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        objects = set(o.key for o in object_storage.list_objects())
         for f in files:
             print(f'Check {f} is in backup')
             assert f'{prefix}/{f}' in objects
@@ -231,7 +231,7 @@ async def do_test_backup_abort(manager: ScyllaClusterManager, object_storage,
         assert (status is not None) and (status['state'] == 'failed')
         assert "seastar::abort_requested_exception: abort requested" in status['error']
 
-        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        objects = set(o.key for o in object_storage.list_objects())
         uploaded_count = 0
         for f in files:
             in_backup = f'{prefix}/{f}' in objects
@@ -407,7 +407,7 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
         assert len(files) == 0
         res = cql.execute(f"SELECT * FROM {ks}.{cf};")
         assert not res
-        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.filter(Prefix=prefix))
+        objects = set(o.key for o in object_storage.list_objects(prefix))
         assert len(objects) > 0
 
         print('Try to restore')
@@ -460,7 +460,7 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
                 await wait_for(view_repopulated, time.time() + 60)
 
         print('Check that backup files are still there')  # regression test for #20938
-        post_objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.filter(Prefix=prefix))
+        post_objects = set(o.key for o in object_storage.list_objects(prefix))
         assert objects == post_objects
 
 
@@ -2098,7 +2098,7 @@ async def test_decommision_waits_for_backup(manager: ScyllaClusterManager, objec
             status = await manager.api.wait_task(server.ip_addr, tid)
             assert (status is not None) and (status['state'] == 'done')
 
-            objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+            objects = set(o.key for o in object_storage.list_objects())
             uploaded_count = 0
             # all files should be uploaded. note: can be zero due to two nodes
             for f in files:
@@ -2288,7 +2288,7 @@ async def test_drop_table_during_backup(manager: ScyllaClusterManager, object_st
         assert status['state'] == 'done', f"Backup failed after the table was dropped: {status}"
 
         # The snapshot's SSTables must have been uploaded to the bucket.
-        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        objects = set(o.key for o in object_storage.list_objects())
         for f in files:
             assert f'{prefix}/{f}' in objects, f"{f} was not uploaded to the backup"
 
@@ -2338,7 +2338,7 @@ async def test_backup_after_schema_dropped(manager: ScyllaClusterManager, object
         assert status['state'] == 'done', f"Backup failed for a dropped {drop}'s snapshot: {status}"
 
         # The snapshot's SSTables must have been uploaded to the bucket.
-        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        objects = set(o.key for o in object_storage.list_objects())
         for f in files:
             assert f'{prefix}/{f}' in objects, f"{f} was not uploaded to the backup"
 
@@ -2397,12 +2397,9 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaCluster
 
     table_id = await manager.get_table_or_view_id(ks, cf)
 
-    objects = set(os.path.basename(o.key) for o in
-                  object_storage.get_resource().Bucket(object_storage.bucket_name).
-                  objects.filter(Prefix=f"{prefix}/sstables"))
+    objects = set(os.path.basename(o.key) for o in object_storage.list_objects(f"{prefix}/sstables"))
 
-    manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json").get()
-    manifest = json.load(manifest_obj['Body'])
+    manifest = json.loads(object_storage.read_object(f"{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json"))
 
     manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
 
@@ -2612,8 +2609,7 @@ def bucket_objects(object_storage, prefix=''):
     '''The objects of the test bucket, or of one prefix of it, mapped to their sizes.
     Skips folder marker objects, such as the "sstables/" one create_bucket() puts in
     every s3 bucket (SCYLLADB-5060): Scylla never writes keys which end in "/".'''
-    bucket = object_storage.get_resource().Bucket(object_storage.bucket_name)
-    return {o.key: o.size for o in bucket.objects.filter(Prefix=prefix) if not o.key.endswith('/')}
+    return {o.key: o.size for o in object_storage.list_objects(prefix) if not o.key.endswith('/')}
 
 
 def assert_objects_intact(expected, actual, what):
@@ -2623,10 +2619,9 @@ def assert_objects_intact(expected, actual, what):
 
 def backup_sstable_ids(object_storage, manifests):
     '''The sstable identifiers listed in the manifests of a backup'''
-    bucket = object_storage.get_resource().Bucket(object_storage.bucket_name)
     ids = set()
     for manifest in manifests:
-        content = json.load(bucket.Object(manifest).get()['Body'])
+        content = json.loads(object_storage.read_object(manifest))
         ids.update(sst['id'] for sst in content.get('sstables', []))
     return ids
 
@@ -2892,30 +2887,26 @@ def craft_in_place_backup(object_storage, backup_prefix, manifest_key, tag):
     The components are copied from a backup of a local table, whose component names
     contain the generation. Returns the components, the snapshot references, and the
     key of the manifest relative to the sstables/ prefix.'''
-    resource = object_storage.get_resource()
-    bucket = resource.Bucket(object_storage.bucket_name)
-    manifest = json.load(bucket.Object(manifest_key).get()['Body'])
+    manifest = json.loads(object_storage.read_object(manifest_key))
     components = {}
     snapshot_refs = set()
     for sst in manifest['sstables']:
         # 'me-{generation}-big-TOC.txt' gives the prefix of the component names and the generation
         stem = sst['toc_name'].removesuffix('TOC.txt')
         generation = stem.split('-')[1]
-        for o in bucket.objects.filter(Prefix=f'{backup_prefix}/{stem}'):
+        for o in object_storage.list_objects(f'{backup_prefix}/{stem}'):
             key = f"sstables/{sst['id']}/{os.path.basename(o.key).removeprefix(stem)}"
-            resource.Object(object_storage.bucket_name, key).copy_from(
-                    CopySource={'Bucket': object_storage.bucket_name, 'Key': o.key})
+            object_storage.copy_object(o.key, key)
             components[key] = o.size
         ref = f"sstables/{sst['id']}/refs/snapshot-{tag}/{generation}"
-        resource.Object(object_storage.bucket_name, ref).put(Body=b'')
+        object_storage.put_object(ref)
         snapshot_refs.add(ref)
 
     # The restore reads the manifest relative to the location it is given, and that
     # location is the location of the table itself, which is what says the components
     # were not copied anywhere.
     in_place_manifest = f'sstables/{manifest_key}'
-    resource.Object(object_storage.bucket_name, in_place_manifest).copy_from(
-            CopySource={'Bucket': object_storage.bucket_name, 'Key': manifest_key})
+    object_storage.copy_object(manifest_key, in_place_manifest)
     return components, snapshot_refs, manifest_key
 
 
@@ -3080,7 +3071,7 @@ async def prepare_write_workload(cql, table_name, flush=True, n: int = None):
         await nodetool.flush(cql, table_name)
 
 def object_storage_keys(object_storage):
-    return set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+    return set(o.key for o in object_storage.list_objects())
 
 # A cluster snapshot attempt's reference: "refs/snapshot-{tag}/{attempt}/{gen}".
 snapshot_ref_regex = re.compile(r'sstables/(?P<sid>[^/]+)/refs/snapshot-(?P<tag>[^/]+)/(?P<attempt>[^/]+)/(?P<gen>[^/]+)')

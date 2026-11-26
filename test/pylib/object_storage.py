@@ -20,6 +20,7 @@ import re
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from operator import attrgetter
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +33,14 @@ import requests
 from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3mock_server import S3MockServer, create_bucket, create_conf
+
+
+@dataclass
+class StoredObject:
+    """An object of a test bucket, as a listing shows it."""
+    key: str
+    size: int
+    etag: str
 
 
 type StorageKind = Literal["s3", "gs"]
@@ -104,6 +113,18 @@ class S3Server:
     def put_object(self, key: str, body: bytes = b''):
         """Create a single object in the test bucket."""
         self.get_resource().Bucket(self.bucket_name).put_object(Key=key, Body=body)
+
+    def list_objects(self, prefix: str = '') -> list[StoredObject]:
+        """The test bucket's objects whose keys start with the prefix."""
+        return [StoredObject(o.key, o.size, o.e_tag)
+                for o in self.get_resource().Bucket(self.bucket_name).objects.filter(Prefix=prefix)]
+
+    def read_object(self, key: str) -> bytes:
+        return self.get_resource().Object(self.bucket_name, key).get()['Body'].read()
+
+    def copy_object(self, src: str, dst: str):
+        self.get_resource().Object(self.bucket_name, dst).copy_from(
+                CopySource={'Bucket': self.bucket_name, 'Key': src})
 
     def create_test_bucket(self, test_name: str):
         """Create a unique per-test bucket using boto3."""
@@ -191,18 +212,9 @@ class GSFront:
                     }
         return [endpoint]
 
-    def get_resource(self):
-        """Creates boto3.resource object that can be used to communicate to the given server"""
-        return boto3.resource('s3',
-            endpoint_url=self.endpoint,
-            config=boto3.session.Config(signature_version='s3v4'),
-            verify=False
-        )
-
     def put_object(self, key: str, body: bytes = b''):
         """Create a single object in the test bucket via the native JSON
-        upload API: the S3-compatibility layer of fake-gcs-server rejects
-        boto3 uploads (it serves reads and deletes fine)."""
+        upload API, as all of the bucket's objects are handled."""
         url = (f'{self.endpoint}/upload/storage/v1/b/{self.bucket_name}/o'
                f'?uploadType=media&name={urllib.parse.quote(key, safe="")}')
         with urllib.request.urlopen(urllib.request.Request(url, data=body, method='POST')) as resp:
@@ -211,18 +223,33 @@ class GSFront:
     def _bucket_url(self):
         return f'{self.endpoint}/storage/v1/b/{self.bucket_name}'
 
-    def _object_names(self):
-        """The names of the test bucket's objects."""
-        names, token = [], None
+    def _object_url(self, key: str):
+        return f'{self._bucket_url()}/o/{urllib.parse.quote(key, safe="")}'
+
+    def list_objects(self, prefix: str = '') -> list[StoredObject]:
+        """The test bucket's objects whose keys start with the prefix."""
+        objects, token = [], None
         while True:
-            params = {'pageToken': token} if token else {}
+            params = {'prefix': prefix}
+            if token:
+                params['pageToken'] = token
             response = requests.get(f'{self._bucket_url()}/o', params=params, timeout=10)
             response.raise_for_status()
             listing = response.json()
-            names += [o['name'] for o in listing.get('items', [])]
+            objects += [StoredObject(o['name'], int(o['size']), o['etag']) for o in listing.get('items', [])]
             token = listing.get('nextPageToken')
             if not token:
-                return names
+                return objects
+
+    def read_object(self, key: str) -> bytes:
+        response = requests.get(self._object_url(key), params={'alt': 'media'}, timeout=10)
+        response.raise_for_status()
+        return response.content
+
+    def copy_object(self, src: str, dst: str):
+        dst_path = f'b/{self.bucket_name}/o/{urllib.parse.quote(dst, safe="")}'
+        response = requests.post(f'{self._object_url(src)}/copyTo/{dst_path}', json={}, timeout=10)
+        response.raise_for_status()
 
     def create_test_bucket(self, test_name: str):
         """Create a unique per-test bucket using the GCS JSON API."""
@@ -246,8 +273,8 @@ class GSFront:
         if not self.bucket_name:
             return
         try:
-            for name in self._object_names():
-                response = requests.delete(f'{self._bucket_url()}/o/{urllib.parse.quote(name, safe="")}', timeout=10)
+            for o in self.list_objects():
+                response = requests.delete(self._object_url(o.key), timeout=10)
                 response.raise_for_status()
             response = requests.delete(self._bucket_url(), timeout=10)
             response.raise_for_status()
