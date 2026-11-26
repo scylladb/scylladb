@@ -145,6 +145,29 @@ def test_cluster_clearsnapshot_requires_tag(nodetool):
             ["error processing arguments: Missing required parameter \"tag\""])
 
 
+def test_cluster_clearsnapshot_table(nodetool):
+    tag = "snapshot_name"
+    task_id = "2c4a3e5f"
+    expected_requests = [
+        expected_request(
+            "DELETE",
+            "/storage_service/tablets/snapshots",
+            params={"tag": tag, "keyspace": "ks1", "table": "tbl1"},
+            response=task_id)
+    ]
+    res = nodetool("cluster", "clearsnapshot", "-t", tag, "ks1", "tbl1", "--nowait", expected_requests=expected_requests)
+    assert res.stdout.startswith(f"Requested clearing of table ks1.tbl1 of cluster snapshot [{tag}]\n")
+    assert task_id in res.stdout
+
+
+def test_cluster_clearsnapshot_keyspace_without_table(nodetool):
+    check_nodetool_fails_with(
+            nodetool,
+            ("cluster", "clearsnapshot", "-t", "snapshot_name", "ks1"),
+            {"expected_requests": []},
+            ["error processing arguments: keyspace and table must be given together"])
+
+
 def test_cluster_listsnapshots(nodetool):
     res = nodetool("cluster", "listsnapshots", expected_requests=[
         expected_request("GET", "/storage_service/tablets/snapshots", response=[

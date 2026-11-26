@@ -2704,11 +2704,22 @@ void cluster_clearsnapshot_operation(scylla_rest_client& client, const bpo::vari
     if (vm.contains("force")) {
         params["force"] = "true";
     }
+    if (vm.contains("keyspace") != vm.contains("table")) {
+        throw std::invalid_argument("keyspace and table must be given together");
+    }
+    if (vm.contains("table")) {
+        params["keyspace"] = vm["keyspace"].as<sstring>();
+        params["table"] = vm["table"].as<sstring>();
+    }
 
-    const auto clear_res = client.del("/storage_service/tablets/snapshots", std::move(params));
+    const auto clear_res = client.del("/storage_service/tablets/snapshots", params);
     const auto task_id = rjson::to_string_view(clear_res);
 
-    fmt::print(std::cout, "Requested clearing of cluster snapshot [{}]\n", tag);
+    if (vm.contains("table")) {
+        fmt::print(std::cout, "Requested clearing of table {}.{} of cluster snapshot [{}]\n", params["keyspace"], params["table"], tag);
+    } else {
+        fmt::print(std::cout, "Requested clearing of cluster snapshot [{}]\n", tag);
+    }
 
     if (vm.contains("nowait")) {
         fmt::print(R"(The task id of this operation is {}
@@ -4407,6 +4418,9 @@ bucket references of its tables on object storage, and its entries in the
 snapshot catalog. A snapshot that was backed up with cluster backup is not
 cleared unless --force is given, which deletes the backup along with it.
 
+Given a keyspace and a table, only that table is cleared and the snapshot keeps
+its other tables. Clearing the last table of a snapshot clears the snapshot.
+
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/cluster/clearsnapshot.html")),
                         {
@@ -4415,6 +4429,8 @@ For more information, see: {}
                             typed_option<>("nowait", "Don't wait on the clear process"),
                         },
                         {
+                            typed_option<sstring>("keyspace", "The keyspace of the table to clear", 1),
+                            typed_option<sstring>("table", "The table to clear from the snapshot, the other tables stay", 1),
                         },
                     },
                     {
