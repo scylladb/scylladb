@@ -501,11 +501,7 @@ public:
 
     [[gnu::always_inline]]
     operator managed_bytes() && {
-        managed_bytes mb(managed_bytes::initialized_later(), _stream.size());
-        for (bytes_mutable_view frag : fragment_range(managed_bytes_mutable_view(mb))) {
-            _stream.read(reinterpret_cast<char*>(frag.data()), frag.size());
-        }
-        return mb;
+        return managed_bytes(view());
     }
 
     [[gnu::always_inline]]
