@@ -168,7 +168,7 @@ public:
 
     // Reads the record at a location from the index. Keep the guard of the location until the
     // read is complete, so that the segment stays allocated.
-    future<log_record> read(const index_read_guard&, record_location location);
+    future<log_record> read(const index_read_guard&, record_location location) noexcept;
 
     void on_add_record(record_location location) noexcept override;
     void on_free_record(record_location location) noexcept override;

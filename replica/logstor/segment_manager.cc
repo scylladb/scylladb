@@ -407,6 +407,7 @@ class segment_manager_impl {
         std::array<uint64_t, write_source_count> data_bytes_written{0};
         uint64_t write_failures{0};
         uint64_t bytes_read{0};
+        uint64_t data_bytes_read{0};
         uint64_t bytes_freed{0};
         uint64_t segments_allocated{0};
         uint64_t segment_allocation_failures{0};
@@ -505,7 +506,7 @@ public:
     future<> write(write_buffer&);
     future<> write_full_segment(write_buffer&, logstor_group&, write_source, abort_source* = nullptr);
 
-    future<log_record> read(record_location);
+    future<log_record> read(record_location) noexcept;
 
     void on_add_record(record_location) noexcept;
     void on_free_record(record_location) noexcept;
@@ -613,7 +614,7 @@ public:
     }
 
     sstring get_segment_file_path(log_segment_id segment_id) const {
-        return sstring(_file_mgr.file_path(_geometry.location_of(segment_id).file_id).native());
+        return sstring(_file_mgr.file_path(_geometry.position_of(segment_id).file_id).native());
     }
 
     future<> discard_segments(logstor_group&);
@@ -910,6 +911,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of write failures when appending to a logstor segment.")),
         sm::make_counter("bytes_read", _stats.bytes_read,
                        sm::description("Counts number of bytes read from the disk.")),
+        sm::make_counter("data_bytes_read", _stats.data_bytes_read,
+                       sm::description("Counts the record bytes that the reads of records return, without the alignment of the disk reads.")),
         sm::make_counter("bytes_freed", _stats.bytes_freed,
                        sm::description("Counts number of data bytes freed.")),
         sm::make_counter("segments_allocated", _stats.segments_allocated,
@@ -1244,33 +1247,60 @@ void segment_manager_impl::on_move_record(record_location from, record_location 
     _stats.live_record_bytes -= from.size;
 }
 
-future<log_record> segment_manager_impl::read(record_location location) {
+future<log_record> segment_manager_impl::read(record_location location) noexcept {
+  try {
     auto holder = _async_gate.hold();
 
     if (location.offset + location.size > _cfg.segment_size) [[unlikely]] {
-        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format(
+        return make_exception_future<log_record>(std::runtime_error(fmt::format(
             "Read beyond end of segment {}: offset {} + size {} > segment size {}",
-            location.segment, location.offset, location.size, _cfg.segment_size))));
+            location.segment, location.offset, location.size, _cfg.segment_size)));
     }
 
-    auto [file_id, file_offset] = _geometry.location_of(location.segment);
-    // The file it reads from outlives the read: it is held here, on the frame of this coroutine,
-    // because the read is issued on it and seastar keeps reading from it after the first suspension.
+    auto [file_id, offset] = _geometry.position_of(location);
     auto file = _file_mgr.get_open_file(file_id);
 
-    // The bulk read is what dma_read_exactly() does underneath, over two coroutine frames of its
-    // own: one to trim the buffer the disk gave back to the size that was asked for, and one to
-    // reject a short read. This coroutine is already here to do both.
-    auto buf = co_await file.dma_read_bulk<char>(file_offset + location.offset, location.size);
-    if (buf.size() < location.size) [[unlikely]] {
-        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format(
-            "Short read of segment {}: got {} bytes of the {} asked for at offset {}",
-            location.segment, buf.size(), location.size, location.offset))));
-    }
-    buf.trim(location.size);
-    _stats.bytes_read += location.size;
-    auto frame = simple_memory_input_stream(buf.begin(), buf.size());
-    co_return ondisk::read_record_frame(frame);
+    // A direct read must start and end at the disk alignment of the file, so the read takes the
+    // aligned range that holds the record frame.
+    const uint64_t alignment = file.disk_read_dma_alignment();
+    const uint64_t aligned_offset = align_down(offset, alignment);
+    const size_t front = offset - aligned_offset;
+    const size_t aligned_size = align_up(front + location.size, alignment);
+    auto buf = temporary_buffer<char>::aligned(file.memory_dma_alignment(), aligned_size);
+    auto read = file.dma_read(aligned_offset, buf.get_write(), aligned_size);
+
+    auto parse_record = [this, location] (const temporary_buffer<char>& buf) {
+        if (buf.size() < location.size) [[unlikely]] {
+            return make_exception_future<log_record>(std::runtime_error(fmt::format(
+                "Short read of segment {}: got {} bytes of the {} asked for at offset {}",
+                location.segment, buf.size(), location.size, location.offset)));
+        }
+        _stats.data_bytes_read += location.size;
+        auto frame = simple_memory_input_stream(buf.begin(), location.size);
+        return make_ready_future<log_record>(ondisk::read_record_frame(frame));
+    };
+
+    return read.then([this, location, offset, front, parse_record, file = std::move(file), buf = std::move(buf),
+            holder = std::move(holder)] (size_t size) mutable {
+        _stats.bytes_read += size;
+        if (size < front + location.size || utils::get_local_injector().enter("logstor_read_short")) [[unlikely]] {
+            // A short read can occur before the end of the file, and dma_read_bulk() reads again
+            // until it has all the bytes or gets to the end of the file.
+            auto reread = file.dma_read_bulk<char>(offset, location.size);
+            return reread.then([this, front, parse_record, file, holder = std::move(holder)] (temporary_buffer<char> buf) {
+                // dma_read_bulk() returns the bytes after `front` that it read, so its last disk read
+                // covered `front` and the bytes of `buf`.
+                // The disk reads that dma_read_bulk() retried before its last read are not counted.
+                _stats.bytes_read += buf.empty() ? 0 : front + buf.size();
+                return parse_record(buf);
+            });
+        }
+        buf.trim_front(front);
+        return parse_record(buf);
+    });
+  } catch (...) {
+    return current_exception_as_future<log_record>();
+  }
 }
 
 future<> segment_manager_impl::request_segment_switch() {
@@ -1341,7 +1371,7 @@ future<> segment_manager_impl::replenish_reserve() {
 }
 
 bool segment_manager_impl::is_segment_ready(log_segment_id seg_id) {
-    return _file_mgr.check_file_ready_for_new_segment(_geometry.location_of(seg_id).file_id);
+    return _file_mgr.check_file_ready_for_new_segment(_geometry.position_of(seg_id).file_id);
 }
 
 future<seg_ptr> segment_manager_impl::allocate_segment() {
@@ -1350,9 +1380,9 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
             throw std::runtime_error("segment allocation failed by injection");
         });
 
-        auto seg_loc = _geometry.location_of(seg_id);
-        auto file = co_await _file_mgr.get_file_for_new_segment(seg_loc.file_id);
-        auto seg = make_lw_shared<segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
+        auto position = _geometry.position_of(seg_id);
+        auto file = co_await _file_mgr.get_file_for_new_segment(position.file_id);
+        auto seg = make_lw_shared<segment>(seg_id, std::move(file), position.offset, _cfg.segment_size);
         get_segment_descriptor(seg_id).reset(_cfg.segment_size);
         _stats.segments_allocated++;
         co_return std::move(seg);
@@ -1486,7 +1516,7 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     // Invalidate the first header block so recovery treats the slot as empty.
     co_await max_concurrent_for_each(segments, 32, [this] (log_segment_id seg_id) -> future<> {
         logstor_logger.trace("Discard segment {}", seg_id);
-        auto [file_id, file_offset] = _geometry.location_of(seg_id);
+        auto [file_id, file_offset] = _geometry.position_of(seg_id);
         // The segments being discarded were written, so their file is allocated.
         co_await _file_mgr.zero_region(file_id, file_offset, block_alignment);
         free_segment(seg_id);
@@ -2159,7 +2189,7 @@ future<> segment_manager_impl::recovery::place_found_segments() {
             continue;
         }
         _summary.used_segments++;
-        _used_file_count = _sm._geometry.location_of(seg_id).file_id + 1;
+        _used_file_count = _sm._geometry.position_of(seg_id).file_id + 1;
         // The scan indexes only the records of a valid chunk, so a used segment has a valid first
         // chunk.
         const auto& info = _segment_infos[seg_idx];
@@ -2442,7 +2472,7 @@ future<> segment_manager::write(write_buffer& wb) {
     return _impl->write(wb);
 }
 
-future<log_record> segment_manager::read(const index_read_guard&, record_location location) {
+future<log_record> segment_manager::read(const index_read_guard&, record_location location) noexcept {
     return _impl->read(location);
 }
 
@@ -2552,7 +2582,7 @@ public:
 };
 
 future<seastar::input_stream<char>> segment_manager_impl::create_segment_input_stream(log_segment_id segment_id, const seastar::file_input_stream_options& opts) {
-    auto [file_id, file_offset] = _geometry.location_of(segment_id);
+    auto [file_id, file_offset] = _geometry.position_of(segment_id);
     auto stream = make_file_input_stream(_file_mgr.get_open_file(file_id), file_offset, _cfg.segment_size, opts);
     co_return std::move(stream);
 }
