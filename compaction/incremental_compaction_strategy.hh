@@ -131,6 +131,10 @@ public:
 
     virtual compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
 
+    virtual uint64_t get_resharding_max_sstable_bytes() const override {
+        return _fragment_size;
+    }
+
     virtual std::unique_ptr<sstables::sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const override;
 
     friend class compaction::incremental_backlog_tracker;

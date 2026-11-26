@@ -339,6 +339,10 @@ public:
     // Retrieves the list of shared SSTables in this object. The list will be reset once this
     // is called.
     sstable_open_info_vector retrieve_shared_sstables();
+
+    const storage& get_storage() const noexcept {
+        return *_storage;
+    }
     std::vector<sstables::shared_sstable>& get_unshared_local_sstables() { return _unshared_local_sstables; }
 
     future<> remove_sstables(std::vector<sstables::shared_sstable> sstlist);
