@@ -165,7 +165,8 @@ public:
     virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;
-    virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
+    // Returns whether the component is gone: a missing one counts, a failed removal is logged and does not.
+    virtual future<bool> unlink_component(const sstable& sst, component_type) noexcept = 0;
     virtual future<size_t> num_references(const sstable& sst) const = 0;
 
     virtual std::string_view prefix() const  = 0;
