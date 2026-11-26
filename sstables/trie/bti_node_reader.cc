@@ -477,6 +477,11 @@ trie::get_child_result bti_node_reader::get_child(int64_t pos, int child_idx, bo
     return bti_get_child(pos, sp, child_idx, forward);
 }
 
+const_bytes bti_node_reader::get_page(int64_t pos) const {
+    SCYLLA_ASSERT(cached(pos));
+    return _cached_page->get_view();
+}
+
 const_bytes bti_node_reader::get_payload(int64_t pos) const {
     SCYLLA_ASSERT(cached(pos));
     auto sp = _cached_page->get_view().subspan(pos % cached_file::page_size);

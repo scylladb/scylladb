@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <seastar/core/on_internal_error.hh>
 #include "bti_node_sink.hh"
+#include "bti_page_footer.hh"
 #include "utils/div_ceil.hh"
 
 namespace sstables::trie {
@@ -133,24 +135,96 @@ static node_type choose_node_type(const writer_node& x, sink_pos xpos) {
     return res;
 }
 
-bti_node_sink::bti_node_sink(sstables::file_writer& w, size_t page_size) : _w(w), _page_size(page_size) {
-    expensive_assert(_page_size <= max_page_size);
+bti_node_sink::bti_node_sink(sstables::file_writer& w, size_t page_size, bool page_footers)
+    : _w(w)
+    , _page_size(page_size)
+    , _page_footers(page_footers)
+{
+    SCYLLA_ASSERT(_page_size <= max_page_size);
+    if (_page_footers) {
+        SCYLLA_ASSERT(_page_size > bti_page_footer_size);
+        _page.resize(_page_size);
+    }
+}
+
+bti_node_sink::~bti_node_sink() {
+    // Don't use _w here: the file_writer can be destroyed already.
+    if (_page_footers && _page_fill > 0 && !_abandoned) {
+        on_internal_error_noexcept(trie_logger, fmt::format(
+            "BTI index writer destroyed with an unended page of {} bytes, which is missing from the file",
+            _page_fill));
+    }
+}
+
+void bti_node_sink::abandon() noexcept {
+    _abandoned = true;
+}
+
+[[gnu::always_inline]]
+void bti_node_sink::put(const char* data, size_t n) {
+    if (!_page_footers) {
+        _w.write(data, n);
+        return;
+    }
+    // An overlap with the chunk table would be silent corruption.
+    SCYLLA_ASSERT(n <= table_start_in_page() - _page_fill);
+    std::memcpy(_page.data() + _page_fill, data, n);
+    _page_fill += n;
+}
+
+size_t bti_node_sink::table_start_in_page() const {
+    return _page_size - bti_page_footer_size - _table.size() * bti_chunk_table_entry_size;
+}
+
+void bti_node_sink::end_page() {
+    expensive_assert(_page_footers);
+    auto table_start = table_start_in_page();
+    SCYLLA_ASSERT(_page_fill <= table_start);
+    std::memset(_page.data() + _page_fill, 0, table_start - _page_fill);
+    // Slot 0 is the last entry before the footer.
+    char* it = _page.data() + _page_size - bti_page_footer_size;
+    for (auto entry : _table) {
+        it -= bti_chunk_table_entry_size;
+        SCYLLA_ASSERT(entry < (uint64_t(1) << (8 * bti_chunk_table_entry_size)));
+        for (size_t i = 0; i < bti_chunk_table_entry_size; ++i) {
+            it[i] = char(entry >> (8 * (bti_chunk_table_entry_size - 1 - i)));
+        }
+    }
+    char* footer = _page.data() + _page_size - bti_page_footer_size;
+    seastar::write_be<uint16_t>(footer, _table.size());
+    seastar::write_be<uint32_t>(footer + 2, compute_bti_page_crc(std::as_bytes(std::span(_page))));
+    _w.write(_page.data(), _page_size);
+    _page_fill = 0;
+    _table.clear();
+    _slots.clear();
+}
+
+unsigned bti_node_sink::slot_for_chunk(uint64_t chunk) {
+    SCYLLA_ASSERT(_page_footers);
+    auto [it, inserted] = _slots.try_emplace(chunk, _table.size());
+    if (inserted) {
+        // Each entry needs a slot payload node of at least 5 bytes in the same
+        // page, so a page can't have more slots than a payload can refer to.
+        SCYLLA_ASSERT(_table.size() < (size_t(1) << bti_slot_bits));
+        _table.push_back(chunk);
+    }
+    return it->second;
 }
 
 void bti_node_sink::write_int(uint64_t x, size_t bytes) {
     uint64_t be = cpu_to_be(x);
     expensive_log("write_int: {}", fmt_hex({reinterpret_cast<const signed char*>(&be) + sizeof(be) - bytes, bytes}));
-    _w.write(reinterpret_cast<const char*>(&be) + sizeof(be) - bytes, bytes);
+    put(reinterpret_cast<const char*>(&be) + sizeof(be) - bytes, bytes);
 }
 
 void bti_node_sink::write_bytes(const_bytes x) {
     expensive_log("write_bytes: {}", fmt_hex({reinterpret_cast<const signed char*>(x.data()), x.size()}));
-    _w.write(reinterpret_cast<const char*>(x.data()), x.size());
+    put(reinterpret_cast<const char*>(x.data()), x.size());
 }
 
 [[gnu::always_inline]]
-size_t bti_node_sink::write_sparse(const writer_node& x, node_type type, int bytes_per_pointer, sink_pos xpos) {
-    write_int((type << 4) | x._payload._payload_bits, 1);
+size_t bti_node_sink::write_sparse(const writer_node& x, const trie_payload& p, node_type type, int bytes_per_pointer, sink_pos xpos) {
+    write_int((type << 4) | p._payload_bits, 1);
     write_int(x.get_children().size(), 1);
     for (const auto& c : x.get_children()) {
         write_int(uint8_t(c->transition()), 1);
@@ -159,8 +233,8 @@ size_t bti_node_sink::write_sparse(const writer_node& x, node_type type, int byt
         uint64_t offset = (xpos - c->_pos).value;
         write_int(offset, bytes_per_pointer);
     }
-    write_bytes(x._payload.blob());
-    return 2 + x.get_children().size() * (1+bytes_per_pointer) + x._payload.blob().size();
+    write_bytes(p.blob());
+    return 2 + x.get_children().size() * (1+bytes_per_pointer) + p.blob().size();
 }
 
 [[gnu::always_inline]]
@@ -169,10 +243,10 @@ node_size bti_node_sink::size_sparse(const writer_node& x, int bits_per_pointer)
 }
 
 [[gnu::always_inline]]
-size_t bti_node_sink::write_dense(const writer_node& x, node_type type, int bytes_per_pointer, sink_pos xpos) {
+size_t bti_node_sink::write_dense(const writer_node& x, const trie_payload& p, node_type type, int bytes_per_pointer, sink_pos xpos) {
     int start = int(x.get_children().front()->transition());
     auto dense_span = 1 + int(x.get_children().back()->transition()) - int(x.get_children().front()->transition());
-    write_int((type << 4) | x._payload._payload_bits, 1);
+    write_int((type << 4) | p._payload_bits, 1);
     write_int(start, 1);
     write_int(dense_span - 1, 1);
     auto it = x.get_children().begin();
@@ -185,8 +259,8 @@ size_t bti_node_sink::write_dense(const writer_node& x, node_type type, int byte
         }
         write_int(offset, bytes_per_pointer);
     }
-    write_bytes(x._payload.blob());
-    return 3 + dense_span * (bytes_per_pointer) + x._payload.blob().size();
+    write_bytes(p.blob());
+    return 3 + dense_span * (bytes_per_pointer) + p.blob().size();
 }
 
 [[gnu::always_inline]]
@@ -196,11 +270,11 @@ node_size bti_node_sink::size_dense(const writer_node& x, int bits_per_pointer) 
     return node_size(3 + div_ceil(bits_per_pointer * (1 + last - first), 8) + x._payload.blob().size());
 }
 
-void bti_node_sink::write_body(const writer_node& x, sink_pos xpos, node_type type) {
+void bti_node_sink::write_body(const writer_node& x, sink_pos xpos, node_type type, const trie_payload& p) {
     switch (type) {
     case PAYLOAD_ONLY: {
-        write_int(type << 4 | x._payload._payload_bits, 1);
-        write_bytes(x._payload.blob());
+        write_int(type << 4 | p._payload_bits, 1);
+        write_bytes(p.blob());
         return;
     }
     case SINGLE_NOPAYLOAD_4: {
@@ -216,11 +290,11 @@ void bti_node_sink::write_body(const writer_node& x, sink_pos xpos, node_type ty
         uint64_t offset = (xpos - x.get_children().front()->_pos).value;
         uint8_t transition = uint8_t(x.get_children().front()->transition());
         uint8_t arr[3 + sizeof(trie_payload::_payload_buf)];
-        arr[0] = (type << 4) | x._payload._payload_bits;
+        arr[0] = (type << 4) | p._payload_bits;
         arr[1] = transition;
         arr[2] = offset;
-        auto sz = x._payload.blob().size();
-        memcpy(&arr[3], x._payload.blob().data(), sz);
+        auto sz = p.blob().size();
+        memcpy(&arr[3], p.blob().data(), sz);
         write_bytes({reinterpret_cast<const std::byte*>(arr), 3 + sz});
         return;
     }
@@ -235,18 +309,18 @@ void bti_node_sink::write_body(const writer_node& x, sink_pos xpos, node_type ty
     case SINGLE_16: {
         uint64_t offset = (xpos - x.get_children().front()->_pos).value;
         uint8_t transition = uint8_t(x.get_children().front()->transition());
-        write_int((type << 4) | x._payload._payload_bits, 1);
+        write_int((type << 4) | p._payload_bits, 1);
         write_int(transition, 1);
         write_int(offset, 2);
-        write_bytes(x._payload.blob());
+        write_bytes(p.blob());
         return;
     }
     case SPARSE_8: {
-        write_sparse(x, type, 1, xpos);
+        write_sparse(x, p, type, 1, xpos);
         return;
     }
     case SPARSE_12: {
-        write_int((type << 4) | x._payload._payload_bits, 1);
+        write_int((type << 4) | p._payload_bits, 1);
         write_int(x.get_children().size(), 1);
         for (const auto& c : x.get_children()) {
             write_int(uint8_t(c->transition()), 1);
@@ -261,25 +335,25 @@ void bti_node_sink::write_body(const writer_node& x, sink_pos xpos, node_type ty
             uint64_t offset = (xpos - x.get_children()[i]->_pos).value;
             write_int(offset << 4, 2);
         }
-        write_bytes(x._payload.blob());
+        write_bytes(p.blob());
         return;
     }
     case SPARSE_16: {
-        write_sparse(x, type, 2, xpos);
+        write_sparse(x, p, type, 2, xpos);
         return;
     }
     case SPARSE_24: {
-        write_sparse(x, type, 3, xpos);
+        write_sparse(x, p, type, 3, xpos);
         return;
     }
     case SPARSE_40: {
-        write_sparse(x, type, 5, xpos);
+        write_sparse(x, p, type, 5, xpos);
         return;
     }
     case DENSE_12: {
         int start = int(x.get_children().front()->transition());
         auto dense_span = 1 + int(x.get_children().back()->transition()) - int(x.get_children().front()->transition());
-        write_int((type << 4) | x._payload._payload_bits, 1);
+        write_int((type << 4) | p._payload_bits, 1);
         write_int(start, 1);
         write_int(dense_span - 1, 1);
         auto it = x.get_children().begin();
@@ -306,27 +380,27 @@ void bti_node_sink::write_body(const writer_node& x, sink_pos xpos, node_type ty
             }
             write_int(offset << 4, 2);
         }
-        write_bytes(x._payload.blob());
+        write_bytes(p.blob());
         return;
     }
     case DENSE_16: {
-        write_dense(x, type, 2, xpos);
+        write_dense(x, p, type, 2, xpos);
         return;
     }
     case DENSE_24: {
-        write_dense(x, type, 3, xpos);
+        write_dense(x, p, type, 3, xpos);
         return;
     }
     case DENSE_32: {
-        write_dense(x, type, 4, xpos);
+        write_dense(x, p, type, 4, xpos);
         return;
     }
     case DENSE_40: {
-        write_dense(x, type, 5, xpos);
+        write_dense(x, p, type, 5, xpos);
         return;
     }
     case LONG_DENSE: {
-        write_dense(x, type, 8, xpos);
+        write_dense(x, p, type, 8, xpos);
         return;
     }
     case NODE_TYPE_COUNT: {
@@ -423,7 +497,20 @@ sink_pos bti_node_sink::write(const writer_node& x, sink_pos xpos) {
     // Write last node in the chain.
     sink_pos start_pos = pos();
     auto type = choose_node_type(x, xpos);
-    write_body(x, xpos, type);
+    if (x._payload.has_chunk()) {
+        // Put the chunk's slot into the low bits of the payload.
+        // The writer of the payload left them zeroed.
+        auto p = x._payload;
+        auto slot = slot_for_chunk(p._chunk);
+        SCYLLA_ASSERT(p._payload_size >= 2);
+        auto* last = &p._payload_buf[p._payload_size - 2];
+        auto low = seastar::read_be<uint16_t>(reinterpret_cast<const char*>(last));
+        SCYLLA_ASSERT((low & ((1u << bti_slot_bits) - 1)) == 0);
+        seastar::write_be<uint16_t>(reinterpret_cast<char*>(last), low | slot);
+        write_body(x, xpos, type, p);
+    } else {
+        write_body(x, xpos, type, x._payload);
+    }
 
     if (x._transition_length == 1) {
         return start_pos;
@@ -508,21 +595,74 @@ uint64_t bti_node_sink::page_size() const {
     return _page_size;
 }
 
+uint64_t bti_node_sink::page_capacity() const {
+    return _page_footers ? _page_size - bti_page_footer_size : _page_size;
+}
+
+uint64_t bti_node_sink::table_entry_size() const {
+    return _page_footers ? bti_chunk_table_entry_size : 0;
+}
+
 uint64_t bti_node_sink::bytes_left_in_page() const {
+    if (_page_footers) {
+        return table_start_in_page() - _page_fill;
+    }
     return round_up(pos().value + 1, page_size()) - pos().value;
 };
 
 void bti_node_sink::pad_to_page_boundary() {
+    if (_page_footers) {
+        end_page();
+        return;
+    }
     const static std::array<std::byte, max_page_size> zero_page = {};
     _w.write(reinterpret_cast<const char*>(zero_page.data()), bytes_left_in_page());
 }
 
 sink_pos bti_node_sink::pos() const {
-    return sink_pos(_w.offset());
+    return sink_pos(_w.offset() + _page_fill);
 }
 
-sstables::file_writer& bti_node_sink::file_writer() {
-    return _w;
+void bti_node_sink::write_raw(const char* data, size_t n) {
+    if (!_page_footers) {
+        _w.write(data, n);
+        return;
+    }
+    while (n) {
+        if (bytes_left_in_page() == 0) {
+            end_page();
+        }
+        auto k = std::min<size_t>(n, bytes_left_in_page());
+        put(data, k);
+        data += k;
+        n -= k;
+    }
+}
+
+sink_pos bti_node_sink::raw_pos() {
+    if (_page_footers && bytes_left_in_page() == 0) {
+        end_page();
+    }
+    return pos();
+}
+
+void bti_node_sink::write_page_tail(const char* data, size_t n) {
+    SCYLLA_ASSERT(_page_footers);
+    SCYLLA_ASSERT(n <= page_capacity());
+    if (bytes_left_in_page() < n) {
+        end_page();
+    }
+    static const std::array<char, max_page_size> zeros = {};
+    put(zeros.data(), bytes_left_in_page() - n);
+    put(data, n);
+    SCYLLA_ASSERT(bytes_left_in_page() == 0);
+    end_page();
+}
+
+void bti_node_sink::end_last_page() {
+    if (_page_footers && _page_fill > 0) {
+        end_page();
+    }
 }
 
 } // namespace sstables::trie

@@ -10,6 +10,7 @@
 
 #include "mutation/tombstone.hh"
 #include "mutation/position_in_partition.hh"
+#include "sstables/sstable_position.hh"
 #include "sstables/types.hh"
 
 namespace utils {
@@ -21,6 +22,11 @@ namespace sstables {
 struct data_file_positions_range {
     uint64_t start;
     std::optional<uint64_t> end;
+};
+
+struct sstable_positions_range {
+    sstable_position start;
+    std::optional<sstable_position> end;
 };
 
 // Stores information about open end RT marker
@@ -174,12 +180,12 @@ public:
     virtual std::optional<partition_key> get_partition_key() = 0;
     // Returns data file positions corresponding to the bounds.
     // End position may be unset
-    virtual data_file_positions_range data_file_positions() const = 0;
+    virtual sstable_positions_range sstable_positions() const = 0;
     // Returns the offset (from partition start) of the first row in the last promoted index block
     // in the current partition or nullopt if there are no blocks in the current partition.
     //
     // Preconditions: partition_data_ready()
-    virtual future<std::optional<uint64_t>> last_block_offset() = 0;
+    virtual future<std::optional<sstable_position_offset>> last_block_offset() = 0;
     // Returns the kind of sstable element the cursor is pointing at.
     // No preconditions.
     virtual indexable_element element_kind() const = 0;

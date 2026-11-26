@@ -142,10 +142,13 @@ inline void trie_writer<Output>::complete(ptr<writer_node> x) {
     bool has_out_of_page_children = false;
     bool has_out_of_page_descendants = false;
     auto branch_size = sink_offset{0};
+    // A node's payload comes before its children in key order.
+    auto chunks = chunk_set::of(x->_payload);
     for (const auto& c : x->get_children()) {
         branch_size = branch_size + c->_branch_size + sink_offset(c->_node_size);
         has_out_of_page_children |= c->_pos.valid();
         has_out_of_page_descendants |= c->_has_out_of_page_descendants || c->_has_out_of_page_children;
+        chunks.append(c->_chunks);
     }
     auto node_size = _out.serialized_size(*x, sink_pos((_out.pos() + branch_size)));
     // We try to keep parents in the same page as their children as much as possible.
@@ -160,19 +163,23 @@ inline void trie_writer<Output>::complete(ptr<writer_node> x) {
     //
     // See https://github.com/apache/cassandra/blob/9dfcfaee6585a3443282f56d54e90446dc4ff012/src/java/org/apache/cassandra/io/tries/IncrementalTrieWriterPageAware.java#L32
     // for an alternative description of the process.
-    if (branch_size + node_size <= sink_offset(_out.page_size())) {
+    //
+    // The fit is decided by weight, which includes the growth of the page's chunk table.
+    if (uint64_t((branch_size + node_size).value) + _out.table_entry_size() * chunks.count <= _out.page_capacity()) {
         x->_branch_size = branch_size;
         x->_node_size = node_size;
+        x->_chunks = chunks;
         x->_has_out_of_page_children = has_out_of_page_children;
         x->_has_out_of_page_descendants = has_out_of_page_descendants;
     } else {
         lay_out_children(x);
         x->_branch_size = sink_offset(0);
         x->_node_size = _out.serialized_size(*x, sink_pos(_out.pos()));
+        x->_chunks = chunk_set::of(x->_payload);
         x->_has_out_of_page_children = true;
         x->_has_out_of_page_descendants = false;
     }
-    expensive_assert(uint64_t(x->_node_size.value) <= _out.page_size());
+    expensive_assert(x->weight(_out) <= _out.page_capacity());
 }
 
 template <trie_writer_sink Output>
@@ -181,15 +188,14 @@ inline bool trie_writer<Output>::try_write(ptr<writer_node> candidate) {
     // In truth, the candidate might not fit into the current page.
     // If the estimates aren't known (via _has_out_of_page_*) to be exact,
     // we have to update them and check for fit.
-    uint64_t true_size;
     if (candidate->_has_out_of_page_children || candidate->_has_out_of_page_descendants) {
-        true_size = writer_node::recalc_sizes(candidate, _out, _out.pos()).value;
-    } else {
-        true_size = (candidate->_branch_size + candidate->_node_size).value;
+        writer_node::recalc_sizes(candidate, _out, _out.pos());
     }
+    // The chunk count doesn't change in recalc_sizes(), so it's exact already.
+    uint64_t true_size = candidate->weight(_out);
     bool guaranteed_fit = true;
     if (true_size > _out.bytes_left_in_page()) {
-        if (true_size > _out.page_size()) {
+        if (true_size > _out.page_capacity()) {
             // We get here if, after updating the estimates, we see that the candidate branch
             // actually can't fit even in a full page.
             //
@@ -231,22 +237,26 @@ inline void trie_writer<Output>::lay_out_children(ptr<writer_node> x) {
     // and index where all child branches are just written in transition order.
     // I don't know what's the number in practice. Maybe it's not worth the CPU
     // spent on sorting by size? (It probably is worth it, though).
+    //
+    // Sizes here are weights (see trie_writer_sink), which include the growth of the
+    // page's chunk table.
 
     struct cmp {
         using is_transparent = bool;
+        const Output& out;
         bool operator()(ptr<writer_node> a, ptr<writer_node> b) const {
-            return std::make_pair(a->_branch_size + a->_node_size, a->_transition[0])
-                 < std::make_pair(b->_branch_size + b->_node_size, b->_transition[0]);
+            return std::make_pair(a->weight(out), a->_transition[0])
+                 < std::make_pair(b->weight(out), b->_transition[0]);
         }
-        bool operator()(int64_t a, ptr<writer_node> b) const {
-            return a < (b->_branch_size + b->_node_size).value;
+        bool operator()(uint64_t a, ptr<writer_node> b) const {
+            return a < b->weight(out);
         }
     };
 
     // Note: `lay_out_children` is only called for select inner nodes,
     // those whose subtree is larger than a page.
     // So the CPU cost of using `std::set` should be amortized enough.
-    auto unwritten_children = std::set<ptr<writer_node>, cmp>(cmp());
+    auto unwritten_children = std::set<ptr<writer_node>, cmp>(cmp{_out});
 
     for (const auto& c : x->get_children()) {
         if (!c->_pos.valid()) {
@@ -268,7 +278,7 @@ inline void trie_writer<Output>::lay_out_children(ptr<writer_node> x) {
             // All children should fit into a full page,
             // so we can just the biggest child.
             _out.pad_to_page_boundary();
-            expensive_assert(_out.bytes_left_in_page() == _out.page_size());
+            expensive_assert(_out.bytes_left_in_page() == _out.page_capacity());
             // Pick the biggest child branch.
             choice_it = std::end(unwritten_children);
         }
