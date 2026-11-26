@@ -522,6 +522,16 @@ class ScyllaRESTAPIClient:
             }
         ], tables = tables)
 
+    async def take_cluster_snapshot_of_tables(self, node_ip: str, tag: str, tables: list[dict]) -> None:
+        """Take a cluster snapshot of tables of any keyspaces.
+        Each entry is {"keyspace": ..., "table": ...}; one without "table" selects the whole keyspace."""
+        await self.client.post("/storage_service/tablets/snapshots", host=node_ip, params={'tag': tag}, json={'tables': tables})
+
+    async def backup_cluster_snapshot_of_tables(self, node_ip: str, snapshot: str, locations: list, tables: list[dict]) -> str:
+        """Backup a cluster snapshot of tables of any keyspaces. See take_cluster_snapshot_of_tables() for the entries."""
+        return await self.client.post_json("/storage_service/tablets/backup", host=node_ip, params={'snapshot': snapshot},
+                                           json={'locations': locations, 'tables': tables})
+
     async def cleanup_keyspace(self, node_ip: str, ks: str) -> None:
         """Cleanup keyspace"""
         await self.client.post(f"/storage_service/keyspace_cleanup/{ks}", host=node_ip)

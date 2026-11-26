@@ -316,3 +316,29 @@ def test_snapshot_keyspace_with_tables(nodetool):
             ("snapshot", "--table", "tbl1", "-cf", "tbl2", "ks1"),
             {"expected_requests": []},
             ["error: option '--table' cannot be specified more than once"])
+
+
+def test_cluster_snapshot_tables(nodetool):
+    res = nodetool("cluster", "snapshot", "--tag", "ss", "--tables", "ks1:tbl1,tbl2", "--tables", "ks2", expected_requests=[
+        expected_request("POST", "/storage_service/tablets/snapshots", params={"tag": "ss"},
+                         body={"tables": [{"keyspace": "ks1", "table": "tbl1"},
+                                          {"keyspace": "ks1", "table": "tbl2"},
+                                          {"keyspace": "ks2"}]})
+    ])
+    assert "Requested cluster snapshot(s) for [ks1:tbl1,tbl2, ks2] with snapshot name [ss]" in res.stdout
+
+
+@pytest.mark.parametrize("command", [("snapshot",), ("backup", "--location", "dc1,s3.us-east-2.amazonaws.com,bucket")])
+@pytest.mark.parametrize("args,error", [
+    (("--tables", "ks1", "--table", "tbl1"), "--tables cannot be combined with --table or a list of keyspaces"),
+    (("--tables", "ks1:tbl1", "--keyspaces", "ks2"), "--tables cannot be combined with --table or a list of keyspaces"),
+    (("--tables", ":tbl1"), "Invalid 'tables' argument: :tbl1: the keyspace is empty"),
+    (("--tables", "ks1:tbl1,"), "Invalid 'tables' argument: ks1:tbl1,: a table name is empty"),
+    (("--tables", "ks1:"), "Invalid 'tables' argument: ks1:: no table after ':'"),
+])
+def test_cluster_snapshot_and_backup_bad_tables(nodetool, command, args, error):
+    check_nodetool_fails_with(
+            nodetool,
+            ("cluster",) + command + args,
+            {"expected_requests": []},
+            [f"error processing arguments: {error}"])

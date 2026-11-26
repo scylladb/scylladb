@@ -191,3 +191,22 @@ end: {end_time}
 """
         assert res.returncode == expected_returncode
         assert res.stdout == expected_output
+
+
+def test_cluster_backup_tables(nodetool):
+    task_id = "2c4a3e5f"
+    locations = [{"datacenter": "dc1", "endpoint": "s3.us-east-2.amazonaws.com", "bucket": "bucket-foo", "prefix": "foo"}]
+    tables = [{"keyspace": "ks1", "table": "tbl1"}, {"keyspace": "ks2"}]
+    res = nodetool("cluster", "backup",
+                   "--tables", "ks1:tbl1",
+                   "--tables", "ks2",
+                   "--snapshot", "ss",
+                   "--location", "dc1,s3.us-east-2.amazonaws.com,bucket-foo,foo",
+                   "--nowait",
+                   expected_requests=[
+                       expected_request("POST", "/storage_service/tablets/backup",
+                                        {"snapshot": "ss", "move_files": "false"},
+                                        response=task_id,
+                                        body={"locations": locations, "tables": tables})])
+    assert "Requested cluster backup(s) for [ks1:tbl1, ks2] with snapshot name [ss]" in res.stdout
+    assert task_id in res.stdout
