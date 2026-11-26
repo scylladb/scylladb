@@ -8,7 +8,10 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
+#include <span>
+#include <string_view>
 #include <seastar/core/memory.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -385,6 +388,10 @@ public:
     // Returns the reclaimability state of this region.
     bool reclaiming_enabled() const noexcept { return _impl->reclaiming_enabled(); }
 
+    // Labels the region in minidumps, where its segments can be selected with
+    // "lsa:<owner>" rules. `owner` must have static storage duration.
+    void set_dump_owner(std::string_view owner) noexcept;
+
     // Returns a value which is increased when this region is either compacted or
     // evicted from, which invalidates references into the region.
     // When the value returned by this method doesn't change, references remain valid.
@@ -412,6 +419,35 @@ public:
 
     friend class allocating_section;
 };
+
+// Who owns the LSA segments of a shard, for minidumps (see utils/minidump).
+struct dump_segment_export {
+    // Input: a buffer sized with dump_max_segments().
+    std::span<uint16_t> segment_owner;
+    // Outputs.
+    uintptr_t segments_base = 0;
+    size_t nr_segments = 0;     // valid entries of segment_owner
+    // Distinct owners of the regions (see region::set_dump_owner()), empty
+    // for unlabelled regions.
+    std::array<std::string_view, 8> owners;
+    size_t nr_owners = 0;
+};
+
+// Values of dump_segment_export::segment_owner other than owner indexes.
+constexpr uint16_t dump_segment_not_lsa = 0;
+constexpr uint16_t dump_segment_lsa_free = 1;
+constexpr uint16_t dump_segment_lsa_unknown_region = 2;
+constexpr uint16_t dump_segment_first_owner = 3;    // owners[v - dump_segment_first_owner]
+// One past the largest value of dump_segment_export::segment_owner.
+constexpr size_t dump_segment_owner_values = dump_segment_first_owner + std::tuple_size_v<decltype(dump_segment_export::owners)>;
+
+// Number of segment slots of the calling shard.
+size_t dump_max_segments() noexcept;
+
+// Fills `e` for the calling shard. Doesn't allocate; runs in O(segments).
+// Segments of owners which don't fit into e.owners are reported as
+// dump_segment_lsa_unknown_region.
+void export_segments_for_dump(dump_segment_export& e) noexcept;
 
 // Forces references into the region to remain valid as long as this guard is
 // live by disabling compaction and eviction.
