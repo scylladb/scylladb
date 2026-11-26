@@ -97,6 +97,12 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
 
         await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
 
+        # total_keys rows of 2000 bytes split until 8 tablets, where the average tablet size is below
+        # twice the 30000 target. A major compaction of a tablet which is still being split cannot drop
+        # the rows deleted below, see SCYLLADB-6679.
+        logger.info("Waiting for the last split")
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test, increasing from 4 to 8 tablets', from_mark=s1_mark)
+
         await check()
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
