@@ -154,7 +154,8 @@ public:
     // the bucket references of its object-storage tables and its catalog
     // rows. A tag that is backed up, or one left by a failed attempt, is
     // rejected unless `force` is passed true, which deletes the backup along with the snapshot.
-    future<tasks::task_id> clear_cluster_snapshot(sstring tag, bool force);
+    // With `table`, a (keyspace, table) pair, it clears that table alone.
+    future<tasks::task_id> clear_cluster_snapshot(sstring tag, bool force, std::optional<std::pair<sstring, sstring>> table = std::nullopt);
 
     struct cluster_snapshot_info {
         sstring tag;

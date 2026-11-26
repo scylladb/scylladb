@@ -427,10 +427,10 @@ future<> snapshot_ctl::clear_snapshot_directory(sstring ks_name, sstring cf_name
     });
 }
 
-future<tasks::task_id> snapshot_ctl::clear_cluster_snapshot(sstring tag, bool force) {
+future<tasks::task_id> snapshot_ctl::clear_cluster_snapshot(sstring tag, bool force, std::optional<std::pair<sstring, sstring>> table) {
     if (this_shard_id() != 0) {
         co_return co_await container().invoke_on(0, [&] (auto& local) {
-            return local.clear_cluster_snapshot(tag, force);
+            return local.clear_cluster_snapshot(tag, force, table);
         });
     }
     if (!db::is_valid_user_snapshot_tag(tag)) {
@@ -438,7 +438,7 @@ future<tasks::task_id> snapshot_ctl::clear_cluster_snapshot(sstring tag, bool fo
     }
     co_await coroutine::switch_to(_config.backup_sched_group);
     co_return co_await snapshot::start_cluster_clear_snapshot(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module),
-            std::string(tag), force);
+            std::string(tag), force, std::move(table));
 }
 
 future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files) {

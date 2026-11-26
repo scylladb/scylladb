@@ -99,7 +99,9 @@ std::string db::snapshot::snapshot_prefix_from_manifest(std::string_view manifes
         .string();
 }
 
-future<> db::snapshot::collect_snapshot_residue(replica::database& db, const locator::token_metadata& tm, const sstring& name,
+// Collects the residue of `tables` and leaves the nodes rows of `name`, which
+// its other tables still need. Returns false when `name` has no nodes rows.
+static future<bool> collect_snapshot_tables_residue(replica::database& db, const locator::token_metadata& tm, const sstring& name,
         const utils::chunked_vector<std::pair<sstring, sstring>>& tables, db::snapshot_table_helper& sth) {
     auto nodes = co_await sth.get_snapshot_nodes(name, {}, {}, db::consistency_level::QUORUM);
     std::set<std::pair<std::string, std::string>> partitions;
@@ -109,7 +111,7 @@ future<> db::snapshot::collect_snapshot_residue(replica::database& db, const loc
     // A replica writes its nodes row first, so no partitions means no
     // rows of any other kind either.
     if (partitions.empty()) {
-        co_return;
+        co_return false;
     }
     for (const auto& [ks_name, cf_name] : tables) {
         auto tp = db.get_tables_metadata().get_table_if_exists(
@@ -174,6 +176,14 @@ future<> db::snapshot::collect_snapshot_residue(replica::database& db, const loc
                 co_await sth.delete_snapshot_tablet_entry(name, ks_name, table_name, dc, row.first_token, row.write_timestamp);
             }
         }
+    }
+    co_return true;
+}
+
+future<> db::snapshot::collect_snapshot_residue(replica::database& db, const locator::token_metadata& tm, const sstring& name,
+        const utils::chunked_vector<std::pair<sstring, sstring>>& tables, db::snapshot_table_helper& sth) {
+    if (!co_await collect_snapshot_tables_residue(db, tm, name, tables, sth)) {
+        co_return;
     }
     // The nodes rows name the partitions, they go last.
     co_await sth.delete_snapshot_nodes_rows(name, api::new_timestamp());
@@ -556,6 +566,8 @@ struct clear_snapshot_state {
         utils::UUID attempt;
         bool committed;
         utils::chunked_vector<std::pair<sstring, sstring>> tables;
+        // Set by a clear of one table, when it is the last table of its keyspace in this attempt.
+        bool drop_keyspace_row = false;
     };
     std::optional<db::snapshot_entry> marker;
     std::vector<catalog_name> names;
@@ -582,6 +594,65 @@ static future<clear_snapshot_state> read_clear_snapshot_state(db::snapshot_table
     co_return state;
 }
 
+// The attempt that holds the snapshot of a committed tag. A clear of one table
+// uncommits it while it runs, so when such a clear failed, the marker is left
+// with no committed attempt. The holder is then the newest attempt: a tag in
+// the catalog takes no new attempt, and the attempts that failed before the
+// commit are older.
+static std::optional<utils::UUID> snapshot_holder_attempt(const clear_snapshot_state& state) {
+    std::optional<utils::UUID> holder;
+    for (const auto& n : state.names) {
+        if (n.committed) {
+            return n.attempt;
+        }
+        if (state.marker && (!holder || utils::timeuuid_tri_compare(n.attempt, *holder) > 0)) {
+            holder = n.attempt;
+        }
+    }
+    return holder;
+}
+
+// Narrows the clear to one table of the tag, the rest of the snapshot stays.
+// Returns false when the tag has no other table, so the whole snapshot goes.
+// Throws std::invalid_argument when the tag does not have the table.
+static bool narrow_clear_to_table(clear_snapshot_state& state, const std::string& tag, const std::pair<sstring, sstring>& table) {
+    // Whether other tables remain is decided by the attempt holding the snapshot:
+    // the rows a failed attempt left for another table do not keep the snapshot.
+    const auto holder = snapshot_holder_attempt(state);
+    bool found = false;
+    bool others = false;
+    for (const auto& n : state.names) {
+        for (const auto& t : n.tables) {
+            if (t == table) {
+                found = true;
+            } else if (!holder || n.attempt == *holder) {
+                others = true;
+            }
+        }
+    }
+    if (!found) {
+        throw std::invalid_argument(fmt::format("Snapshot '{}' has no table {}.{}", tag, table.first, table.second));
+    }
+    if (!others) {
+        return false;
+    }
+    for (auto& n : state.names) {
+        const bool has_table = std::ranges::contains(n.tables, table);
+        n.drop_keyspace_row = has_table && std::ranges::none_of(n.tables, [&] (const auto& t) {
+            return t.first == table.first && t.second != table.second;
+        });
+        n.tables.clear();
+        if (has_table) {
+            n.tables.push_back(table);
+        }
+    }
+    // The holder goes last: its batch commits the tag again.
+    if (holder) {
+        std::ranges::stable_partition(state.names, [&] (const auto& n) { return n.attempt != *holder; });
+    }
+    return true;
+}
+
 // Throws std::invalid_argument when the clear must not run.
 static void check_clear_snapshot_preconditions(const tasks::task_manager::module& module,
         const clear_snapshot_state& state, const std::string& tag, bool force) {
@@ -606,15 +677,17 @@ static void check_clear_snapshot_preconditions(const tasks::task_manager::module
 }
 
 static future<> do_cluster_clear_snapshot(db::snapshot_ctl& snap_ctl, const tasks::task_manager::module& module, const std::string& tag, bool force,
-        tasks::task_manager::task::progress& total_progress, abort_source& as) {
+        const std::optional<std::pair<sstring, sstring>>& table, tasks::task_manager::task::progress& total_progress, abort_source& as) {
     using namespace db::snapshot;
 
-    snap_log.info("Begin clearing snapshot '{}'{}", tag, force ? ", forced" : "");
+    snap_log.info("Begin clearing snapshot '{}'{}{}", tag, table ? fmt::format(", table {}.{}", table->first, table->second) : "", force ? ", forced" : "");
 
     db::snapshot_table_helper sth(snap_ctl.qp().local());
 
     auto state = co_await read_clear_snapshot_state(sth, tag);
     check_clear_snapshot_preconditions(module, state, tag, force);
+    const auto holder = snapshot_holder_attempt(state);
+    const bool one_table = table && narrow_clear_to_table(state, tag, *table);
 
     auto& db = snap_ctl.db().local();
     auto& stm = snap_ctl.sp().local().shared_token_metadata();
@@ -640,6 +713,7 @@ static future<> do_cluster_clear_snapshot(db::snapshot_ctl& snap_ctl, const task
 
     // Uncommit the tag, blocks backups from being taken
     // FIXME: not necessary once backup and clearsnapshot become topology operations
+    // A clear of one table commits the tag again with the holder's last rows.
     for (const auto& n : state.names) {
         if (n.committed) {
             co_await sth.insert_snapshot_attempt(tag, n.attempt, db::snapshot_attempt_committed::no);
@@ -732,6 +806,20 @@ static future<> do_cluster_clear_snapshot(db::snapshot_ctl& snap_ctl, const task
         utils::get_local_injector().inject("cluster_clear_snapshot_collect", [] {
             throw std::runtime_error("cluster_clear_snapshot_collect: injected error");
         });
+        if (one_table) {
+            if (!n.tables.empty()) {
+                const auto token_md = stm.get();
+                co_await collect_snapshot_tables_residue(db, *token_md, n.name, n.tables, sth);
+            }
+            const bool is_holder = holder && n.attempt == *holder;
+            if (!n.tables.empty() || is_holder) {
+                co_await sth.delete_snapshot_table_schema_row(n.name, table->first, table->second, n.drop_keyspace_row,
+                        is_holder ? std::make_optional(std::pair<std::string_view, utils::UUID>(tag, *holder)) : std::nullopt,
+                        api::new_timestamp());
+            }
+            total_progress.completed += 1;
+            continue;
+        }
         {
             const auto token_md = stm.get();
             co_await collect_snapshot_residue(db, *token_md, n.name, n.tables, sth);
@@ -742,6 +830,12 @@ static future<> do_cluster_clear_snapshot(db::snapshot_ctl& snap_ctl, const task
         total_progress.completed += 1;
     }
 
+    if (one_table) {
+        total_progress.completed += 1;
+        snap_log.info("Cleared table {}.{} of snapshot '{}'", table->first, table->second, tag);
+        co_return;
+    }
+
     // Delete the snapshots row marker last
     co_await sth.delete_snapshot_entry(tag);
     total_progress.completed += 1;
@@ -749,11 +843,15 @@ static future<> do_cluster_clear_snapshot(db::snapshot_ctl& snap_ctl, const task
 }
 
 future<tasks::task_id>
-db::snapshot::start_cluster_clear_snapshot(db::snapshot_ctl& ctl, tasks::task_manager::module_ptr tm, std::string snapshot_name, bool force) {
+db::snapshot::start_cluster_clear_snapshot(db::snapshot_ctl& ctl, tasks::task_manager::module_ptr tm, std::string snapshot_name, bool force,
+        std::optional<std::pair<sstring, sstring>> table) {
     {
         db::snapshot_table_helper sth(ctl.qp().local());
         auto state = co_await read_clear_snapshot_state(sth, snapshot_name);
         check_clear_snapshot_preconditions(*tm, state, snapshot_name, force);
+        if (table) {
+            narrow_clear_to_table(state, snapshot_name, *table);
+        }
     }
     auto progress = make_lw_shared<tasks::task_manager::task::progress>();
     tasks::task_manager::task_builder task_builder{tm, cluster_clear_snapshot_task_type};
@@ -766,9 +864,9 @@ db::snapshot::start_cluster_clear_snapshot(db::snapshot_ctl& ctl, tasks::task_ma
                     return make_ready_future<tasks::task_manager::task::progress>(*progress);
                 });
     auto task = co_await std::move(task_builder).build(
-            [&ctl, tm = std::move(tm), snapshot_name = std::move(snapshot_name), force, progress] (tasks::task_manager::task::impl& self) mutable {
-        return ctl.run_snapshot_gate_operation([&ctl, &tm, &snapshot_name, force, progress, &as = self.get_abort_source()] {
-            return do_cluster_clear_snapshot(ctl, *tm, snapshot_name, force, *progress, as);
+            [&ctl, tm = std::move(tm), snapshot_name = std::move(snapshot_name), force, table = std::move(table), progress] (tasks::task_manager::task::impl& self) mutable {
+        return ctl.run_snapshot_gate_operation([&ctl, &tm, &snapshot_name, force, &table, progress, &as = self.get_abort_source()] {
+            return do_cluster_clear_snapshot(ctl, *tm, snapshot_name, force, table, *progress, as);
         });
     });
     co_return task->id();
