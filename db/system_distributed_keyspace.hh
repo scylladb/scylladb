@@ -267,6 +267,9 @@ public:
      * Find a snapshot entry. 
      */
     future<std::optional<snapshot_entry>> get_snapshot(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
+    /* Deletes the snapshots row. It is the commit marker of a cluster snapshot,
+     * so a clear deletes it last, after everything else of the tag is gone. */
+    future<> delete_snapshot_entry(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /* The row is written before the attempt's RPCs and committed by the coordinator's
      * commit step, which writes it with committed = true.*/
@@ -291,6 +294,9 @@ public:
      * Get all remote locations for snapshot
      */
     future<utils::chunked_vector<snapshot_remote_location_entry>> get_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Deletes every backup location row of a snapshot. */
+    future<> delete_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Add keyspaces to a snapshot

@@ -976,6 +976,13 @@ future<std::optional<snapshot_entry>> snapshot_table_helper::get_snapshot(std::s
     co_return res;
 }
 
+future<> snapshot_table_helper::delete_snapshot_entry(std::string_view snapshot_name, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{} WHERE name = ?",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOTS);
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(),
+            { sstring(snapshot_name) }, cql3::query_processor::cache_internal::yes).discard_result();
+}
+
 future<> snapshot_table_helper::insert_snapshot_attempt(std::string_view tag, utils::UUID attempt, snapshot_attempt_committed committed, db::consistency_level cl) {
     static const sstring query = format("INSERT INTO {}.{} (tag, attempt, committed) VALUES (?, ?, ?)",
             system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_ATTEMPTS);
@@ -1065,6 +1072,13 @@ snapshot_table_helper::get_snapshot_remote_locations(std::string_view snapshot_n
     );
 
     co_return entries;
+}
+
+future<> snapshot_table_helper::delete_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{} WHERE snapshot_name = ?",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS);
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(),
+            { sstring(snapshot_name) }, cql3::query_processor::cache_internal::yes).discard_result();
 }
 
 /**
