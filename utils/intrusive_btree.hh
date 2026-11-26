@@ -828,6 +828,19 @@ public:
                 return nullptr;
             }
         }
+
+        // Elements don't store their tree, so eviction hooks need this to reach the container.
+        tree_ptr owning_tree() noexcept {
+            node_base* n = revalidate();
+            if (n->is_inline()) {
+                return tree::from_inline(n);
+            }
+            node_ptr nd = node::from_base(n);
+            while (!nd->is_root()) {
+                nd = nd->_parent.n;
+            }
+            return nd->_parent.t;
+        }
     };
 
     using iterator_base_const = iterator_base<true, const_iterator>;

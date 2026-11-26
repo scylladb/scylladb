@@ -1083,6 +1083,8 @@ SEASTAR_THREAD_TEST_CASE(test_ghost_hits_only_after_pressure_eviction) {
     // Ghost slots are direct-mapped; a rare collision drops one.
     BOOST_REQUIRE_GE(hits, 9);
     BOOST_REQUIRE_EQUAL(histogram_samples(tracker.ghost_hit_evicted_bytes()), hits);
+    // Single-row partitions are covered by the partition ghost alone.
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.row_ghost_hit_age()), 0);
 
     // Re-populated without a miss, then forcibly cleared: those misses are not capacity misses.
     evict_all();
@@ -1092,6 +1094,44 @@ SEASTAR_THREAD_TEST_CASE(test_ghost_hits_only_after_pressure_eviction) {
     tracker.clear();
     read_all();
     BOOST_REQUIRE_EQUAL(histogram_samples(tracker.ghost_hit_age()), hits);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_ghost_hits_in_wide_partition) {
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    cache_tracker tracker;
+    tracker.set_ghost_list_size(1 << 20);
+    memtable_snapshot_source underlying(s.schema());
+    auto pk = s.make_pkey(0);
+    mutation m(s.schema(), pk);
+    for (int i = 0; i < 20; ++i) {
+        s.add_row(m, s.make_ckey(i), "v");
+    }
+    underlying.apply(m);
+    row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+    auto pr = dht::partition_range::make_singular(pk);
+    auto read = [&] {
+        auto rd = cache.make_reader(s.schema(), semaphore.make_permit(), pr);
+        auto close_rd = deferred_close(rd);
+        while (rd().get()) {}
+    };
+    read();
+    auto evictions_before = tracker.get_stats().row_evictions;
+    for (int i = 0; i < 10; ++i) {
+        tracker.region().evict_some();
+    }
+    // The partition stays cached, so only row-level ghosts can see the re-reads.
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 1);
+    auto evicted = tracker.get_stats().row_evictions - evictions_before;
+    BOOST_REQUIRE_GT(evicted, 0);
+
+    read();
+    auto hits = histogram_samples(tracker.row_ghost_hit_age());
+    BOOST_REQUIRE_GT(hits, 0);
+    BOOST_REQUIRE_LE(hits, evicted);
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.row_ghost_hit_evicted_bytes()), hits);
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.ghost_hit_age()), 0);
 }
 
 void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::deque<int> expected)

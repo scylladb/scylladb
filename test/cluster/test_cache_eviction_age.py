@@ -57,11 +57,13 @@ class AgeStats:
         self.eviction_age = Histogram(metrics, 'scylla_cache_eviction_age_seconds')
         self.ghost_hit_age = Histogram(metrics, 'scylla_cache_ghost_hit_age_seconds')
         self.ghost_hit_bytes = Histogram(metrics, 'scylla_cache_ghost_hit_evicted_bytes')
+        self.row_ghost_hit_age = Histogram(metrics, 'scylla_cache_row_ghost_hit_age_seconds')
         self.front_age = metrics.get('scylla_cache_lru_front_age_seconds') or 0
 
     def __str__(self) -> str:
         return (f'front_age={self.front_age:.0f}s eviction age (s): {self.eviction_age}; '
-                f'ghost hit age (s): {self.ghost_hit_age}; evicted before ghost hit (bytes): {self.ghost_hit_bytes}')
+                f'ghost hit age (s): {self.ghost_hit_age}; evicted before ghost hit (bytes): {self.ghost_hit_bytes}; '
+                f'row ghost hit age (s): {self.row_ghost_hit_age}')
 
 
 async def age_stats(manager: ScyllaClusterManager, server: ServerInfo) -> AgeStats:
@@ -148,3 +150,33 @@ async def test_eviction_age_cache_friendly_workload(manager: ScyllaClusterManage
         assert after.ghost_hit_age.count - before.ghost_hit_age.count <= NUM_KEYS // 10
         # The cold entries at the LRU front were last read before the hot loop started.
         assert after.front_age >= duration - 2
+
+
+@pytest.mark.skip_mode(mode='debug', reason=SKIP_DEBUG)
+async def test_row_ghost_hits_wide_partitions(manager: ScyllaClusterManager):
+    """Rows of a few wide partitions are evicted one by one while their partitions
+    stay cached: only row ghosts see them read again."""
+    server = await manager.server_add(cmdline=CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int, ck int, v blob, PRIMARY KEY (pk, ck))")
+        insert = cql.prepare(f"INSERT INTO {ks}.t (pk, ck, v) VALUES (?, ?, ?)")
+        value = os.urandom(VALUE_SIZE)
+        partitions = 12
+        rows = [(pk, ck) for pk in range(partitions) for ck in range(NUM_KEYS // partitions)]
+        for i in range(0, len(rows), 50):
+            await asyncio.gather(*[cql.run_async(insert, [pk, ck, value]) for pk, ck in rows[i:i + 50]])
+        await manager.api.keyspace_flush(server.ip_addr, ks, 't')
+        select = cql.prepare(f"SELECT v FROM {ks}.t WHERE pk = ? AND ck = ?")
+        before = await age_stats(manager, server)
+        for _ in range(2):
+            random.shuffle(rows)
+            for i in range(0, len(rows), 50):
+                await asyncio.gather(*[cql.run_async(select, list(r)) for r in rows[i:i + 50]])
+        after = await age_stats(manager, server)
+        logger.info(f'wide partitions: before: {before}, after: {after}')
+
+        # The second pass re-reads rows the first one evicted.
+        assert after.row_ghost_hit_age.count - before.row_ghost_hit_age.count >= NUM_KEYS // 4
+        # Each partition always has recently read rows; whole-partition ghosts come from system tables.
+        assert after.ghost_hit_age.count - before.ghost_hit_age.count <= 40

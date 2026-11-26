@@ -124,6 +124,8 @@ private:
     bool _evicting_under_pressure = false;
     eviction_age_histogram _ghost_hit_age;
     ghost_bytes_histogram _ghost_hit_evicted_bytes;
+    eviction_age_histogram _row_ghost_hit_age;
+    ghost_bytes_histogram _row_ghost_hit_evicted_bytes;
     lru _lru;
     mutation_cleaner _garbage;
     mutation_cleaner _memtable_cleaner;
@@ -198,6 +200,11 @@ public:
     void check_ghost(table_id, dht::token) noexcept;
     const eviction_age_histogram& ghost_hit_age() const noexcept { return _ghost_hit_age; }
     const ghost_bytes_histogram& ghost_hit_evicted_bytes() const noexcept { return _ghost_hit_evicted_bytes; }
+    // Row-level counterparts, so re-reads of rows evicted from wide partitions are seen too.
+    void on_row_evicted(rows_entry&) noexcept;
+    void check_row_ghost(table_id, dht::token, const clustering_key&) noexcept;
+    const eviction_age_histogram& row_ghost_hit_age() const noexcept { return _row_ghost_hit_age; }
+    const ghost_bytes_histogram& row_ghost_hit_evicted_bytes() const noexcept { return _row_ghost_hit_evicted_bytes; }
 };
 
 cache_tracker* get_current_cache_tracker() noexcept;

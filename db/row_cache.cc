@@ -306,6 +306,10 @@ cache_tracker::setup_metrics() {
             [this] { return to_metrics_histogram(_ghost_hit_age); }).aggregate({sm::shard_label}).set_skip_when_empty(),
         sm::make_histogram("ghost_hit_evicted_bytes", sm::description("bytes evicted under memory pressure between a partition's eviction and its next read: a cache this much larger would have kept it"),
             [this] { return to_metrics_histogram(_ghost_hit_evicted_bytes); }).aggregate({sm::shard_label}).set_skip_when_empty(),
+        sm::make_histogram("row_ghost_hit_age_seconds", sm::description("time since eviction of rows read again after being evicted under memory pressure"),
+            [this] { return to_metrics_histogram(_row_ghost_hit_age); }).aggregate({sm::shard_label}).set_skip_when_empty(),
+        sm::make_histogram("row_ghost_hit_evicted_bytes", sm::description("bytes evicted under memory pressure between a row's eviction and its next read: a cache this much larger would have kept it"),
+            [this] { return to_metrics_histogram(_row_ghost_hit_evicted_bytes); }).aggregate({sm::shard_label}).set_skip_when_empty(),
     });
     sstables::register_index_page_cache_metrics(_metrics, _index_cached_file_stats);
     sstables::register_index_page_metrics(_metrics, _partition_index_cache_stats);
@@ -343,6 +347,11 @@ void cache_tracker::touch(rows_entry& e) {
 
 static uint64_t ghost_fingerprint(table_id id, dht::token t) noexcept {
     uint64_t fp = (std::hash<table_id>{}(id) * 0x9e3779b97f4a7c15) ^ t.unbias();
+    return fp ? fp : 1;
+}
+
+static uint64_t row_ghost_fingerprint(table_id id, dht::token t, const clustering_key& ck) noexcept {
+    uint64_t fp = ghost_fingerprint(id, t) ^ (std::hash<managed_bytes_view>{}(ck.representation()) * 0xc2b2ae3d27d4eb4f);
     return fp ? fp : 1;
 }
 
@@ -419,6 +428,41 @@ void cache_tracker::check_ghost(table_id id, dht::token t) noexcept {
     // Unsigned 32-bit difference stays exact across counter wrap-around (16 TB).
     uint32_t evicted_since = uint32_t(_pressure_evicted_bytes >> 12) - g.evicted_before;
     _ghost_hit_evicted_bytes.add(uint64_t(evicted_since) << 12);
+    g = {};
+}
+
+void cache_tracker::on_row_evicted(rows_entry& e) noexcept {
+    if (!_evicting_under_pressure || _ghosts.empty() || e.dummy()) {
+        return;
+    }
+    mutation_partition_v2::rows_type::iterator it(&e);
+    auto& rows = *it.owning_tree();
+    auto& pv = partition_version::container_of(mutation_partition_v2::container_of(rows));
+    // A row of an older version may still be cached in a newer one, so it is not gone yet.
+    if (!pv.is_referenced_from_entry()) {
+        return;
+    }
+    // The partition's last row: the partition ghost recorded right after covers it.
+    if (it == rows.begin() && std::next(it)->is_last_dummy()) {
+        return;
+    }
+    auto& ce = cache_entry::container_of(partition_entry::container_of(pv));
+    auto fp = row_ghost_fingerprint(pv.get_schema()->id(), ce.key().token(), e.key());
+    ghost_slot(fp) = ghost{fp, ghost_seconds(_ghost_epoch), uint32_t(_pressure_evicted_bytes >> 12)};
+}
+
+void cache_tracker::check_row_ghost(table_id id, dht::token t, const clustering_key& ck) noexcept {
+    if (_ghosts.empty()) {
+        return;
+    }
+    auto fp = row_ghost_fingerprint(id, t, ck);
+    auto& g = ghost_slot(fp);
+    if (g.fingerprint != fp) {
+        return;
+    }
+    _row_ghost_hit_age.add(ghost_seconds(_ghost_epoch) - g.evicted_at);
+    uint32_t evicted_since = uint32_t(_pressure_evicted_bytes >> 12) - g.evicted_before;
+    _row_ghost_hit_evicted_bytes.add(uint64_t(evicted_since) << 12);
     g = {};
 }
 
@@ -1581,6 +1625,7 @@ mutation_partition_v2::rows_type::iterator on_evicted_shallow(rows_entry& e, cac
 }
 
 void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
+    tracker.on_row_evicted(*this);
     auto it = ::on_evicted_shallow(*this, tracker);
 
     mutation_partition_v2::rows_type* rows = it.tree_if_singular();
