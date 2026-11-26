@@ -4015,6 +4015,88 @@ async def test_clear_backed_up_snapshot(manager: ScyllaClusterManager, object_st
             assert len(list(cql.execute(f"SELECT key FROM {tbl}"))) == 50
 
 
+@pytest.mark.parametrize("storage", ["object_storage", "local"])
+async def test_clear_backed_up_snapshot_table(manager: ScyllaClusterManager, object_storage, storage):
+    """Clearing one table of a backed-up snapshot needs force, and then deletes the backup of that
+    table alone: its manifest and the backup objects of its sstables. The other table keeps its
+    snapshot, its backup and the location rows. Clearing the other table then clears the snapshot."""
+    remote = storage == 'object_storage'
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag = unique_name('snap_')
+    # An object-storage table is backed up in place, under its own prefix.
+    prefix = 'sstables' if remote else unique_name('bk_')
+    if remote:
+        ks_opts = keyspace_options(object_storage, rf=topology.rf)
+    else:
+        ks_opts = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+
+    async with new_test_keyspace(manager, ks_opts + " AND tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)") as t1, \
+                   new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)") as t2:
+            cf1, cf2 = t1.split('.')[1], t2.split('.')[1]
+            for t in (t1, t2):
+                await prepare_write_workload(cql, t, flush=False, n=50)
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            await manager.api.take_cluster_snapshot(server.ip_addr, ks, tag=tag)
+            tid = await manager.api.backup_cluster_snapshot(server.ip_addr, ks, tag, server.datacenter,
+                                                            object_storage.address, object_storage.bucket_name,
+                                                            prefix, tables=[cf1, cf2])
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert status is not None and status.get('state') == 'done', f'Backup failed: {status}'
+            names = snapshot_names(cql, tag)
+            assert snapshot_location_rows(cql, names)
+
+            def manifests(cf):
+                return [k for k in bucket_objects(object_storage) if k.endswith(f'/{ks}/{cf}/{tag}/manifest.json')]
+            m1, m2 = manifests(cf1), manifests(cf2)
+            assert len(m1) == 1 and len(m2) == 1
+            sids1, sids2 = backup_sstable_ids(object_storage, m1), backup_sstable_ids(object_storage, m2)
+            assert sids1 and sids2
+
+            def backup_keys(sids):
+                # An in-place backup is the snapshot references, an uploaded one lives under the prefix.
+                keys = object_storage_keys(object_storage)
+                if remote:
+                    return {k for k in keys if f'/refs/snapshot-{tag}/' in k and k.split('/')[1] in sids}
+                return {k for k in keys if k.startswith(f'{prefix}/') and any(f'/{sid}/' in k or f'/{sid}-' in k for sid in sids)}
+            assert backup_keys(sids1) and backup_keys(sids2)
+            dirs = 0 if remote else len(servers)
+            assert len(await local_snapshot_dirs(manager, servers, ks, tag)) == 2 * dirs
+
+            with pytest.raises(HTTPError, match='backed up') as e:
+                await manager.api.clear_cluster_snapshot(server.ip_addr, tag, keyspace=ks, table=cf1)
+            assert e.value.code == 400
+            assert manifests(cf1) == m1
+
+            tid = await manager.api.clear_cluster_snapshot(server.ip_addr, tag, force=True, keyspace=ks, table=cf1)
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert status is not None and status.get('state') == 'done', f'Clear of {cf1}: {status}'
+
+            assert not manifests(cf1), f'The manifest of {cf1} survived the clear'
+            assert not backup_keys(sids1), f'The backup of {cf1} survived the clear: {backup_keys(sids1)}'
+            assert manifests(cf2) == m2, f'The manifest of {cf2} was removed'
+            assert backup_keys(sids2), f'The backup of {cf2} was removed'
+            assert len(snapshot_commit_rows(cql, tag)) == 1
+            assert snapshot_location_rows(cql, names), 'The location rows were removed while a table is still backed up'
+            for name in names:
+                assert not list(cql.execute(f"SELECT * FROM system_distributed.snapshot_tables WHERE snapshot_name = '{name}'"
+                                            f" AND keyspace_name = '{ks}' AND table_name = '{cf1}'"))
+            assert len(await local_snapshot_dirs(manager, servers, ks, tag)) == dirs
+
+            await clear_cluster_snapshot(manager, server, tag, force=True)
+
+            assert_snapshot_cleared(cql, object_storage, tag, names, ks, cf2, servers)
+            if not remote:
+                assert not bucket_objects(object_storage, prefix), f'The backup survived the clear: {bucket_objects(object_storage, prefix)}'
+            assert not await local_snapshot_dirs(manager, servers, ks, tag), 'A snapshot directory survived the clear'
+            for t in (t1, t2):
+                assert len(list(cql.execute(f"SELECT key FROM {t}"))) == 50
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_object_storage_clear_snapshot_failure_resume(manager: ScyllaClusterManager, object_storage):
     """A clear that fails midway leaves the catalog rows in place, so

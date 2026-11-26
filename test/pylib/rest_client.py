@@ -508,11 +508,16 @@ class ScyllaRESTAPIClient:
         }
         await self.client.delete("/storage_service/snapshots", host=node_ip, params=params)
 
-    async def clear_cluster_snapshot(self, node_ip: str, tag: str, force: bool = False) -> str:
-        """Clear a cluster snapshot; returns the task id"""
+    async def clear_cluster_snapshot(self, node_ip: str, tag: str, force: bool = False,
+                                     keyspace: Optional[str] = None, table: Optional[str] = None) -> str:
+        """Clear a cluster snapshot, or one table of it; returns the task id"""
         params = {"tag": tag}
         if force:
             params["force"] = "true"
+        if keyspace:
+            params["keyspace"] = keyspace
+        if table:
+            params["table"] = table
         return await self.client.delete("/storage_service/tablets/snapshots", response_type="json",
                                         host=node_ip, params=params)
 
