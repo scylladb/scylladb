@@ -132,6 +132,13 @@ namespace raw {
 ::shared_ptr<cql3::statements::modification_statement>
 delete_statement::prepare_internal(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
         std::unique_ptr<attributes> attrs, cql_stats& stats, const modification_executor& executor) const {
+    // Logstor stores each row as a single value which every write replaces
+    // entirely, so it cannot delete some of the columns and keep the others.
+    if (schema->logstor_enabled() && !_deletions.empty()) {
+        throw exceptions::invalid_request_exception(
+                "Deleting individual columns is not supported on logstor tables, delete the entire row "
+                "or INSERT it with these columns set to null");
+    }
     auto stmt = ::make_shared<cql3::statements::delete_statement>(audit_info(), statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats, executor);
 
     for (auto&& deletion : _deletions) {

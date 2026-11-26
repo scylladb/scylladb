@@ -61,6 +61,8 @@ protected:
     const expr::expression* value_for(const column_definition& def) const;
 
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const;
+
+    virtual void validate_values(const query_options& options, const json_cache_opt& json_cache) const override;
 };
 
 /*
@@ -91,6 +93,8 @@ private:
     virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const override;
 
     json_cache_opt maybe_prepare_json_cache(const query_options& options) const override;
+
+    virtual void validate_values(const query_options& options, const json_cache_opt& json_cache) const override;
 
     void execute_set_value(mutation& m, const clustering_key_prefix& prefix, const update_parameters&
         params, const column_definition& column, const bytes_opt& value) const;

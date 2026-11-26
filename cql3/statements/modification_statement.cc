@@ -178,7 +178,9 @@ modification_spec::modification_spec(const modification_statement& stmt, const q
     : json_cache(stmt.maybe_prepare_json_cache(options))
     , keys(stmt.build_partition_keys(options, json_cache))
     , ranges(stmt.create_clustering_ranges(options, json_cache))
-{ }
+{
+    stmt.validate_values(options, json_cache);
+}
 
 utils::chunked_vector<mutation> modification_statement::make_mutations(
         const std::vector<dht::partition_range>& keys) const {
@@ -535,6 +537,9 @@ void modification_statement::reject_in_relations_with_conditions(bool key_is_in_
 
 modification_statement::json_cache_opt modification_statement::maybe_prepare_json_cache(const query_options& options) const {
     return {};
+}
+
+void modification_statement::validate_values(const query_options& options, const json_cache_opt& json_cache) const {
 }
 
 const statement_type statement_type::INSERT = statement_type(statement_type::type::insert);

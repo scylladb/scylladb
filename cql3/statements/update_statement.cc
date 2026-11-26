@@ -187,6 +187,13 @@ update_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
     const modification_executor& executor) const
 {
+    // Logstor stores each row as a single value which every write replaces
+    // entirely, so it cannot modify some of the columns and keep the others.
+    // An UPDATE does just that (and doesn't write a row marker either).
+    if (schema->logstor_enabled()) {
+        throw exceptions::invalid_request_exception(
+                "UPDATE is not supported on logstor tables, use INSERT to write the entire row");
+    }
     auto stmt = ::make_shared<cql3::statements::update_statement>(audit_info(), statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats, executor);
 
     // FIXME: quadratic

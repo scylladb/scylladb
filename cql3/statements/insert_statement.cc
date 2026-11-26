@@ -100,6 +100,16 @@ parse(const sstring& json_string, const schema::columns_type& expected_receivers
 
 namespace statements {
 
+// Logstor stores each row as a single value which every write replaces
+// entirely, so it cannot modify some of the columns and keep the others.
+// So an INSERT into a logstor table must write every column - a column
+// which should have no value must be set to null, not left out.
+[[noreturn]] static void throw_logstor_missing_column(const column_definition& def, std::string_view why) {
+    throw exceptions::invalid_request_exception(fmt::format(
+            "INSERT into a logstor table must set every column, but column {} is {} "
+            "(to leave it without a value, set it to null)", def.name_as_text(), why));
+}
+
 insert_statement::insert_statement(
         audit::audit_info_ptr&& audit_info,
         uint32_t bound_terms,
@@ -215,6 +225,16 @@ void insert_statement::validate_primary_key(const query_options& options) const 
 
 void insert_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
     apply_column_operations(_column_operations, m, prefix, params);
+}
+
+void insert_statement::validate_values(const query_options& options, const json_cache_opt& json_cache) const {
+    if (s->logstor_enabled()) {
+        for (const auto& op : _column_operations) {
+            if (op->should_skip_operation(options)) {
+                throw_logstor_missing_column(op->column, "unset");
+            }
+        }
+    }
 }
 
 utils::chunked_vector<mutation> insert_statement::apply_updates(
@@ -343,6 +363,16 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
     }
 }
 
+void insert_prepared_json_statement::validate_values(const query_options& options, const json_cache_opt& json_cache) const {
+    if (s->logstor_enabled() && _default_unset) {
+        for (const auto& def : s->regular_columns()) {
+            if (!json_cache->contains(def.name_as_text())) {
+                throw_logstor_missing_column(def, "missing");
+            }
+        }
+    }
+}
+
 namespace raw {
 
 insert_statement::insert_statement(cf_name name,
@@ -416,6 +446,13 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     }
     prepare_conditions(db, *schema, ctx, *stmt);
     stmt->validate_addressed_row();
+    if (schema->logstor_enabled()) {
+        for (const column_definition& def : schema->regular_columns()) {
+            if (!column_ids.contains(def.name())) {
+                throw_logstor_missing_column(def, "missing");
+            }
+        }
+    }
     return stmt;
 }
 

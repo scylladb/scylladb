@@ -10,9 +10,9 @@
 import json
 
 import pytest
-from cassandra.protocol import ConfigurationException
-from cassandra.query import SimpleStatement
-from .util import new_test_table
+from cassandra.protocol import ConfigurationException, InvalidRequest
+from cassandra.query import SimpleStatement, UNSET_VALUE
+from .util import new_test_table, unique_key_int
 from . import nodetool
 
 # All tests in this file are Scylla-only (logstor is not available on Cassandra).
@@ -114,43 +114,168 @@ def test_logstor_two_columns_full_insert(cql, test_keyspace):
         row = cql.execute(f"SELECT pk, v1, v2 FROM {table} WHERE pk = 1").one()
         assert row.v1 == 11 and row.v2 == 'bye'
 
-# Test what happens when an INSERT inserts a partial row (setting only one of
-# two regular columns). In normal CQL, such a partial INSERT keeps the other
-# column unchanged from its previous value (if any). In logstor, the behavior
-# is different: Logstor treats every INSERT as a full replacement of the entire
-# row. This is surprising because it differs from normal CQL behavior, but it
-# is deliberate, and this test verifies that it works as intended.
-def test_logstor_two_columns_partial_insert(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v1 int, v2 text",
+# A logstor table with two regular columns, shared by the tests below of
+# writes that do not write the entire row. Each test uses its own keys.
+@pytest.fixture(scope='module')
+def table_logstor2(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v1 int, v2 text',
                         " WITH storage_engine = 'logstor'") as table:
-        # Insert only v1; v2 should be NULL.
-        cql.execute(f"INSERT INTO {table} (pk, v1) VALUES (1, 42)")
-        row = cql.execute(f"SELECT pk, v1, v2 FROM {table} WHERE pk = 1").one()
-        assert row.pk == 1 and row.v1 == 42 and row.v2 is None
+        yield table
 
-        # Insert only v2; The old item is replaced entirely - the old v1 is
-        # not kept, and v1 becomes NULL.
-        cql.execute(f"INSERT INTO {table} (pk, v2) VALUES (1, 'only_text')")
-        row = cql.execute(f"SELECT pk, v1, v2 FROM {table} WHERE pk = 1").one()
-        assert row.pk == 1 and row.v1 is None and row.v2 == 'only_text'
+# Logstor stores a row as one value that a write replaces entirely, so it
+# can't support a partial write that modifies some of the columns and keeps
+# the others. Instead of silently treating a partial write as a replacement
+# of the entire row (deleting the columns the write did not mention), such
+# writes are rejected. This test checks that an INSERT that does not name
+# every column of the table is rejected, and does not write anything.
+def test_logstor_insert_missing_column(cql, table_logstor2):
+    p = unique_key_int()
+    # Check that an INSERT naming only v1, or only v2, or none of the regular
+    # columns, is rejected.
+    with pytest.raises(InvalidRequest, match='logstor.*v2'):
+        cql.execute(f'INSERT INTO {table_logstor2} (pk, v1) VALUES ({p}, 42)')
+    with pytest.raises(InvalidRequest, match='logstor.*v1'):
+        cql.execute(f"INSERT INTO {table_logstor2} (pk, v2) VALUES ({p}, 'hi')")
+    with pytest.raises(InvalidRequest, match='logstor'):
+        cql.execute(f'INSERT INTO {table_logstor2} (pk) VALUES ({p})')
+    # Check that the rejected INSERTs did not write anything.
+    assert cql.execute(f'SELECT * FROM {table_logstor2} WHERE pk = {p}').one() is None
+    # Check that the same INSERT is rejected also when the row exists.
+    cql.execute(f"INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, 1, 'one')")
+    with pytest.raises(InvalidRequest, match='logstor.*v2'):
+        cql.execute(f'INSERT INTO {table_logstor2} (pk, v1) VALUES ({p}, 42)')
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 1, 'one')]
 
-        # Overwrite pk=1 with only v2; v1 should now be NULL (full replacement).
-        cql.execute(f"INSERT INTO {table} (pk, v2) VALUES (1, 'replaced')")
-        row = cql.execute(f"SELECT pk, v1, v2 FROM {table} WHERE pk = 1").one()
-        assert row.v2 == 'replaced' and row.v1 is None
+# A write that should leave a column without a value can still be done by
+# an INSERT that sets that column to null. Unlike a column the INSERT does not
+# name, a null column is part of the full new value of the row: it deletes the
+# column's old value.
+def test_logstor_insert_null_column(cql, table_logstor2):
+    p = unique_key_int()
+    # Check that an INSERT with v2 set to null writes a row without v2.
+    cql.execute(f'INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, 42, null)')
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 42, None)]
+    # Check that an INSERT with v1 set to null replaces the row, deleting
+    # the old v1.
+    cql.execute(f"INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, null, 'hi')")
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, None, 'hi')]
+    # Check that an INSERT with all regular columns set to null still writes
+    # the row, which has only the key.
+    cql.execute(f'INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, null, null)')
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, None, None)]
+    # Check that a null given as a bound variable works like a null in the
+    # CQL text: it replaces the row, deleting the old v2.
+    cql.execute(f"INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, 1, 'one')")
+    stmt = cql.prepare(f'INSERT INTO {table_logstor2} (pk, v1, v2) VALUES (?, ?, ?)')
+    cql.execute(stmt, [p, 2, None])
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 2, None)]
 
-# Test if we can do exactly the same as we did above with INSERT but using the
-# UPDATE statement instead of INSERT. Currently, this doesn't work, we get a
-# cassandra.WriteFailure. We mark this test xfail because we should decide
-# either this request should be not supported (and fail cleanly with an
-# InvalidRequest) or it should be supported and work the same as an INSERT.
-@pytest.mark.xfail(reason="Currently UPDATE is not supported on logstor tables, but we should decide whether to support it or reject it cleanly")
-def test_logstor_update(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+# When a logstor table has no regular columns at all, an INSERT that names
+# just the key does write the entire row, so it should be allowed.
+def test_logstor_insert_key_only_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY',
                         " WITH storage_engine = 'logstor'") as table:
-        cql.execute(f"UPDATE {table} SET v = 42 WHERE pk = 1")
-        row = cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1").one()
-        assert row.pk == 1 and row.v == 42
+        cql.execute(f'INSERT INTO {table} (pk) VALUES (1)')
+        assert list(cql.execute(f'SELECT pk FROM {table} WHERE pk = 1')) == [(1,)]
+
+# A prepared INSERT that binds UNSET_VALUE to a column does not write that
+# column, so it is a partial write just like an INSERT that does not name the
+# column, and must be rejected too. Because the bound values are only known
+# when the statement is executed, this check happens at execution time.
+def test_logstor_insert_unset_column(cql, table_logstor2):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table_logstor2} (pk, v1, v2) VALUES (?, ?, ?)')
+    # Check that binding UNSET_VALUE to v2 is rejected, and writes nothing.
+    with pytest.raises(InvalidRequest, match='logstor.*v2'):
+        cql.execute(stmt, [p, 42, UNSET_VALUE])
+    assert cql.execute(f'SELECT * FROM {table_logstor2} WHERE pk = {p}').one() is None
+    # Check that the same prepared statement works when every column is
+    # bound.
+    cql.execute(stmt, [p, 42, 'hi'])
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 42, 'hi')]
+    # Check that a conditional INSERT with an unset column is rejected too,
+    # also when its condition fails - the error doesn't depend on whether
+    # the row exists.
+    stmt_lwt = cql.prepare(f'INSERT INTO {table_logstor2} (pk, v1, v2) VALUES (?, ?, ?) IF NOT EXISTS')
+    with pytest.raises(InvalidRequest, match='logstor.*v2'):
+        cql.execute(stmt_lwt, [p, 43, UNSET_VALUE])
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 42, 'hi')]
+
+# INSERT JSON sets every column missing from the JSON object to null, so it
+# writes the entire row and should be allowed. But with DEFAULT UNSET, the
+# missing columns are not written, so it is a partial write and must be
+# rejected - unless the JSON object has every column.
+def test_logstor_insert_json(cql, table_logstor2):
+    p = unique_key_int()
+    # Check that INSERT JSON missing v2 sets v2 to null.
+    cql.execute(f"INSERT INTO {table_logstor2} JSON '{{\"pk\": {p}, \"v1\": 42}}'")
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 42, None)]
+    # Check that INSERT JSON ... DEFAULT UNSET missing v2 is rejected, and
+    # does not modify the row.
+    with pytest.raises(InvalidRequest, match='logstor.*v2'):
+        cql.execute(f"INSERT INTO {table_logstor2} JSON '{{\"pk\": {p}, \"v1\": 43}}' DEFAULT UNSET")
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 42, None)]
+    # Check that the same INSERT JSON is rejected also in a conditional batch
+    # whose condition fails (the row exists) - the error doesn't depend on
+    # whether the condition holds.
+    with pytest.raises(InvalidRequest, match='logstor.*v2'):
+        cql.execute(f"BEGIN BATCH INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, 0, 'x') IF NOT EXISTS; "
+                    f"INSERT INTO {table_logstor2} JSON '{{\"pk\": {p}, \"v1\": 43}}' DEFAULT UNSET; APPLY BATCH")
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 42, None)]
+    # Check that INSERT JSON ... DEFAULT UNSET with every column works.
+    cql.execute(f"INSERT INTO {table_logstor2} JSON '{{\"pk\": {p}, \"v1\": 44, \"v2\": \"hi\"}}' DEFAULT UNSET")
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 44, 'hi')]
+
+# UPDATE is a partial write by definition: unlike INSERT, it doesn't write
+# the CQL row marker, and it modifies only the columns it names. So UPDATE is
+# rejected on logstor tables - even if it names every column.
+def test_logstor_update(cql, table_logstor2):
+    p = unique_key_int()
+    # Check that UPDATE is rejected - whether it names one column or every
+    # column, and whether the row exists or not - and writes nothing.
+    with pytest.raises(InvalidRequest, match='UPDATE.*logstor'):
+        cql.execute(f'UPDATE {table_logstor2} SET v1 = 42 WHERE pk = {p}')
+    with pytest.raises(InvalidRequest, match='UPDATE.*logstor'):
+        cql.execute(f"UPDATE {table_logstor2} SET v1 = 42, v2 = 'hi' WHERE pk = {p}")
+    assert cql.execute(f'SELECT * FROM {table_logstor2} WHERE pk = {p}').one() is None
+    cql.execute(f"INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, 1, 'one')")
+    with pytest.raises(InvalidRequest, match='UPDATE.*logstor'):
+        cql.execute(f'UPDATE {table_logstor2} SET v1 = 42 WHERE pk = {p}')
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 1, 'one')]
+
+# Check that the partial writes are rejected also inside a BATCH. Since the
+# whole batch is rejected, its other statements are not executed either.
+def test_logstor_partial_write_in_batch(cql, table_logstor2):
+    p = unique_key_int()
+    full_insert = f"INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, 1, 'one')"
+    # Check that a batch with an UPDATE is rejected.
+    with pytest.raises(InvalidRequest, match='UPDATE.*logstor'):
+        cql.execute(f'BEGIN BATCH {full_insert}; UPDATE {table_logstor2} SET v1 = 42 WHERE pk = {p}; APPLY BATCH')
+    # Check that a batch with a partial INSERT is rejected.
+    with pytest.raises(InvalidRequest, match='logstor.*v2'):
+        cql.execute(f'BEGIN BATCH {full_insert}; INSERT INTO {table_logstor2} (pk, v1) VALUES ({p}, 42); APPLY BATCH')
+    # Check that a batch deleting a column is rejected.
+    with pytest.raises(InvalidRequest, match='logstor'):
+        cql.execute(f'BEGIN BATCH {full_insert}; DELETE v1 FROM {table_logstor2} WHERE pk = {p}; APPLY BATCH')
+    # Check that the rejected batches wrote nothing, not even the full INSERT.
+    assert cql.execute(f'SELECT * FROM {table_logstor2} WHERE pk = {p}').one() is None
+
+# A DELETE that names columns deletes only these columns and keeps the rest
+# of the row, so it is a partial write and is rejected. Deleting the entire
+# row still works.
+def test_logstor_delete_column(cql, table_logstor2):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table_logstor2} (pk, v1, v2) VALUES ({p}, 1, 'one')")
+    # Check that deleting one column, or every column, is rejected and does
+    # not modify the row.
+    with pytest.raises(InvalidRequest, match='logstor'):
+        cql.execute(f'DELETE v1 FROM {table_logstor2} WHERE pk = {p}')
+    with pytest.raises(InvalidRequest, match='logstor'):
+        cql.execute(f'DELETE v1, v2 FROM {table_logstor2} WHERE pk = {p}')
+    assert list(cql.execute(f'SELECT pk, v1, v2 FROM {table_logstor2} WHERE pk = {p}')) == [(p, 1, 'one')]
+    # Check that deleting the entire row works.
+    cql.execute(f'DELETE FROM {table_logstor2} WHERE pk = {p}')
+    assert cql.execute(f'SELECT * FROM {table_logstor2} WHERE pk = {p}').one() is None
 
 # Test that clustering columns are not supported in logstor tables.
 # Attempting to create a logstor table with clustering columns should fail.
