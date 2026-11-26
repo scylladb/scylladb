@@ -54,6 +54,7 @@
 #include "replica/database.hh"
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "transport/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"
@@ -370,6 +371,21 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::force_terminate_all_repair_sessions_new.unset(r);
 }
 
+static service::restore_repair parse_restore_repair(const sstring& repair_str) {
+    // The repair namespace would make an unqualified repair ambiguous.
+    using restore_repair_param = ss::ns_tablet_aware_restore::repair;
+    auto r = repair_str.empty() ? restore_repair_param::full : ss::ns_tablet_aware_restore::str2repair(repair_str);
+
+    switch (r) {
+    case restore_repair_param::full: return service::restore_repair::yes;
+    case restore_repair_param::disabled: return service::restore_repair::no;
+    case restore_repair_param::NUM_ITEMS:
+        break;
+    }
+
+    throw httpd::bad_param_exception("invalid repair parameter value");
+}
+
 static sstables_loader::stream_scope parse_stream_scope(const sstring& scope_str) {
     using namespace ss::ns_start_restore;
     auto sc = scope_str.empty() ? scope::all : str2scope(scope_str);
@@ -450,6 +466,15 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         std::string keyspace = req->get_query_param("keyspace");
         std::string table = req->get_query_param("table");
         std::string snapshot = req->get_query_param("snapshot");
+        std::string source_keyspace = req->get_query_param("source_keyspace");
+        std::string source_table = req->get_query_param("source_table");
+        if (source_keyspace.empty()) {
+            source_keyspace = keyspace;
+        }
+        if (source_table.empty()) {
+            source_table = table;
+        }
+        auto repair = parse_restore_repair(req->get_query_param("repair"));
 
         rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
         rjson::value parsed = rjson::parse(std::move(content));
@@ -479,16 +504,23 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             auto dc = get_member(location, "datacenter");
             auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
 
-            if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
-                throw httpd::bad_param_exception("backup location entry must have 'manifests' array");
-            }
+            utils::chunked_vector<sstring> manifests;
+            if (location.HasMember("manifests")) {
+                if (!location["manifests"].IsArray()) {
+                    throw httpd::bad_param_exception("backup location 'manifests' must be an array");
+                }
 
-            auto manifests = location["manifests"].GetArray() |
-                std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
-                std::ranges::to<utils::chunked_vector<sstring>>();
+                manifests = location["manifests"].GetArray() |
+                    std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
+                    std::ranges::to<utils::chunked_vector<sstring>>();
 
-            if (manifests.empty()) {
-                throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
+                if (manifests.empty()) {
+                    throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
+                }
+            } else {
+                // Without manifests the location holds a backup made by /storage_service/tablets/backup,
+                // which writes one manifest per table at a path derived from the snapshot name.
+                manifests.push_back(format("{}/manifest.json", db::snapshot::snapshot_meta_location("", source_keyspace, source_table, snapshot)));
             }
 
             apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
@@ -504,7 +536,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         }
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
-        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations));
+        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations), repair);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 }
@@ -1698,6 +1730,59 @@ future<> get_snapshot_details(std::unordered_map<sstring, db::snapshot_ctl::db_s
     }
 }
 
+// The tables a cluster snapshot or backup request names, as (keyspace, table) pairs.
+// A keyspace given without tables is paired with an empty table name.
+// The 'tables' member of the body, if there is one, lists tables of any keyspaces:
+// [{"keyspace": ..., "table": ...}, ...]. Otherwise the query parameters name them.
+static std::unordered_multimap<sstring, sstring> parse_cluster_snapshot_tables(const http::request& req, const rjson::value* body) {
+    auto keyspaces = split(req.get_query_param("keyspace"), ",");
+    auto tables = split(req.get_query_param("table"), ",");
+    std::unordered_multimap<sstring, sstring> ks_tables;
+
+    if (const auto* body_tables = body ? rjson::find(*body, "tables") : nullptr) {
+        if (!keyspaces.empty() || !tables.empty()) {
+            throw httpd::bad_param_exception("'tables' (in body) cannot be combined with the 'keyspace' and 'table' parameters");
+        }
+        // An empty list is refused: it would select all keyspaces.
+        if (!body_tables->IsArray() || body_tables->Empty()) {
+            throw httpd::bad_param_exception("'tables' (in body) must be a non-empty JSON array");
+        }
+        for (const auto& entry : body_tables->GetArray()) {
+            if (!entry.IsObject()) {
+                throw httpd::bad_param_exception("a 'tables' entry (in body) must be a JSON object");
+            }
+            const auto* ks = rjson::find(entry, "keyspace");
+            if (!ks || !ks->IsString() || ks->GetStringLength() == 0) {
+                throw httpd::bad_param_exception("a 'tables' entry (in body) must have a non-empty 'keyspace' string member");
+            }
+            const auto* table = rjson::find(entry, "table");
+            if (table && (!table->IsString() || table->GetStringLength() == 0)) {
+                throw httpd::bad_param_exception("the 'table' member of a 'tables' entry (in body) must be a non-empty string");
+            }
+            ks_tables.emplace(rjson::to_string_view(*ks), table ? rjson::to_string_view(*table) : std::string_view{});
+        }
+        return ks_tables;
+    }
+
+    if (keyspaces.size() != 1 && !tables.empty()) {
+        throw httpd::bad_param_exception("Cannot name tables without naming exactly one keyspace");
+    }
+    // An empty table name would select the whole keyspace.
+    if (std::ranges::any_of(tables, &sstring::empty)) {
+        throw httpd::bad_param_exception("The 'table' parameter must not contain an empty table name");
+    }
+
+    for (const auto& ks : keyspaces) {
+        if (tables.empty()) {
+            ks_tables.emplace(ks, sstring{});
+        }
+        for (const auto& table : tables) {
+            ks_tables.emplace(ks, table);
+        }
+    }
+    return ks_tables;
+}
+
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto result = co_await snap_ctl.local().get_snapshot_details();
@@ -1745,15 +1830,23 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     ss::take_cluster_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("take_cluster_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
-        auto column_families = split(req->get_query_param("table"), ",");
         db::snapshot_options opts = {
             // Note: not published/active. Retain as internal option, but...
             .skip_flush = get_query_param<bool>(*req, "skip_flush"),
         };
 
-        std::vector<sstring> keynames = split(req->get_query_param("keyspace"), ",");
+        rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
+        std::optional<rjson::value> body;
+        if (!std::ranges::all_of(content, &temporary_buffer<char>::empty)) {
+            body = rjson::parse(std::move(content));
+            if (!body->IsObject()) {
+                throw httpd::bad_param_exception("the body must be a JSON object");
+            }
+        }
+
+        auto ks_tables = parse_cluster_snapshot_tables(*req, body ? &*body : nullptr);
         try {
-            co_await snap_ctl.local().take_cluster_column_family_snapshot(keynames, column_families, tag, opts);
+            co_await snap_ctl.local().take_cluster_column_family_snapshot(std::move(ks_tables), tag, opts);
             co_return json_void();
         } catch (...) {
             apilog.error("take_cluster_snapshot failed: {:t}", std::current_exception());
@@ -1803,20 +1896,21 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::start_global_backup.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto column_families = split(req->get_query_param("table"), ",");
-        std::vector<sstring> keynames = split(req->get_query_param("keyspace"), ",");
         auto snapshot_name = req->get_query_param("snapshot");
         auto move_files = get_query_param<bool>(*req, "move_files");
 
         rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
         rjson::value parsed = rjson::parse(std::move(content));
-        if (!parsed.IsArray()) {
+        // The body is the array of locations, or an object that holds it as 'locations'.
+        const rjson::value* locations_json = parsed.IsObject() ? rjson::find(parsed, "locations") : &parsed;
+        if (!locations_json || !locations_json->IsArray()) {
             throw httpd::bad_param_exception("backup locations (in body) must be a JSON array");
         }
+        auto ks_tables = parse_cluster_snapshot_tables(*req, parsed.IsObject() ? &parsed : nullptr);
 
         std::unordered_map<sstring, db::snapshot_dc_location> dclocs;
 
-        const auto& locations = parsed.GetArray();
+        const auto& locations = locations_json->GetArray();
         for (auto& location : locations) {
             if (!location.IsObject()) {
                 throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
@@ -1838,8 +1932,12 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
 
         auto& ctl = snap_ctl.local();
-        auto task_id = co_await ctl.start_global_backup(std::move(dclocs), std::move(keynames), std::move(column_families), std::move(snapshot_name), move_files);
-        co_return json::json_return_type(fmt::to_string(task_id));
+        try {
+            auto task_id = co_await ctl.start_global_backup(std::move(dclocs), std::move(ks_tables), std::move(snapshot_name), move_files);
+            co_return json::json_return_type(fmt::to_string(task_id));
+        } catch (const std::invalid_argument& e) {
+            throw httpd::bad_param_exception(e.what());
+        }
     });
 
     cf::get_true_snapshots_size.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) {

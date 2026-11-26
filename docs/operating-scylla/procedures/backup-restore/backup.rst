@@ -160,6 +160,20 @@ so the first command is optional. A backup that failed part-way can be run again
 With ``--move-files``, each node deletes the SSTable files it uploaded from its local disk. Unlike the per-node backup, the other snapshot files,
 such as ``manifest.json`` and ``schema.cql``, stay in the snapshot directory until the snapshot is cleared.
 
+To snapshot and back up tables from several keyspaces together, select them with ``--tables <keyspace>[:<table>[,<table>...]]``
+instead of the list of keyspaces, once per keyspace. A keyspace given without tables selects all of its tables:
+
+.. code-block:: shell
+
+   nodetool cluster snapshot --tag mysnapshot --tables mykeyspace:team_roster,team_players --tables otherkeyspace
+   nodetool cluster backup --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,backups/mysnapshot --snapshot mysnapshot \
+     --tables mykeyspace:team_roster,team_players --tables otherkeyspace
+
+When the snapshot already exists, each table named explicitly must be in it, or the backup fails without uploading anything.
+The REST API equivalents, ``POST /storage_service/tablets/snapshots`` and ``POST /storage_service/tablets/backup``, take the
+same selection as a ``tables`` list in the JSON request body, with one ``{"keyspace": ..., "table": ...}`` entry per table
+(``table`` omitted to select a whole keyspace).
+
 To restore, see :ref:`Restore a cluster backup <restore-cluster-backup>`.
 
 Per-node backup

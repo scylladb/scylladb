@@ -2514,6 +2514,38 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
 }
 
+// Values are <keyspace>[:<table>[,<table>...]]. Not '.': Alternator table names, and so
+// their keyspace names, may contain dots.
+rjson::value parse_cluster_tables_option(const std::vector<sstring>& values) {
+    auto tables = rjson::empty_array();
+    for (const auto& value : values) {
+        const auto colon = value.find(':');
+        const auto keyspace = value.substr(0, colon);
+        if (keyspace.empty()) {
+            throw std::invalid_argument(fmt::format("Invalid 'tables' argument: {}: the keyspace is empty", value));
+        }
+        if (colon + 1 == value.size()) {
+            throw std::invalid_argument(fmt::format("Invalid 'tables' argument: {}: no table after ':'", value));
+        }
+        if (colon == sstring::npos) {
+            auto entry = rjson::empty_object();
+            rjson::add(entry, "keyspace", rjson::from_string(keyspace));
+            rjson::push_back(tables, std::move(entry));
+            continue;
+        }
+        for (const auto& table : std::views::split(value.substr(colon + 1), std::string_view(",")) | std::ranges::to<std::vector<sstring>>()) {
+            if (table.empty()) {
+                throw std::invalid_argument(fmt::format("Invalid 'tables' argument: {}: a table name is empty", value));
+            }
+            auto entry = rjson::empty_object();
+            rjson::add(entry, "keyspace", rjson::from_string(keyspace));
+            rjson::add(entry, "table", rjson::from_string(table));
+            rjson::push_back(tables, std::move(entry));
+        }
+    }
+    return tables;
+}
+
 void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
 
@@ -2524,11 +2556,21 @@ void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables
     if (vm.contains("keyspaces")) {
         kt_list = vm["keyspaces"].as<std::vector<sstring>>();
     }
+    if (vm.contains("tables") && (!kt_list.empty() || vm.contains("table"))) {
+        throw std::invalid_argument("--tables cannot be combined with --table or a list of keyspaces");
+    }
     if (kt_list.size() != 1 && vm.contains("table")) {
         throw std::invalid_argument("when specifying the table for the snapshot, you must specify one and only one keyspace");
     }
 
-    if (kt_list.empty()) {
+    std::optional<request_body> body;
+    if (vm.contains("tables")) {
+        const auto& values = vm["tables"].as<std::vector<sstring>>();
+        auto req = rjson::empty_object();
+        rjson::add(req, "tables", parse_cluster_tables_option(values));
+        body = request_body{"application/json", rjson::print(req)};
+        kn_msg = fmt::to_string(fmt::join(values, ", "));
+    } else if (kt_list.empty()) {
         kn_msg = "all keyspaces";
     } else {
         params["keyspace"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
@@ -2543,7 +2585,7 @@ void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables
         params["tag"] = fmt::to_string(db_clock::now().time_since_epoch().count());
     }
 
-    client.post("/storage_service/tablets/snapshots", params);
+    client.post("/storage_service/tablets/snapshots", params, std::move(body));
 
     if (kn_msg.empty()) {
         kn_msg = params["keyspace"];
@@ -2574,11 +2616,19 @@ void cluster_backup_operation(scylla_rest_client& client, const bpo::variables_m
         kt_list = vm["keyspaces"].as<std::vector<sstring>>();
     }
 
+    if (vm.contains("tables") && (!kt_list.empty() || vm.contains("table"))) {
+        throw std::invalid_argument("--tables cannot be combined with --table or a list of keyspaces");
+    }
     if (kt_list.size() != 1 && vm.contains("table")) {
         throw std::invalid_argument("when specifying the table for the backup, you must specify one and only one keyspace");
     }
 
-    if (kt_list.empty()) {
+    std::optional<rjson::value> tables;
+    if (vm.contains("tables")) {
+        const auto& values = vm["tables"].as<std::vector<sstring>>();
+        tables = parse_cluster_tables_option(values);
+        kn_msg = fmt::to_string(fmt::join(values, ", "));
+    } else if (kt_list.empty()) {
         kn_msg = "all keyspaces";
     } else {
         params["keyspace"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
@@ -2612,8 +2662,12 @@ void cluster_backup_operation(scylla_rest_client& client, const bpo::variables_m
     }
     ss << "]";
     auto body = ss.str();
+    auto request = body;
+    if (tables) {
+        request = fmt::format("{{\"locations\": {}, \"tables\": {}}}", body, rjson::print(*tables));
+    }
 
-    const auto backup_res = client.post("/storage_service/tablets/backup", params, request_body{ "application/json", body });
+    const auto backup_res = client.post("/storage_service/tablets/backup", params, request_body{ "application/json", request });
     const auto task_id = rjson::to_string_view(backup_res);
 
     if (kn_msg.empty()) {
@@ -2628,6 +2682,68 @@ void cluster_backup_operation(scylla_rest_client& client, const bpo::variables_m
         );
     fmt::print(std::cout, "Snapshot directory: {}\n", params["snapshot"]);
 
+    if (vm.contains("nowait")) {
+        fmt::print(R"(The task id of this operation is {}
+Please use the 'task' subcommands to manage the task.
+)",
+                   task_id);
+        return;
+    }
+
+    const auto url = seastar::format("/task_manager/wait_task/{}", task_id);
+    const auto wait_res = client.get(url);
+    const auto& status = wait_res.GetObject();
+    auto state = rjson::to_string_view(status["state"]);
+    fmt::print("{}", state);
+    int exit_code = EXIT_SUCCESS;
+    if (state != "done") {
+        exit_code = EXIT_FAILURE;
+        fmt::print(": {}", rjson::to_string_view(status["error"]));
+    }
+    fmt::print(R"(
+start: {}
+end: {}
+)",
+               rjson::to_string_view(status["start_time"]),
+               rjson::to_string_view(status["end_time"]));
+    if (exit_code != EXIT_SUCCESS) {
+        throw operation_failed_with_status{exit_code};
+    }
+}
+
+void cluster_restore_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+    for (auto required_param : {"keyspace", "table", "snapshot"}) {
+        if (!vm.contains(required_param)) {
+            throw std::invalid_argument(fmt::format("missing required parameter: {}", required_param));
+        }
+        params[required_param] = vm[required_param].as<sstring>();
+    }
+    if (!vm.contains("location")) {
+        throw std::invalid_argument("missing required parameter: location");
+    }
+    for (auto [option, param] : {std::pair{"source-keyspace", "source_keyspace"}, std::pair{"source-table", "source_table"}, std::pair{"repair", "repair"}}) {
+        if (vm.contains(option)) {
+            params[param] = vm[option].as<sstring>();
+        }
+    }
+
+    auto locations = rjson::empty_array();
+    for (const auto& location : vm["location"].as<std::vector<sstring>>()) {
+        auto values = std::views::split(location, ","sv) | std::ranges::to<std::vector<sstring>>();
+        if (values.size() < 3 || values.size() > 4) {
+            throw std::invalid_argument(fmt::format("Invalid 'location' argument: {}", location));
+        }
+        auto entry = rjson::empty_object();
+        rjson::add(entry, "datacenter", rjson::from_string(values[0]));
+        rjson::add(entry, "endpoint", rjson::from_string(values[1]));
+        rjson::add(entry, "bucket", rjson::from_string(values[2]));
+        rjson::add(entry, "prefix", rjson::from_string(values.size() > 3 ? values[3] : sstring()));
+        rjson::push_back(locations, std::move(entry));
+    }
+
+    const auto restore_res = client.post("/storage_service/tablets/restore", std::move(params), request_body{"application/json", rjson::print(locations)});
+    const auto task_id = rjson::to_string_view(restore_res);
     if (vm.contains("nowait")) {
         fmt::print(R"(The task id of this operation is {}
 Please use the 'task' subcommands to manage the task.
@@ -4293,6 +4409,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/snapshot.html")),
                         {
                             typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
+                            typed_option<std::vector<sstring>>("tables", "Tables to snapshot, from any number of keyspaces, as <keyspace>[:<table>[,<table>...]]. Repeat for each keyspace. A keyspace without tables selects all of its tables. Cannot be combined with --table or a list of keyspaces"),
                             typed_option<sstring>("tag,t", "The name of the snapshot"),
                         },
                         {
@@ -4307,6 +4424,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/backup.html")),
                         {
                             typed_option<sstring>("table", "The table(s) to backup, multiple ones can be joined with ','"),
+                            typed_option<std::vector<sstring>>("tables", "Tables to backup, from any number of keyspaces, as <keyspace>[:<table>[,<table>...]]. Repeat for each keyspace. A keyspace without tables selects all of its tables. Cannot be combined with --table or a list of keyspaces"),
                             typed_option<sstring>("snapshot,s", "The name of the snapshot to backup. It will be created if it does not exist"),
                             typed_option<std::vector<sstring>>("location,l", "Tuples of <dc>,<endpoint>,<bucket>[,<prefix>] locations to write backup to. Repeat for each desired dc."),
                             typed_option<>("nowait", "Don't wait on the backup process"),
@@ -4314,6 +4432,28 @@ For more information, see: {}
                         },
                         {
                             typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to backup"),
+                        },
+                    },
+                    {
+                        "restore",
+                        "Restore a table from a cluster-wide backup in object storage",
+fmt::format(R"(
+The replicas of each tablet download the SSTables of the tablet from the
+backup location of their datacenter. No data is streamed between nodes.
+
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/cluster/restore.html")),
+                        {
+                            typed_option<sstring>("table", "The table to restore into"),
+                            typed_option<sstring>("snapshot,s", "The name of the snapshot to restore"),
+                            typed_option<std::vector<sstring>>("location,l", "Tuples of <dc>,<endpoint>,<bucket>[,<prefix>] locations to read the backup from. Repeat for each dc the keyspace replicates to."),
+                            typed_option<sstring>("source-keyspace", "The keyspace the snapshot was taken from, if it differs from the keyspace to restore into"),
+                            typed_option<sstring>("source-table", "The table the snapshot was taken from, if it differs from the table to restore into"),
+                            typed_option<sstring>("repair", "How to repair each tablet after restoring it: full (default) or disabled"),
+                            typed_option<>("nowait", "Don't wait on the restore process"),
+                        },
+                        {
+                            typed_option<sstring>("keyspace", "The keyspace to restore into", 1),
                         },
                     },
                 }
@@ -4331,6 +4471,9 @@ For more information, see: {}
                     },
                     {
                         "backup", { cluster_backup_operation }
+                    },
+                    {
+                        "restore", { cluster_restore_operation }
                     },
                 }
             }

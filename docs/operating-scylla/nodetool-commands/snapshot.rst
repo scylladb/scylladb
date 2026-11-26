@@ -50,11 +50,20 @@ Parameter                                                             Descriptio
 
 The 'cluster snapshot' version of this command will issue the snapshot on all nodes in the cluster, whereas 
 the non-cluster version only operates on the destination node. The 'cluster snapshot' version supports only the
-``--table`` and ``-t``/``--tag`` options and the list of keyspaces:
+``--table``, ``--tables`` and ``-t``/``--tag`` options and the list of keyspaces:
 
 .. code-block:: shell
 
    nodetool cluster snapshot [--table <table>] [(-t <tag> | --tag <tag>)] [<keyspaces...>]
+   nodetool cluster snapshot (--tables <keyspace>[:<table>[,<table>...]])... [(-t <tag> | --tag <tag>)]
+
+``--tables`` selects tables from any number of keyspaces in one snapshot. Repeat it for each keyspace. A keyspace given
+without tables selects all of its tables. ``--tables`` cannot be combined with ``--table`` or with a list of keyspaces.
+For example, to snapshot two tables of ``ks1`` and all of ``ks2`` under the name ``mysnapshot``:
+
+.. code-block:: shell
+
+   nodetool cluster snapshot --tables ks1:table1,table2 --tables ks2 --tag mysnapshot
 
 Examples
 ........

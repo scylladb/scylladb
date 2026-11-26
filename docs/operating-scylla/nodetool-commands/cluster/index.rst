@@ -6,6 +6,7 @@ Nodetool cluster
 
    repair <repair>
    cleanup <cleanup>
+   restore <restore>
 
 **cluster** - Nodetool supercommand for running cluster operations.
 
@@ -16,3 +17,4 @@ Supported cluster suboperations
 * :doc:`cleanup </operating-scylla/nodetool-commands/cluster/cleanup>`  - Clean up all non tablet (vnode-based) keyspaces in a cluster
 * :doc:`snapshot </operating-scylla/nodetool-commands/snapshot>` - Take a cluster-wide snapshot of keyspaces or tables.
 * :doc:`backup </operating-scylla/nodetool-commands/backup>` - Back up a cluster-wide snapshot to object storage.
+* :doc:`restore </operating-scylla/nodetool-commands/cluster/restore>` :code:`<keyspace>` - Restore a table from a cluster-wide backup in object storage.
