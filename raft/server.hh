@@ -94,6 +94,12 @@ public:
             // reference_wrapper (rather than a plain reference) is used so that
             // configuration remains copy-assignable. See raft/bounded_clock.hh.
             std::reference_wrapper<bounded_clock> clock;
+            // When false, the server serves no lease reads and stamps no
+            // entries, but as a leader still waits out a lease left by a
+            // deposed leader, measured as delta + delta/8 of
+            // clock.monotonic_now() since its election. Lets leases be enabled
+            // or disabled one server at a time.
+            bool enabled = true;
         };
         std::optional<leaseguard_configuration> leaseguard;
         // Servers to prefer as leader, best first. The first one which can vote and

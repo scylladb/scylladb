@@ -146,11 +146,10 @@ struct fsm_config {
     // takes precedence over the seed. When unset (the default), fast bootstrap is disabled and
     // a bare fsm starts as a follower; raft::server sets it.
     std::optional<uint64_t> fast_bootstrap_seed;
-    // LeaseGuard leader-lease parameters. Absent unless leases are enabled for
-    // this server. When present, the leader records `clock.interval_now()` in
-    // each log entry it creates, defers committing writes until a deposed
-    // leader's lease has expired, and may serve linearizable reads locally
-    // while its own lease is valid.
+    // LeaseGuard leader-lease parameters. When present and enabled, the leader
+    // records `clock.interval_now()` in each log entry it creates, defers
+    // committing writes until a deposed leader's lease has expired, and may
+    // serve linearizable reads locally while its own lease is valid.
     struct leaseguard_config {
         // Source of bounded-uncertainty time readings. Non-owning: must outlive
         // the fsm.
@@ -158,6 +157,14 @@ struct fsm_config {
         // Lease duration (Δ). Should be on the order of the election timeout.
         // (arXiv:2512.15659 "Raft Leases Done  Right", Section 5.2)
         lease_clock::duration delta;
+        // When false, the fsm stamps no entries, serves no lease reads, renews
+        // nothing and does not step down on clock loss. As a leader it still
+        // defers committing while a deposed leader's lease may be live: when an
+        // entry at or above its commit index carries a lease time, or the entry
+        // at its commit index is folded into a snapshot, it waits delta +
+        // delta/8 of `clock.monotonic_now()` since its election. So leases can
+        // be enabled or disabled one server at a time.
+        bool enabled = true;
     };
     std::optional<leaseguard_config> leaseguard;
     // Servers to prefer as leader, best first. The first one which can vote and is
@@ -443,8 +450,10 @@ private:
     // in the in-memory log, otherwise a delta wait since this node became
     // leader. An unsynchronized clock only delays this -- the elapsed-time path
     // still discharges it a little over delta after the election -- so it never
-    // defers indefinitely.
-    // Precondition: is_leader(), leases enabled, last_prev_term_idx > 0.
+    // defers indefinitely. With leases disabled only the elapsed-time path is
+    // used.
+    // Precondition: is_leader(), defers_for_prev_term_lease(),
+    // last_prev_term_idx > 0.
     bool prev_term_lease_expired();
     // LeaseGuard: true if this leader currently holds a valid lease, i.e. its
     // newest committed entry (which the caller has verified is in the current
@@ -497,12 +506,17 @@ private:
 
     // True if LeaseGuard leader leases are enabled for this fsm.
     bool leaseguard_enabled() const noexcept {
+        return _config.leaseguard && _config.leaseguard->enabled;
+    }
+    // True if a leader defers committing until a deposed leader's lease has
+    // expired: whenever LeaseGuard is configured, enabled or not.
+    bool defers_for_prev_term_lease() const noexcept {
         return _config.leaseguard.has_value();
     }
     // The bounded-uncertainty time interval to stamp on a new log entry, or
     // nullopt when leases are disabled or the clock is unsynchronized.
     std::optional<time_bounds> lease_time_now() const {
-        if (!_config.leaseguard) {
+        if (!leaseguard_enabled()) {
             return std::nullopt;
         }
         return _config.leaseguard->clock.interval_now();

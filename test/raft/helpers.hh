@@ -71,9 +71,9 @@ struct sm_events_container {
 class fsm_debug : public sm_events_container, public raft::fsm {
 public:
     explicit fsm_debug(raft::server_id id, raft::term_t current_term, raft::server_id voted_for, raft::log log,
-            raft::failure_detector& failure_detector, raft::fsm_config conf)
+            raft::failure_detector& failure_detector, raft::fsm_config conf, raft::index_t commit_idx = raft::index_t{0})
         : sm_events_container()
-        , fsm(id, format("{}", id), current_term, voted_for, std::move(log), raft::index_t{0}, failure_detector, conf, sm_events) {
+        , fsm(id, format("{}", id), current_term, voted_for, std::move(log), commit_idx, failure_detector, conf, sm_events) {
     }
 
     void become_follower(raft::server_id leader) {

@@ -2905,11 +2905,11 @@ raft::time_bounds make_bounds(raft::lease_clock::time_point center,
     return raft::time_bounds{center - error, center + error};
 }
 
-raft::fsm_config make_lease_cfg(raft::bounded_clock& clock) {
+raft::fsm_config make_lease_cfg(raft::bounded_clock& clock, bool enabled = true) {
     return raft::fsm_config{
         .append_request_threshold = 1,
         .enable_prevoting = false,
-        .leaseguard = raft::fsm_config::leaseguard_config{.clock = clock, .delta = lease_delta},
+        .leaseguard = raft::fsm_config::leaseguard_config{.clock = clock, .delta = lease_delta, .enabled = enabled},
     };
 }
 
@@ -3121,6 +3121,129 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_commits_after_delta_without_clock) {
     BOOST_CHECK(!fsm1.get_output().committed.ids.empty());
     BOOST_CHECK(fsm1.is_leader());
     BOOST_CHECK(!clock.interval_now());
+}
+
+// A leader with leases disabled still waits out a lease the deposed leader left
+// on an entry above its commit index: the deposed leader may have had leases
+// enabled and still serve reads from it. The wait is elapsed time alone, so a clock
+// reading past the lease does not end it. The leader's own entries carry no
+// interval.
+BOOST_AUTO_TEST_CASE(test_leaseguard_disabled_leader_waits_out_deposed_lease) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+
+    server_id id1 = id();
+    raft::configuration cfg = config_from_ids({id1});
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
+    log.emplace_back(seastar::make_lw_shared<raft::log_entry>(
+            raft::log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}, make_bounds(lease_t0)}));
+    log.stable_to(log.last_idx());
+
+    // A single-node cluster elects itself on construction, in term 2.
+    fsm_debug fsm(id1, term_t{1}, server_id{}, std::move(log), trivial_failure_detector,
+            make_lease_cfg(clock, false));
+    BOOST_REQUIRE(fsm.is_leader());
+    (void)fsm.get_output();
+    BOOST_CHECK(fsm.get_output().committed.ids.empty());
+
+    clock.set(lease_t0 + lease_delta + 1s, lease_err);
+    clock.advance_monotonic(lease_mono_wait - 1ms);
+    fsm.tick();
+    BOOST_CHECK(fsm.get_output().committed.ids.empty());
+
+    clock.advance_monotonic(2ms);
+    fsm.tick();
+    BOOST_CHECK(!fsm.get_output().committed.ids.empty());
+
+    const auto& own_entry = fsm.get_log()[fsm.get_log().last_idx().value()];
+    BOOST_CHECK_EQUAL(own_entry->term, fsm.get_current_term());
+    BOOST_CHECK(!own_entry->lease_time);
+}
+
+// A leader with leases disabled does not wait when no entry at or above its
+// commit index carries a lease: a group whose leaders never enabled leases
+// commits as it always did.
+BOOST_AUTO_TEST_CASE(test_leaseguard_disabled_leader_commits_after_unstamped_entry) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+
+    server_id id1 = id();
+    raft::configuration cfg = config_from_ids({id1});
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
+    log.emplace_back(seastar::make_lw_shared<raft::log_entry>(
+            raft::log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}}));
+    log.stable_to(log.last_idx());
+
+    fsm_debug fsm(id1, term_t{1}, server_id{}, std::move(log), trivial_failure_detector,
+            make_lease_cfg(clock, false));
+    BOOST_REQUIRE(fsm.is_leader());
+    const auto first = fsm.get_output();
+    const auto second = fsm.get_output();
+    BOOST_CHECK(!first.committed.ids.empty() || !second.committed.ids.empty());
+}
+
+namespace {
+
+// Elects a single-node fsm with leases disabled over a log holding `entries`,
+// given as (term, carries a lease time), from index `first_idx` on, after a
+// snapshot at `snapshot_idx`, and returns true if it defers committing.
+bool disabled_leader_defers_commit(index_t snapshot_idx, index_t first_idx,
+        std::vector<std::pair<term_t, bool>> entries, index_t commit_idx) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+
+    server_id id1 = id();
+    raft::configuration cfg = config_from_ids({id1});
+    raft::log_entries log_entries;
+    auto idx = first_idx;
+    term_t term{1};
+    for (const auto& [entry_term, stamped] : entries) {
+        auto lease_time = stamped ? std::optional(make_bounds(lease_t0)) : std::nullopt;
+        log_entries.emplace_back(seastar::make_lw_shared<raft::log_entry>(
+                raft::log_entry{entry_term, idx++, raft::log_entry::dummy{}, lease_time}));
+        term = entry_term;
+    }
+    raft::log log{raft::snapshot_descriptor{.idx = snapshot_idx,
+            .term = snapshot_idx == index_t{0} ? term_t{0} : term_t{1}, .config = cfg},
+            std::move(log_entries)};
+
+    fsm_debug fsm(id1, term, server_id{}, std::move(log), trivial_failure_detector,
+            make_lease_cfg(clock, false), commit_idx);
+    BOOST_REQUIRE(fsm.is_leader());
+    (void)fsm.get_output();
+    (void)fsm.get_output();
+    return fsm.commit_idx() < fsm.get_log().last_idx();
+}
+
+} // anonymous namespace
+
+// A lease rests on the entry at its leader's commit index, so an unstamped
+// entry after a stamped one does not prove the lease expired: neither a later
+// leader's unstamped dummy nor an unstamped entry the leaseholder appended after
+// its clock was lost.
+BOOST_AUTO_TEST_CASE(test_leaseguard_disabled_leader_waits_out_lease_behind_unstamped_entry) {
+    BOOST_CHECK(disabled_leader_defers_commit(index_t{0}, index_t{1},
+            {{term_t{1}, true}, {term_t{2}, false}}, index_t{0}));
+    BOOST_CHECK(disabled_leader_defers_commit(index_t{0}, index_t{1},
+            {{term_t{1}, true}, {term_t{1}, false}}, index_t{1}));
+}
+
+// A lease time below the commit index does not defer committing: whoever
+// committed past it waited that lease out.
+BOOST_AUTO_TEST_CASE(test_leaseguard_disabled_leader_ignores_lease_below_commit_idx) {
+    BOOST_CHECK(!disabled_leader_defers_commit(index_t{0}, index_t{1},
+            {{term_t{1}, true}, {term_t{2}, false}}, index_t{2}));
+}
+
+// The entry at the commit index folded into a snapshot may carry a live lease,
+// so a leader with leases disabled waits unless the log keeps a trailing copy
+// of it.
+BOOST_AUTO_TEST_CASE(test_leaseguard_disabled_leader_waits_when_commit_entry_is_in_snapshot) {
+    BOOST_CHECK(disabled_leader_defers_commit(index_t{1}, index_t{2}, {}, index_t{1}));
+    BOOST_CHECK(!disabled_leader_defers_commit(index_t{1}, index_t{1},
+            {{term_t{1}, false}}, index_t{1}));
+    BOOST_CHECK(disabled_leader_defers_commit(index_t{1}, index_t{1},
+            {{term_t{1}, true}}, index_t{1}));
 }
 
 namespace {

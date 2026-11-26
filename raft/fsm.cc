@@ -325,6 +325,25 @@ void fsm::become_leader() {
         // No prior-term entry means no deposed lease to wait for, so the
         // deferred-commit restriction does not apply for this leadership term.
         leader_state().lease_wait_done = leader_state().last_prev_term_idx == index_t{0};
+    } else if (defers_for_prev_term_lease()) {
+        // Leases are disabled here, but a deposed leader may have had them
+        // enabled and may still serve reads from its lease. A leader's lease
+        // rests on the entry at its commit index. A leader that commits has
+        // waited out every lease of an earlier term, so only a lease resting on
+        // an entry at or above our commit index can still be live, and every
+        // such entry is in our log. Wait if one of them carries a lease time.
+        // Entries made by leaders with leases disabled carry none, so a group
+        // whose leaders never enabled leases does not wait. The entry at our
+        // commit index may be folded into a snapshot without a trailing copy;
+        // its lease time is then unknown, so wait.
+        auto& state = leader_state();
+        state.last_prev_term_idx = _log.last_idx();
+        state.lease_wait_mono_start = _config.leaseguard->clock.monotonic_now();
+        bool may_hold_lease = _commit_idx > index_t{0} && _commit_idx < _log.first_idx();
+        for (auto idx = std::max(_commit_idx, _log.first_idx()); !may_hold_lease && idx <= _log.last_idx(); ++idx) {
+            may_hold_lease = _log[idx.value()]->lease_time.has_value();
+        }
+        state.lease_wait_done = !may_hold_lease;
     }
 
     // A leader bounds its log with log_limiter_semaphore instead, so drop any
@@ -631,7 +650,7 @@ void fsm::maybe_commit() {
     // old, so the deposed leader can no longer serve linearizable reads from
     // stale data. The writes stay replicated and durable meanwhile; a later
     // tick retries this commit once the lease expires.
-    if (leaseguard_enabled() && !leader_state().lease_wait_done) {
+    if (defers_for_prev_term_lease() && !leader_state().lease_wait_done) {
         if (prev_term_lease_expired()) {
             leader_state().lease_wait_done = true;
         } else {
@@ -739,6 +758,11 @@ bool fsm::prev_term_lease_expired() {
     if (_config.leaseguard->clock.monotonic_now() - state.lease_wait_mono_start
             >= delta + delta / mono_wait_margin_div) {
         return true;
+    }
+    // With leases disabled the elapsed-time path is the only one: the clock is
+    // not expected to be synchronized.
+    if (!leaseguard_enabled()) {
+        return false;
     }
 
     const auto now = _config.leaseguard->clock.interval_now();
@@ -999,9 +1023,9 @@ void fsm::tick_leader() {
     // elapsed-time path in prev_term_lease_expired() discharges the wait a little
     // over delta after the election. So a clock failure is never a reason to give
     // up leadership for liveness -- we make progress either way.
-    if (leaseguard_enabled() && !leader_state().lease_wait_done) {
+    if (defers_for_prev_term_lease() && !leader_state().lease_wait_done) {
         auto& state = leader_state();
-        if (!_clock_ok && !state.clock_unavailable_warned) {
+        if (leaseguard_enabled() && !_clock_ok && !state.clock_unavailable_warned) {
             state.clock_unavailable_warned = true;
             logger.warn("[{}]: LeaseGuard clock is unsynchronized while a commit is deferred. "
                 "Commits proceed once delta has elapsed since this node was elected, and reads "
