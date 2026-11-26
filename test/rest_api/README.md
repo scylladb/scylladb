@@ -26,8 +26,9 @@ to control which tests to run:
 * To run the same test or tests 100 times, add the `--count=100` option.
   This is faster than running `run` 100 times, because Scylla is only run
   once, and also counts for you how many of the runs failed.
-  For `pytest` to support the `--count` option, you need to install a
-  pytest extension: `pip install pytest-repeat`
+  The `--count` option comes from the pytest-repeat extension, which `run`
+  installs in its venv. To use it with `pytest` directly or with
+  `DISABLE_VENV=1`, install it yourself: `pip install pytest-repeat`
 
 Additional useful pytest options, especially useful for debugging tests:
 

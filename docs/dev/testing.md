@@ -23,7 +23,7 @@ or pytest need to run) are declared in `test/pyproject.toml` and pinned
 in `test/uv.lock`, independent of the frozen toolchain image. On
 startup, `test.py` re-execs itself under `uv run --locked` against
 `test/pyproject.toml`, so the whole process runs inside a venv synced
-from that lockfile, reused across runs (keyed by the interpreter ABI)
+from that lockfile, reused across runs (keyed by the interpreter's ABI and path)
 under `build/test-dependencies`. Bumping a version in
 `test/pyproject.toml` (and regenerating `test/uv.lock` with `uv lock
 --project test`) takes effect immediately without having to rebuild the
@@ -37,6 +37,12 @@ otherwise). Anything invoking pytest directly on `test/` rather than
 through `test.py` should likewise run it via
 `uv run --project test --locked -- pytest ...`, so it gets the same
 dependencies.
+
+The scripts that run a single test suite against a single node -
+`test/cqlpy/run`, `test/cqlpy/run-cassandra` and `test/alternator/run` -
+re-exec themselves in the same way and use the same venv, so they too can
+be run with the frozen toolchain, e.g., `tools/toolchain/dbuild
+test/alternator/run`.
 
 Set `DISABLE_VENV=1` to skip the re-exec and run `test.py` directly under
 whatever Python/environment invoked it -- useful for running under a

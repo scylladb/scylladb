@@ -7,6 +7,17 @@ import time
 import shutil
 import signal
 import atexit
+
+# Re-run the script that imported us (test/cqlpy/run, test/alternator/run,
+# etc.) under "uv run", in a venv with the test dependencies listed in
+# test/pyproject.toml - unless DISABLE_VENV is set. This must be done
+# before importing any of those dependencies (e.g., requests).
+source_path = os.path.realpath(os.path.join(__file__, '../../..'))
+if source_path not in sys.path:
+    sys.path.append(source_path)
+from test.pylib.uv_venv import ensure_running_under_uv
+ensure_running_under_uv(sys.argv[0])
+
 import requests
 
 # run_with_temporary_dir() is a utility function for running a process, such
@@ -228,9 +239,6 @@ import ssl
 # executable next to the location of this script, provided it's the
 # only one that matches this wildcard, but this can be overridden
 # by setting a SCYLLA environment variable:
-source_path = os.path.realpath(os.path.join(__file__, '../../..'))
-if source_path not in sys.path:
-    sys.path.append(source_path)
 from test import asan_options, ubsan_options
 from test.pylib.driver_utils import safe_driver_shutdown
 
