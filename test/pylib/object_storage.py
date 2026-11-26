@@ -208,27 +208,49 @@ class GSFront:
         with urllib.request.urlopen(urllib.request.Request(url, data=body, method='POST')) as resp:
             assert resp.status == 200, f'upload of {key} failed: {resp.status}'
 
+    def _bucket_url(self):
+        return f'{self.endpoint}/storage/v1/b/{self.bucket_name}'
+
+    def _object_names(self):
+        """The names of the test bucket's objects."""
+        names, token = [], None
+        while True:
+            params = {'pageToken': token} if token else {}
+            response = requests.get(f'{self._bucket_url()}/o', params=params, timeout=10)
+            response.raise_for_status()
+            listing = response.json()
+            names += [o['name'] for o in listing.get('items', [])]
+            token = listing.get('nextPageToken')
+            if not token:
+                return names
+
     def create_test_bucket(self, test_name: str):
-        """Create a unique per-test bucket using boto3."""
+        """Create a unique per-test bucket using the GCS JSON API."""
         self.bucket_name = _make_bucket_name(test_name)
-        resource = self.get_resource()
-        resource.Bucket(self.bucket_name).create()
+        response = requests.post(f'{self.endpoint}/storage/v1/b?project=testproject', json={
+            'name': self.bucket_name, 'location': 'US', 'storageClass': 'STANDARD',
+            'iamConfiguration': {
+                'uniformBucketLevelAccess': {
+                    'enabled': True,
+                }
+            }
+        }, timeout=10)
+        if response.status_code not in [200, 201]:
+            raise Exception(f'Could not create test bucket: {response}')
 
     def destroy_test_bucket(self):
-        """Empty and delete the per-test bucket using boto3.
+        """Empty and delete the per-test bucket using the GCS JSON API.
 
-        A no-op once the bucket is gone, so a caller that cannot tell whether
-        its deferred destroy was registered may call this and let the callback
-        run too.  A failed destroy leaves the bucket on record, so whichever of
-        the two runs second retries it.
+        A no-op once the bucket is gone, see S3Server.destroy_test_bucket().
         """
         if not self.bucket_name:
             return
         try:
-            resource = self.get_resource()
-            bucket = resource.Bucket(self.bucket_name)
-            bucket.objects.all().delete()
-            bucket.delete()
+            for name in self._object_names():
+                response = requests.delete(f'{self._bucket_url()}/o/{urllib.parse.quote(name, safe="")}', timeout=10)
+                response.raise_for_status()
+            response = requests.delete(self._bucket_url(), timeout=10)
+            response.raise_for_status()
         except Exception as e:
             # Keep the name so that a retry still has a bucket to delete.
             logging.warning("Failed to destroy test bucket %s: %s", self.bucket_name, e)
@@ -414,41 +436,6 @@ class GSServerImpl(GSFront):
 
         self.publish()
 
-
-    def create_test_bucket(self, test_name: str):
-        """Create a unique per-test bucket using GCS HTTP API (fake server doesn't support S3 XML for this)."""
-        self.bucket_name = _make_bucket_name(test_name)
-        response = requests.post(f'{self.endpoint}/storage/v1/b?project=testproject', json={
-            'name': self.bucket_name, 'location': 'US', 'storageClass': 'STANDARD',
-            'iamConfiguration': {
-                'uniformBucketLevelAccess': {
-                    'enabled': True,
-                }
-            }
-        }, timeout=10)
-        if response.status_code not in [200, 201]:
-            raise Exception(f'Could not create test bucket: {response}')
-
-    def destroy_test_bucket(self):
-        """Empty and delete the per-test bucket using GCS HTTP API.
-
-        A no-op once the bucket is gone, see S3Server.destroy_test_bucket().
-        """
-        if not self.bucket_name:
-            return
-        try:
-            # List and delete all objects first using boto3 (listing works on fake GCS)
-            resource = self.get_resource()
-            bucket = resource.Bucket(self.bucket_name)
-            bucket.objects.all().delete()
-            # Delete the bucket via GCS HTTP API
-            response = requests.delete(f'{self.endpoint}/storage/v1/b/{self.bucket_name}', timeout=10)
-            response.raise_for_status()
-        except Exception as e:
-            # Keep the name so that a retry still has a bucket to delete.
-            logging.warning("Failed to destroy test bucket %s: %s", self.bucket_name, e)
-            return
-        self.bucket_name = None
 
     async def stop(self):
         # This runs as a cluster teardown callback, and those have their
