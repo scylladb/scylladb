@@ -1748,3 +1748,36 @@ SEASTAR_THREAD_TEST_CASE(test_throttling_controller_metrics_change_on_upload_pro
     BOOST_REQUIRE_GE(*refused, 0.0);
     BOOST_REQUIRE_LE(*refused, 1.0);
 }
+
+// Copies a small object and returns how many HEAD and PUT requests the copy took.
+static std::pair<double, double> copy_object_requests(s3_test_fixture& guard, bool single_request) {
+    auto cln = guard.client();
+    const auto src = guard.object_path("copysource");
+    const auto dst = guard.object_path("copytarget");
+    const auto content = tests::random::get_sstring(1000);
+    cln->put_object(src, temporary_buffer<char>(content.data(), content.size())).get();
+
+    const auto heads = sum_s3_metric("s3_total_head_requests").value_or(0);
+    const auto puts = sum_s3_metric("s3_total_put_requests").value_or(0);
+    cln->copy_object(src, dst, {}, {}, {}, nullptr, single_request).get();
+    const auto used = std::make_pair(sum_s3_metric("s3_total_head_requests").value_or(0) - heads,
+                                     sum_s3_metric("s3_total_put_requests").value_or(0) - puts);
+    BOOST_REQUIRE_EQUAL(to_sstring(cln->get_object_contiguous(dst).get()), content);
+    return used;
+}
+
+// A copy asks the size of the source first by default.
+SEASTAR_THREAD_TEST_CASE(test_client_copy_object_requests_s3) {
+    s3_test_fixture guard(make_s3_client);
+    auto [heads, puts] = copy_object_requests(guard, false);
+    BOOST_REQUIRE_EQUAL(heads, 1);
+    BOOST_REQUIRE_EQUAL(puts, 1);
+}
+
+// A source known to fit one CopyObject is copied without asking its size.
+SEASTAR_THREAD_TEST_CASE(test_client_copy_object_single_request_s3) {
+    s3_test_fixture guard(make_s3_client);
+    auto [heads, puts] = copy_object_requests(guard, true);
+    BOOST_REQUIRE_EQUAL(heads, 0);
+    BOOST_REQUIRE_EQUAL(puts, 1);
+}

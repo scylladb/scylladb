@@ -21,8 +21,12 @@ class aws_error {
     aws_error_type _type{aws_error_type::OK};
     std::string _message;
     utils::http::retryable _is_retryable{utils::http::retryable::no};
+    // HTTP status of an error reply, set only by wrap_handler; 0 otherwise.
+    unsigned _http_status = 0;
 
 public:
+    [[nodiscard]] unsigned http_status() const { return _http_status; }
+    void set_http_status(unsigned status) { _http_status = status; }
     aws_error() = default;
     aws_error(aws_error_type error_type, utils::http::retryable is_retryable);
     aws_error(aws_error_type error_type, std::string&& error_message, utils::http::retryable is_retryable);
