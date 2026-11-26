@@ -3197,12 +3197,21 @@ async def run_nodetool_cluster_restore(object_storage, topology, manager: Scylla
         await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, dst_ks, dst_cf)
 
     await cql.run_async(f"TRUNCATE {ks}.{cf}")
-    await restore(ks, cf)
+    await restore(ks, cf, "--repair", "full")
+
+    restored, repaired, failed = await restore_repair_log(manager, servers, ks, cf)
+    assert restored, f'No tablet of {cf} was restored'
+    assert not failed, f'The repair of a tablet of {cf} failed: {failed}'
+    assert repaired == restored, f'Not every tablet of {cf} was repaired: restored {restored}, repaired {repaired}'
 
     async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}") as dst_ks:
         dst_cf = f'{cf}_restored'
         await cql.run_async(f"CREATE TABLE {dst_ks}.{dst_cf} (pk text primary key, value int)")
-        await restore(dst_ks, dst_cf, "--source-keyspace", ks, "--source-table", cf)
+        await restore(dst_ks, dst_cf, "--source-keyspace", ks, "--source-table", cf, "--repair", "disabled")
+
+        restored, repaired, _ = await restore_repair_log(manager, servers, dst_ks, dst_cf)
+        assert restored, f'No tablet of {dst_cf} was restored'
+        assert not repaired, f'{dst_cf} was repaired despite --repair disabled: {repaired}'
 
 
 @pytest.mark.asyncio

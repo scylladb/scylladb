@@ -84,7 +84,7 @@ of the REST API (see the :doc:`storage_service API reference </reference/api/sto
 If the backup was taken from a keyspace or a table with a different name than the destination, also pass
 ``--source-keyspace`` with the original keyspace name, ``--source-table`` with the original table name, or both.
 
-The optional ``repair`` query parameter says whether to repair each tablet once it is restored: ``full``, the default,
+The ``--repair`` option says whether to repair each tablet once it is restored: ``full``, the default,
 runs a full repair of the tablet, and ``disabled`` leaves it unrepaired. The repair needs every node to support the
 ``TABLET_RESTORE_REPAIR`` cluster feature. Until then the restore does not repair, and its task fails once the data is
 restored. A tablet whose repair fails, for example because one of its replicas is down, stays restored, and the restore

@@ -233,6 +233,26 @@ def test_cluster_restore_source_names(nodetool):
     assert task_id in res.stdout
 
 
+@pytest.mark.parametrize("repair", ["full", "disabled"])
+def test_cluster_restore_repair(nodetool, repair):
+    task_id = "2c4a3e5f"
+    res = nodetool("cluster", "restore", "ks",
+                   "--table", "cf",
+                   "--snapshot", "ss",
+                   "--location", "dc1,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar",
+                   "--repair", repair,
+                   "--nowait",
+                   expected_requests=[
+                       expected_request(
+                           "POST",
+                           "/storage_service/tablets/restore",
+                           {"keyspace": "ks", "table": "cf", "snapshot": "ss", "repair": repair},
+                           [{"datacenter": "dc1", "endpoint": "s3.us-east-2.amazonaws.com", "bucket": "bucket-foo", "prefix": "foo/bar"}],
+                           response=task_id)
+                   ])
+    assert task_id in res.stdout
+
+
 @pytest.mark.parametrize("args,error", [
     (["--table", "cf", "--snapshot", "ss", "--location", "dc1,ep,bucket"], "missing required parameter: keyspace"),
     (["ks", "--snapshot", "ss", "--location", "dc1,ep,bucket"], "missing required parameter: table"),

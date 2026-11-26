@@ -2699,7 +2699,7 @@ void cluster_restore_operation(scylla_rest_client& client, const bpo::variables_
     if (!vm.contains("location")) {
         throw std::invalid_argument("missing required parameter: location");
     }
-    for (auto [option, param] : {std::pair{"source-keyspace", "source_keyspace"}, std::pair{"source-table", "source_table"}}) {
+    for (auto [option, param] : {std::pair{"source-keyspace", "source_keyspace"}, std::pair{"source-table", "source_table"}, std::pair{"repair", "repair"}}) {
         if (vm.contains(option)) {
             params[param] = vm[option].as<sstring>();
         }
@@ -4423,6 +4423,7 @@ For more information, see: {}
                             typed_option<std::vector<sstring>>("location,l", "Tuples of <dc>,<endpoint>,<bucket>[,<prefix>] locations to read the backup from. Repeat for each dc the keyspace replicates to."),
                             typed_option<sstring>("source-keyspace", "The keyspace the snapshot was taken from, if it differs from the keyspace to restore into"),
                             typed_option<sstring>("source-table", "The table the snapshot was taken from, if it differs from the table to restore into"),
+                            typed_option<sstring>("repair", "How to repair each tablet after restoring it: full (default) or disabled"),
                             typed_option<>("nowait", "Don't wait on the restore process"),
                         },
                         {

@@ -24,6 +24,7 @@ Syntax
                [(-l | --location) <dc2>,<endpoint2>,<bucket2>[,<prefix2>]]...
                [--source-keyspace <keyspace>]
                [--source-table <table>]
+               [--repair (full | disabled)]
                [--nowait]
 
 Example
@@ -42,6 +43,12 @@ Restore the backup of ``ks.table`` into ``ks2.table2``:
     nodetool cluster restore ks2 --table table2 --source-keyspace ks --source-table table --snapshot ss \
         --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz
 
+Restore without repairing the restored tablets:
+
+.. code-block:: console
+
+    nodetool cluster restore ks --table table --snapshot ss --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz --repair disabled
+
 Options
 -------
 
@@ -54,6 +61,8 @@ Options
   Endpoints should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
 * ``--source-keyspace`` - Keyspace the snapshot was taken from, if its name differs from the keyspace to restore into.
 * ``--source-table`` - Table the snapshot was taken from, if its name differs from the table to restore into.
+* ``--repair`` - Whether to repair each tablet once it is restored: ``full``, the default, runs a full repair of the tablet,
+  and ``disabled`` leaves it unrepaired. If a repair fails, the tablet stays restored and the restore task fails with an error naming it.
 * ``--nowait`` - Don't wait on the restore process
 
 See also
