@@ -989,9 +989,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , commitlog_use_fragmented_entries(this, "commitlog_use_fragmented_entries", value_status::Used, true,
         "Whether or not to allow commitlog entries to fragment across segments, allowing for larger entry sizes.\n")
     , strongly_consistent_tables_start_on_damaged_commitlog(this, "strongly_consistent_tables_start_on_damaged_commitlog", value_status::Used, false,
-        "Whether or not to start when commitlog replay could not read a segment in full while this shard hosts strongly consistent raft groups. "
-        "The unread bytes may have held raft batches the node already acknowledged, so starting can drop committed entries and diverge the replica from the quorum. "
-        "Set it only to recover a node that cannot start because an intact segment is reported damaged.\n")
+        "Whether or not to start when commitlog replay could not read a segment in full while this shard hosts strongly consistent raft groups, "
+        "or found a strongly consistent write whose schema version no earlier raft log entry announced. "
+        "The unread bytes may have held raft batches the node already acknowledged, and such a write is skipped, so starting can drop committed entries and diverge the replica from the quorum. "
+        "Set it only to recover a node that cannot start because an intact segment is reported damaged, or because of such a write.\n")
     /**
     * @Group Compaction settings
     * @GroupDescription Related information: Configuring compaction

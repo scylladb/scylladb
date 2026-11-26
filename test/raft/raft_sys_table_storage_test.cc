@@ -7,6 +7,7 @@
  */
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
 #include <unordered_set>
 #include <ranges>
@@ -242,6 +243,18 @@ static raft::log_entry_ptr make_mutation_entry(const schema_ptr& s, raft::term_t
     raft::command cmd;
     ser::serialize(cmd, service::strong_consistency::raft_command{
             .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+    return make_lw_shared<raft::log_entry>(
+            raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
+}
+
+// The schema_changed the leader appends ahead of the first write of `s`'s version.
+static raft::log_entry_ptr make_schema_changed_entry(const schema_ptr& s, raft::term_t term, raft::index_t idx) {
+    raft::command cmd;
+    ser::serialize(cmd, service::strong_consistency::raft_command{
+            .change = service::strong_consistency::schema_changed{
+                    .version = s->version(), .mapping = s->get_column_mapping(),
+                    // The oldest, reached by any node that has a group0 schema version.
+                    .group0_schema_version = table_schema_version(utils::UUID_gen::min_time_UUID())}});
     return make_lw_shared<raft::log_entry>(
             raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
@@ -1899,7 +1912,8 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
                 make_lw_shared<service::strong_consistency::state_machine_stats>());
 
         std::vector<raft::log_entry_ptr> batch = {
-            make_mutation_entry(schema, raft::term_t(1), raft::index_t(1), 0, 13),
+            make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1)),
+            make_mutation_entry(schema, raft::term_t(1), raft::index_t(2), 0, 13),
         };
         co_await storage.store_log_entries(batch);
         co_await storage.store_commit_idx(batch.back()->idx);
@@ -1918,6 +1932,131 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
         const auto released = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
         BOOST_CHECK_EQUAL(released.idx, batch.back()->idx);
     });
+}
+
+// The release of a schema_changed adds its version to the row's list as the one in effect,
+// with no flush, and the row keeps the earlier versions for the writes the segments still
+// hold. The version in effect announced again, as a new term does, changes nothing, and
+// another version announced again moves to the end.
+SEASTAR_TEST_CASE(test_groups_schema_switch_lists_the_versions_in_the_row) {
+    return do_with_cql_env_small_segments([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        co_await env.execute_cql("CREATE TABLE ks.sc_switch (pk int PRIMARY KEY, v int)");
+        const auto schema = env.local_db().find_schema("ks", "sc_switch");
+        auto& table = env.local_db().find_column_family(schema->id());
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, schema->id(), {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+        auto state_machine = service::strong_consistency::make_state_machine(
+                locator::global_tablet_id{.table = schema->id(), .tablet = locator::tablet_id(0)},
+                gid, env.local_db(), env.migration_manager().local(),
+                env.get_system_keyspace().local(), storage, resize_tracker,
+                make_lw_shared<service::strong_consistency::state_machine_stats>());
+
+        // Committed and closed before the apply, so that the apply releases the record.
+        const auto apply = [&] (std::vector<raft::log_entry_ptr> batch) -> future<> {
+            co_await storage.store_log_entries(batch);
+            co_await storage.store_commit_idx(batch.back()->idx);
+            storage.mark_segment_closed(db::replay_position(
+                    std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+            co_await state_machine->apply(std::move(batch));
+        };
+        const auto listed_versions = [&] () -> future<std::vector<table_schema_version>> {
+            std::vector<table_schema_version> versions;
+            for (const auto& record : (co_await raft_groups_storage::load_descriptor(qp, gid, test_shard)).schema_changes) {
+                versions.push_back(record.change.version);
+            }
+            co_return versions;
+        };
+
+        const auto switches_before = table.get_stats().memtable_switch_count;
+        co_await apply({
+            make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1)),
+            make_mutation_entry(schema, raft::term_t(1), raft::index_t(2), 0, 13),
+        });
+        BOOST_CHECK((co_await listed_versions()) == std::vector{schema->version()});
+
+        co_await apply({make_schema_changed_entry(schema, raft::term_t(2), raft::index_t(3))});
+        BOOST_CHECK((co_await listed_versions()) == std::vector{schema->version()});
+
+        co_await env.execute_cql("ALTER TABLE ks.sc_switch ADD w int");
+        const auto altered = env.local_db().find_schema("ks", "sc_switch");
+        co_await apply({
+            make_schema_changed_entry(altered, raft::term_t(2), raft::index_t(4)),
+            make_mutation_entry(altered, raft::term_t(2), raft::index_t(5), 1, 14),
+        });
+        BOOST_CHECK((co_await listed_versions()) == (std::vector{schema->version(), altered->version()}));
+
+        co_await apply({
+            make_schema_changed_entry(schema, raft::term_t(2), raft::index_t(6)),
+            make_mutation_entry(schema, raft::term_t(2), raft::index_t(7), 2, 15),
+        });
+        BOOST_CHECK((co_await listed_versions()) == (std::vector{altered->version(), schema->version()}));
+        BOOST_CHECK_EQUAL(table.get_stats().memtable_switch_count, switches_before);
+    });
+}
+
+// The leader announcing a version again takes its group0 schema version from the storage,
+// before the release that puts the announcement in the row and after it.
+SEASTAR_TEST_CASE(test_groups_listed_group0_schema_version) {
+    return do_with_cql_env_small_segments([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        co_await env.execute_cql("CREATE TABLE ks.sc_listed (pk int PRIMARY KEY, v int)");
+        const auto schema = env.local_db().find_schema("ks", "sc_listed");
+        co_await env.execute_cql("ALTER TABLE ks.sc_listed ADD w int");
+        const auto altered = env.local_db().find_schema("ks", "sc_listed");
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                *env.local_db().commitlog(), schema->id(), {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        const auto announcement = [] (const schema_ptr& s) {
+            return service::strong_consistency::schema_changed{.version = s->version(), .mapping = s->get_column_mapping(),
+                    .group0_schema_version = table_schema_version(utils::UUID_gen::get_time_UUID())};
+        };
+        const auto first = announcement(schema);
+        const auto second = announcement(altered);
+        const std::vector<raft::log_entry_ptr> entries{make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1)),
+                make_schema_changed_entry(altered, raft::term_t(1), raft::index_t(2))};
+        BOOST_CHECK(!storage.listed_group0_schema_version(schema->version()));
+
+        co_await storage.store_log_entries({entries[0]});
+        storage.note_schema_changed(raft::index_t(1), first);
+        storage.note_applied(raft::index_t(1));
+        BOOST_CHECK(storage.listed_group0_schema_version(schema->version()) == first.group0_schema_version);
+
+        co_await storage.store_log_entries({entries[1]});
+        storage.note_schema_changed(raft::index_t(2), second);
+        co_await release_everything(storage, entries);
+        BOOST_CHECK_EQUAL((co_await raft_groups_storage::load_descriptor(qp, gid, test_shard)).schema_changes.size(), 2u);
+        BOOST_CHECK(storage.listed_group0_schema_version(schema->version()) == first.group0_schema_version);
+        BOOST_CHECK(storage.listed_group0_schema_version(altered->version()) == second.group0_schema_version);
+    });
+}
+
+// A version is stale once the commitlog no longer holds the segment where the next version
+// was announced. The version in effect is never stale.
+SEASTAR_THREAD_TEST_CASE(test_count_stale_schema_changes) {
+    using service::strong_consistency::schema_changed_record;
+    const auto record = [] (db::segment_id_type segment) {
+        return schema_changed_record{.change = {.version = table_schema_version(utils::make_random_uuid())},
+                .segment = segment};
+    };
+    const std::vector<schema_changed_record> records{record(1), record(3), record(5)};
+    BOOST_CHECK_EQUAL(service::strong_consistency::count_stale_schema_changes(records, 3), 0u);
+    BOOST_CHECK_EQUAL(service::strong_consistency::count_stale_schema_changes(records, 4), 1u);
+    BOOST_CHECK_EQUAL(service::strong_consistency::count_stale_schema_changes(records, 100), 2u);
+    BOOST_CHECK_EQUAL(service::strong_consistency::count_stale_schema_changes({record(1)}, 100), 0u);
 }
 
 // The truncation records a release persists are exactly what replay needs to

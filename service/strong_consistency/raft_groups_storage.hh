@@ -20,6 +20,7 @@
 
 #include "seastarx.hh"
 #include "raft_commitlog.hh"
+#include "schema/schema.hh"
 
 namespace cql3 {
 
@@ -60,6 +61,43 @@ struct truncate_record {
 // table skips the request.
 using flush_request_fn = std::function<void(db::cf_id_type id, db::replay_position pos)>;
 
+// A raft_command announcing the schema version that the writes after it in the log, up to
+// the next schema_changed, are built with. Replicas that do not know the version upgrade
+// those writes with `mapping`.
+struct schema_changed {
+    table_schema_version version;
+    column_mapping mapping;
+    // The leader's group0 schema version when it announced, no older than the schema
+    // change that made `version`. Unlike table schema versions, group0 schema versions are
+    // ordered.
+    table_schema_version group0_schema_version;
+};
+
+// Whether a node at group0 schema version `local` (nullopt if none yet) has applied the
+// schema change `announced` names.
+bool group0_schema_version_reached(std::optional<table_schema_version> local, table_schema_version announced);
+
+// The node's group0 schema version, read from system.scylla_local.
+future<std::optional<table_schema_version>> load_group0_schema_version(cql3::query_processor& qp);
+
+// A schema_changed as the group's row lists it; see make_tablet_raft_groups_schema().
+struct schema_changed_record {
+    schema_changed change;
+    // The group's newest segment when the version was last announced. The writes of the
+    // version listed before this one are in this segment or older ones.
+    db::segment_id_type segment{0};
+};
+
+// Make `change`, announced in `segment` or earlier, the version in effect in `records`.
+// A no-op for the version already in effect.
+void apply_schema_changed(std::vector<schema_changed_record>& records, const schema_changed& change,
+        db::segment_id_type segment);
+
+// How many records at the front of `records` have no writes in the segments from
+// `oldest_segment` on. The version in effect is never counted.
+size_t count_stale_schema_changes(const std::vector<schema_changed_record>& records,
+        db::segment_id_type oldest_segment);
+
 // Raft persistence for strongly consistent tablet groups: the raft log is stored
 // in the commitlog, one commitlog entry per batch, and system.raft_groups keeps
 // the snapshot details. raft_commitlog owns everything about segments.
@@ -96,6 +134,15 @@ class raft_groups_storage : public raft::persistence {
     // The truncation history as the row currently holds it, so a release can leave
     // that cell alone when nothing changed.
     std::vector<truncation_record> _persisted_truncations;
+    // The same for the schema_changes list.
+    std::vector<schema_changed_record> _persisted_schema_changes;
+    // The applied schema_changed entries, ascending by index, that no release has
+    // written to the row yet.
+    struct applied_schema_changed {
+        raft::index_t idx;
+        schema_changed_record record;
+    };
+    std::deque<applied_schema_changed> _applied_schema_changes;
 
     // The future of the currently executing (or already finished) write operation.
     //
@@ -137,6 +184,19 @@ public:
     // May release records, so call it after the apply.
     void note_applied(raft::index_t idx);
 
+    // Tell the storage that the schema_changed at `idx` has been applied. Call it before
+    // note_applied(idx), so that the release of the record holding `idx` adds it to the
+    // row's list.
+    void note_schema_changed(raft::index_t idx, const schema_changed& change);
+
+    // The last schema_changed of the row's list, which is the one in effect at
+    // snapshot_idx, or nullopt if the list is empty.
+    future<std::optional<schema_changed>> load_schema_changed();
+
+    // The group0 schema version of the last applied announcement of `version`, from the
+    // entries not yet in the row and the row's list, or nullopt if neither has it.
+    std::optional<table_schema_version> listed_group0_schema_version(table_schema_version version) const;
+
     // Give up every segment reference this group holds, for a group being destroyed
     // deliberately; see raft_commitlog::release_all().
     void release_all();
@@ -155,6 +215,7 @@ public:
         raft::configuration config;
         std::vector<truncation_record> truncations;
         truncate_record truncate;
+        std::vector<schema_changed_record> schema_changes;
     };
 
     // The statics below read and write a group's row without a raft_groups_storage,
@@ -193,10 +254,12 @@ public:
     // The whole row, for a replay that has to decide what to keep.
     static future<persisted_descriptor> load_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Persist a descriptor by CQL. Only advances the index, so a replay that
-    // runs twice cannot move the group backwards.
+    // runs twice cannot move the group backwards. An empty `schema_changes` leaves the
+    // row's list alone.
     static future<> store_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
         raft::index_t idx, raft::term_t term, const raft::configuration& config,
-        const std::vector<truncation_record>& truncations);
+        const std::vector<truncation_record>& truncations,
+        const std::vector<schema_changed_record>& schema_changes = {});
     // The last truncate applied by the group `gid` hosted on `shard`, a default record if none.
     // Static like load_descriptor(), so that the commitlog replay can read it without a
     // raft_groups_storage instance.

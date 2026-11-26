@@ -25,6 +25,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+#include "db/schema_tables.hh"
 #include "service/topology_state_machine.hh"
 #include "serializer_impl.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
@@ -205,6 +206,49 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
     const auto new_ts = std::max(leader_clock_now(), _state.leader_info->last_timestamp + 1);
     _state.leader_info->last_timestamp = new_ts;
     return timestamp_with_term{new_ts, term};
+}
+
+future<table_schema_version> groups_manager::group0_schema_version() {
+    return db::schema_tables::get_group0_schema_version(_sys_ks);
+}
+
+void raft_server::announce_schema(table_schema_version version, raft::command cmd) {
+    const auto id = ++_state.schema_announcements;
+    // Unknown until the entry is committed, since a failure does not say whether it is in the log.
+    _state.leader_info->announced_schema.reset();
+    _state.leader_info->announcing = id;
+    // No abort source. Once the entry is in the log, only the end of the term or the
+    // server's stop can keep it from being committed, and both replace leader_info.
+    // Test-only: the entry does not reach the log while the term goes on, as when a
+    // leadership transfer that is later cancelled starts while the entry is being added.
+    auto committed = utils::get_local_injector().enter("sc_schema_announcement_not_appended")
+            ? make_exception_future<>(raft::not_a_leader{raft::server_id{}})
+            : _state.server->add_entry(std::move(cmd), raft::wait_type::committed, nullptr);
+    // The copy of the handle keeps the group's state alive.
+    _state.schema_announcement = [] (raft_server self, uint64_t id, table_schema_version version, future<> committed) -> future<> {
+        auto f = co_await coroutine::as_future(std::move(committed));
+        auto& info = self._state.leader_info;
+        if (info && info->announcing == id) {
+            info->announcing.reset();
+            if (!f.failed()) {
+                info->announced_schema = version;
+            }
+        }
+        if (f.failed()) {
+            auto ex = f.get_exception();
+            logger.debug("announcing schema version {} failed: {}", version, ex);
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    }(*this, id, version, std::move(committed));
+}
+
+future<> raft_server::wait_for_schema_announcement(abort_source& as) {
+    return _state.schema_announcement.get_future(as);
+}
+
+std::optional<table_schema_version> raft_server::listed_group0_schema_version(table_schema_version version) const {
+    // Null once the group's deletion has begun.
+    return _state.storage ? _state.storage->listed_group0_schema_version(version) : std::nullopt;
 }
 
 auto raft_server::begin_read(abort_source& as) -> begin_read_result {
@@ -438,6 +482,9 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
+        // A restarted group may elect the same term, which would pass off the old
+        // server's leader_info, and the schema it announced, as the new one's.
+        state.leader_info = std::nullopt;
 
         if (state.metrics) {
             state.metrics->remove_server(*state.server);

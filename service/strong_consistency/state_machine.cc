@@ -10,7 +10,6 @@
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "state_machine.hh"
-#include "db/schema_tables.hh"
 #include "mutation/frozen_mutation.hh"
 #include "schema/schema_registry.hh"
 #include "serializer_impl.hh"
@@ -18,6 +17,7 @@
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "db/system_keyspace.hh"
 #include "utils/error_injection.hh"
 #include "schema/schema_registry.hh"
@@ -55,6 +55,33 @@ class state_machine : public raft_state_machine {
 
     abort_source _as;
 
+    // The schema_changed the writes are applied under. Until one is applied, it is the
+    // last one the row lists, loaded lazily since the state machine is created without
+    // yielding.
+    std::optional<schema_changed> _announced;
+    // Resolves the announced version once. Cleared when a schema_changed switches to
+    // another version, so that the schemas of superseded versions are not kept alive.
+    schema_store _schemas;
+
+    future<> trigger_group0_barrier() {
+        ++_stats->schema_barrier_waits;
+        if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
+            utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
+        }
+        logger.debug("apply(): waiting for the group0 barrier for tablet {}, group_id={}", _tablet, _group_id);
+        while (true) {
+            try {
+                co_await _mm.get_group0_barrier().trigger(false, &_as);
+                co_return;
+            } catch (const raft_operation_timeout_error& e) {
+                // The write cannot be applied without the schema, and an error out of
+                // apply() ends the group (on_internal_error for SC), so wait again.
+                logger.warn("apply(): the group0 barrier for tablet {}, group_id={} timed out, retrying: {}",
+                    _tablet, _group_id, e.what());
+            }
+        }
+    }
+
 public:
     state_machine(locator::global_tablet_id tablet,
         raft::group_id gid,
@@ -72,6 +99,7 @@ public:
         , _persistence(persistence)
         , _resize_tracker(resize_tracker)
         , _stats(std::move(stats))
+        , _schemas(db, sys_ks.query_processor(), [this] { return trigger_group0_barrier(); })
     {
     }
 
@@ -92,16 +120,6 @@ public:
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             logger.trace("Tablet {}, raft group {}, applies {} entries, indexes {} to {}.",
                 _tablet, _group_id, command.size(), command.front()->idx, command.back()->idx);
-            // One store for the whole batch, so that commands written with the same
-            // schema version resolve their schema only once.
-            schema_store schemas(_db, _sys_ks, [this]() -> future<> {
-                ++_stats->schema_barrier_waits;
-                if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
-                    utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
-                }
-                logger.debug("apply(): waiting for the group0 barrier for tablet {}, group_id={}", _tablet, _group_id);
-                co_await _mm.get_group0_barrier().trigger(false, &_as);
-            });
             // Apply the commands sequentially to preserve linearizability.
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
@@ -130,8 +148,33 @@ public:
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }
+                if (auto* changed = std::get_if<schema_changed>(&cmd.change)) {
+                    if (!_announced) {
+                        _announced = co_await _persistence.load_schema_changed();
+                    }
+                    if (_announced && _announced->version == changed->version) {
+                        // A new term announces the version in effect again, which changes nothing.
+                        _persistence.note_applied(command[i]->idx);
+                        continue;
+                    }
+                    logger.debug("apply(): group {} switches to schema version {}", _group_id, changed->version);
+                    // Before note_applied(), whose release may persist the announcement.
+                    _persistence.note_schema_changed(command[i]->idx, *changed);
+                    _announced = std::move(*changed);
+                    _schemas.clear();
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
                 auto& mut = std::get<write_mutation>(cmd.change).mutation;
-                auto schema = co_await schemas.resolve_and_upgrade(mut);
+                if (!_announced) {
+                    _announced = co_await _persistence.load_schema_changed();
+                    if (!_announced) {
+                        on_internal_error(logger, fmt::format("tablet {}, group {}: the write at index {} is not "
+                            "preceded by a schema_changed, and the group's row holds none",
+                            _tablet, _group_id, command[i]->idx));
+                    }
+                }
+                auto schema = co_await _schemas.resolve_and_upgrade(_tablet.table, *_announced, mut);
                 // Taken after the schema resolution, which may yield on the
                 // group0 barrier.
                 auto commitlog_pin = _persistence.pin_target_table_for_apply(command[i]->idx);
@@ -232,90 +275,96 @@ public:
         return make_ready_future<>();
     }
 
-    // FIXME: once implemented, the transfer has to carry the group's metadata (resize markers) stored in system.raft_groups
+    // FIXME: once implemented, the transfer has to carry the group's metadata (resize markers,
+    // schema_changes) stored in system.raft_groups
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override {
         throw std::runtime_error("transfer_snapshot() not implemented");
     }
 };
 
-thread_local schema_store::column_mappings_cache schema_store::_column_mapping_cache(
-        std::numeric_limits<size_t>::max(), 1h, logger);
-
-future<schema_store::schema_entry> schema_store::get_schema(table_id table, table_schema_version schema_version) {
-    if (utils::get_local_injector().enter("sc_state_machine_return_empty_schema")) {
-        co_return schema_entry{nullptr, nullptr};
+// True if every column `mapping` names is a column of `s` with the same kind and type. With
+// `or_dropped`, a column of `s` with another kind or type, or one `s` dropped, fits too. Pass
+// it only once the mapping is known to be of an older version, since a newer one may have
+// added a dropped column back.
+static bool column_mapping_fits(const column_mapping& mapping, const schema& s, bool or_dropped) {
+    const auto& columns = mapping.columns();
+    for (size_t i = 0; i < columns.size(); ++i) {
+        const auto& entry = columns[i];
+        const auto* def = s.get_column_definition(entry.name());
+        if (or_dropped) {
+            if (!def && !s.dropped_columns().contains(sstring(to_string_view(entry.name())))) {
+                return false;
+            }
+            continue;
+        }
+        // The mapping lists the static columns first.
+        const auto kind = i < mapping.n_static() ? column_kind::static_column : column_kind::regular_column;
+        if (!def || def->kind != kind || *def->type != *entry.type()) {
+            return false;
+        }
     }
-
-    auto schema = local_schema_registry().get_or_null(schema_version);
-    if (schema) {
-        co_return schema_entry{std::move(schema), nullptr};
-    }
-
-    // `db.find_schema()` may throw `replica::no_such_column_family` if the table was already dropped.
-    schema = _db.find_schema(table);
-    // The column mapping may be already present in the cache from another call
-    auto cm_ptr = _column_mapping_cache.find(schema_version);
-    if (cm_ptr) {
-        co_return schema_entry{std::move(schema), std::move(cm_ptr)};
-    }
-
-    // We may not find the column mapping if the mutation schema is newer than the present schema.
-    // In this case, we should trigger the barrier to wait for the schema to be updated and then try again.
-    auto cm_opt = co_await db::schema_tables::get_column_mapping_if_exists(_sys_ks, table, schema_version);
-    if (!cm_opt) {
-        co_return schema_entry{nullptr, nullptr};
-    }
-
-    cm_ptr = co_await _column_mapping_cache.get_ptr(schema_version, [cm = std::move(*cm_opt)](auto schema_version) -> future<column_mapping> {
-        co_return std::move(cm);
-    });
-    co_return schema_entry{std::move(schema), std::move(cm_ptr)};
+    return true;
 }
 
-schema_store::schema_store(replica::database& db, db::system_keyspace& sys_ks, std::function<future<>()> barrier_trigger)
+schema_store::schema_store(replica::database& db, cql3::query_processor& qp, std::function<future<>()> barrier_trigger)
     : _db(db)
-    , _sys_ks(sys_ks)
+    , _qp(qp)
     , _barrier_trigger(std::move(barrier_trigger))
 {
 }
 
-future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
-    const auto schema_version = m.schema_version();
-
-    auto it = _schema_mappings.find(schema_version);
+future<schema_ptr> schema_store::resolve_and_upgrade(table_id table, const schema_changed& announced, frozen_mutation& m,
+        bool reached) {
+    if (m.schema_version() != announced.version) {
+        on_internal_error(logger, fmt::format("a write of table {} has schema version {}, but the announced one is {}",
+                table, m.schema_version(), announced.version));
+    }
+    auto it = _schema_mappings.find(announced.version);
     if (it == _schema_mappings.end()) {
-        const auto table = m.column_family_id();
-        auto [schema, cm_ptr] = co_await get_schema(table, schema_version);
-        if (!schema) {
-            if (const auto trigger = std::exchange(_barrier_trigger, nullptr)) {
-                logger.debug("Table {} has no local schema version {}, running a group0 read barrier.",
-                    table, schema_version);
-                co_await trigger();
-                std::tie(schema, cm_ptr) = co_await get_schema(table, schema_version);
-                if (schema) {
-                    logger.debug("Table {} has schema version {} after the group0 read barrier.", table, schema_version);
-                }
+        // The state machine applies a write only after the node durably reached the
+        // announced group0 schema version, so replay can check it instead of a barrier.
+        const bool behind = !reached && !group0_schema_version_reached(co_await load_group0_schema_version(_qp),
+                announced.group0_schema_version);
+        if (behind && !_barrier_trigger) {
+            co_return nullptr;
+        }
+        // The injection stands for a version only the barrier brings.
+        const bool unknown = utils::get_local_injector().enter("sc_state_machine_return_empty_schema");
+        schema_entry entry{.schema = unknown ? nullptr : local_schema_registry().get_or_null(announced.version)};
+        // The table's schema lags the group0 schema version while a change is applied, so
+        // an unknown version takes the barrier too, unless its mapping fits the table as
+        // it is. Such a mapping converts the same whether the version is older or newer.
+        if (_barrier_trigger && (behind
+                || (!entry.schema && (unknown || !column_mapping_fits(announced.mapping, *_db.find_schema(table), false))))) {
+            logger.debug("Table {} is behind group0 schema version {} or has no local schema version {}, "
+                "running a group0 read barrier.", table, announced.group0_schema_version, announced.version);
+            co_await _barrier_trigger();
+            entry.schema = local_schema_registry().get_or_null(announced.version);
+            if (entry.schema) {
+                logger.debug("Table {} has schema version {} after the group0 read barrier.", table, announced.version);
             }
         }
-        if (!schema) {
-            // Old schema are TTLed after 10 days (see comment in `schema_applier::finalize_tables_and_views()`),
-            // so this error theoretically may be triggered if a node is stuck longer than this.
-            // But in practice we should do a snapshot much earlier, that's why `on_internal_error()` here.
-            // And if the table or keyspace was already dropped, `no_such_column_family`
-            // or `no_such_keyspace` will be thrown earlier.
-            on_internal_error(logger, fmt::format("couldn't find schema for table {} and mutation schema version {}",
-                    table, schema_version));
+        if (!entry.schema) {
+            // Either the mapping fits the table's schema as it is, or the node has reached the
+            // announced group0 schema version (through the barrier, or on disk in replay), so
+            // the version is older than the table's.
+            // `db.find_schema()` may throw `replica::no_such_column_family` if the table was already dropped.
+            entry.schema = _db.find_schema(table);
+            if (!column_mapping_fits(announced.mapping, *entry.schema, true)) {
+                on_internal_error(logger, fmt::format("schema version {} of table {} is unknown, and its column "
+                        "mapping names columns the table's schema {} never had",
+                        announced.version, table, entry.schema->version()));
+            }
+            logger.trace("Upgrading writes of table {} from schema version {} to {}.",
+                table, announced.version, entry.schema->version());
+            entry.mapping = announced.mapping;
         }
-        if (cm_ptr) {
-            logger.trace("Upgrading mutations of table {} from schema version {} to {}.",
-                table, schema_version, schema->version());
-        }
-        it = _schema_mappings.insert({schema_version, {std::move(schema), cm_ptr}}).first;
+        it = _schema_mappings.insert({announced.version, std::move(entry)}).first;
     }
 
-    const auto& [schema, cm_ptr] = it->second;
-    if (cm_ptr) {
-        m = freeze(m.unfreeze_upgrading(schema, *cm_ptr));
+    const auto& [schema, mapping] = it->second;
+    if (mapping) {
+        m = freeze(m.unfreeze_upgrading(schema, *mapping));
     }
     co_return schema;
 }

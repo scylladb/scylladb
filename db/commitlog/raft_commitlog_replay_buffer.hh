@@ -26,7 +26,6 @@ class query_processor;
 }
 
 namespace db {
-class system_keyspace;
 
 namespace raft_buffer_detail {
 
@@ -82,6 +81,9 @@ class raft_commitlog_replay_buffer {
         bool known = false;
         locator::global_tablet_id tablet{table_id{}, locator::tablet_id(0)};
 
+        // The snapshot index the row was loaded with. Every entry at or below it was
+        // applied before the crash.
+        raft::index_t snapshot_idx{0};
         // The running commit index and the term of the entry at it.
         raft::index_t commit_idx{0};
         // How far an unbroken run of indexes read in this pass reaches, starting from
@@ -90,9 +92,24 @@ class raft_commitlog_replay_buffer {
         raft::index_t contiguous_to{0};
         // Term of the entry at commit_idx.
         raft::term_t commit_term{0};
+        // The last index applied in order from snapshot_idx, and its term. The floor
+        // stops there if a write above it is left to the state machine, see `unresolved`.
+        raft::index_t applied_to{0};
+        raft::term_t applied_term{0};
+        // The first write whose schema_changed has a group0 schema version this node has
+        // not reached, so its version may be newer than the table's. It and everything
+        // above it are left in the log for the state machine. Always above snapshot_idx.
+        std::optional<raft::index_t> unresolved;
         // The newest configuration at or below commit_idx, and its entry's index.
         raft::configuration config;
         raft::index_t config_idx{0};
+        // The row's schema_changes list, plus the schema_changed entries replayed above
+        // snapshot_idx. Persisted with the new floor.
+        std::vector<service::strong_consistency::schema_changed_record> schema_changes;
+        // The index of the last schema_changed added to `schema_changes`, initially
+        // snapshot_idx. A schema_changed at or below it is already in the list, or is a
+        // copy read again, which must not put an older version back in effect.
+        raft::index_t announced_to{0};
 
         // The uncommitted tail, ascending.
         std::deque<raft_buffer_detail::buffered_entry> buf;
@@ -130,22 +147,23 @@ class raft_commitlog_replay_buffer {
     future<> resolve_group(replica::database& db, cql3::query_processor& qp,
         raft::group_id group_id, group_state& group);
 
-    // Apply one committed command entry: a write to its table's memtable, a resize marker
-    // to the group's row in system.raft_groups, a truncate to the tablet. A write the
-    // recorded truncate dropped is skipped.
-    future<> apply_committed(replica::database& db, db::system_keyspace& sys_ks,
-        raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry);
+    // Apply one committed command entry, read from `segment`: a write to its table's
+    // memtable, a resize marker to the group's row in system.raft_groups, a truncate to the
+    // tablet, a schema_changed to `group.schema_changes`. A write the recorded truncate
+    // dropped is skipped. Returns false if the entry is left to the state machine, see
+    // `unresolved`, and the caller then keeps it in the uncommitted tail.
+    future<bool> apply_committed(replica::database& db, raft::group_id group_id, group_state& group,
+        const raft::log_entry_ptr& entry, db::segment_id_type segment);
 
     // Consume the buffered entries the floor has reached.
-    future<> drain_committed(replica::database& db, db::system_keyspace& sys_ks,
-        raft::group_id group_id, group_state& group);
+    future<> drain_committed(replica::database& db, raft::group_id group_id, group_state& group);
 
-    // Note a committed entry's term and configuration.
-    static void note_committed(group_state& group, const raft::log_entry_ptr& entry);
+    // Note an applied entry's term and configuration.
+    static void note_applied(group_state& group, const raft::log_entry_ptr& entry);
 
 public:
     // Called once per raft batch during replay, in write order.
-    future<> add_batch(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks,
+    future<> add_batch(replica::database& db, cql3::query_processor& qp,
         raft::group_id group_id, db::segment_id_type segment, raft::index_t commit_idx,
         const std::vector<raft::log_entry_ptr>& entries);
 

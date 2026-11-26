@@ -133,6 +133,14 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
         // The last timestamp used for mutations in this term.
         api::timestamp_type last_timestamp;
+
+        // The schema version the last schema_changed of this term announced, once that
+        // entry is committed. A write is appended only under this version. A new term
+        // starts with none, so the leader announces again before its first write.
+        std::optional<table_schema_version> announced_schema;
+        // The id (raft_group_state::schema_announcements) of the schema_changed on its way
+        // to the log. No write is appended meanwhile, since it would land behind it.
+        std::optional<uint64_t> announcing;
     };
 
     // A group can be deleted and started again while its entry exists (the
@@ -177,6 +185,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
+        // The last schema announcement started, with its outcome. The count of them gives
+        // each an id, since leader_info may be replaced while one runs.
+        shared_future<> schema_announcement = make_ready_future<>();
+        uint64_t schema_announcements = 0;
 
         // Aborts the migration RPC running on the group. The next one aborts it: the
         // coordinator retries a failed attempt on every replica, and the retry supersedes
@@ -393,6 +405,9 @@ public:
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
     tablet_group_leader_cache& leader_cache() { return _leader_cache; }
+
+    // This node's group0 schema version, which the leader puts in a schema_changed.
+    future<table_schema_version> group0_schema_version();
 };
 
 /// A temporary, RAII-style handle to an active Raft group server instance,
@@ -435,6 +450,28 @@ public:
     };
     using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader>;
     begin_mutate_result begin_mutate(abort_source&);
+
+    // A write built with `version` may be appended only if no schema announcement is
+    // running and the last one of the term announced `version`. Otherwise the caller
+    // starts one with announce_schema(), unless one is already running, waits for it with
+    // wait_for_schema_announcement() and calls begin_mutate() again.
+    // schema_announcement_running(), schema_announced() and announce_schema() may be
+    // called only right after begin_mutate() returned a timestamp, with no suspension
+    // in between, since they act on the current term's leader_info.
+    bool schema_announcement_running() const {
+        return _state.leader_info->announcing.has_value();
+    }
+    bool schema_announced(table_schema_version version) const {
+        return _state.leader_info->announced_schema == version;
+    }
+    // Appends `cmd`, the schema_changed of `version`, and records the version as announced
+    // once the entry is committed. Runs in the background, so that it outlives the request.
+    void announce_schema(table_schema_version version, raft::command cmd);
+    // Resolves when the last announcement started ends, with its failure if it failed.
+    future<> wait_for_schema_announcement(abort_source&);
+    // The group0 schema version `version` was last announced with, if this replica applied
+    // that announcement and still lists it; see raft_groups_storage. Does not suspend.
+    std::optional<table_schema_version> listed_group0_schema_version(table_schema_version version) const;
 
     // Possible results:
     //   ok - this node is the leader, proceed with read_barrier() locally
