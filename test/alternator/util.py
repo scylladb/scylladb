@@ -236,6 +236,19 @@ def client_no_transform(client):
     finally:
         client.meta.events = old_events
 
+# Temporarily attach custom headers before each SDK call is signed.
+@contextmanager
+def client_headers(client, headers):
+    def add_headers(params, **kwargs):
+        params['headers'].update(headers)
+
+    event = f'before-call.{client.meta.service_model.service_id.hyphenize()}'
+    client.meta.events.register(event, add_headers)
+    try:
+        yield
+    finally:
+        client.meta.events.unregister(event, add_headers)
+
 def is_aws(dynamodb):
     try:
         # Let's try first if dynamodb represents a client object
@@ -275,6 +288,18 @@ def scylla_inject_error(rest_api, err, one_shot=False, parameters={}):
     finally:
         print("Disabling error injection", err)
         requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
+
+# Returns how many times the named error injection was entered.
+def injection_enters(rest_api, name):
+    return requests.get(f'{rest_api}/v2/error_injection/injection/{name}/enters', timeout=5).json()
+
+# Holds every replica read of one table. Yields a function that counts the
+# held reads.
+@contextmanager
+def held_replica_reads(rest_api, table_name):
+    with (scylla_inject_error(rest_api, 'replica_query_wait_table_match'),
+          scylla_inject_error(rest_api, 'replica_query_wait', parameters={'table': table_name})):
+        yield lambda: injection_enters(rest_api, 'replica_query_wait_table_match')
 
 # Send a message to the Scylla log. E.g., we can write a message to the log
 # indicating that a test has started, which will make it easier to see which

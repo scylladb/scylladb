@@ -12,10 +12,12 @@ from contextlib import contextmanager, ExitStack
 from urllib.error import URLError
 
 import pytest
+import requests
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
 from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, get_table_arn, list_tables, get_region, manual_request
+from test.alternator.util import client_headers, held_replica_reads
 from test.pylib.skip_types import skip_env
 
 TAGS = []
@@ -104,6 +106,59 @@ def create_stream_test_table(dynamodb, StreamViewType=None, Tags=None):
                     time.sleep(5)
                     continue;
                 raise
+
+@pytest.mark.parametrize('view', stream_types)
+@pytest.mark.parametrize('batch', [False, True])
+def test_stream_write_request_timeout(scylla_only, dynamodb, rest_api, view, batch):
+    # Image streams read the old row before writing. That read must end by the
+    # write's HTTP deadline when it is earlier than CDC's 10s preimage timeout
+    # (#31652).
+    with create_stream_test_table(dynamodb, view) as table:
+        table.put_item(Item={'p': 'timeout', 'c': 'row', 'v': 'old'})
+        item = {'p': 'timeout', 'c': 'row', 'v': 'new'}
+        if batch:
+            write = lambda: table.meta.client.batch_write_item(
+                RequestItems={table.name: [{'PutRequest': {'Item': item}}]})
+        else:
+            write = lambda: table.put_item(Item=item)
+        with held_replica_reads(rest_api, table.name) as held_reads:
+            start = time.monotonic()
+            with client_headers(table.meta.client, {'X-Scylla-Timeout': '100ms'}):
+                if view == 'KEYS_ONLY':
+                    write()
+                else:
+                    with pytest.raises(ClientError, match='InternalServerError.*([Tt]imeout|timed out)'):
+                        write()
+            assert time.monotonic() - start < 5
+            enters = held_reads()
+            if view == 'KEYS_ONLY':
+                assert enters == 0
+            else:
+                assert enters > 0
+        expected = 'new' if view == 'KEYS_ONLY' else 'old'
+        assert table.get_item(Key={'p': 'timeout', 'c': 'row'}, ConsistentRead=True)['Item']['v'] == expected
+
+
+@pytest.mark.parametrize('timeout', ['0ms', 'garbage'])
+def test_stream_control_request_timeout_scope(scylla_only, dynamodb, dynamodbstreams, timeout):
+    # Stream metadata APIs validate the timeout header but ignore a valid
+    # value, unlike GetRecords (#31652).
+    with create_stream_test_table(dynamodb, 'KEYS_ONLY') as table:
+        arn, _ = wait_for_active_stream(dynamodbstreams, table)
+        shard = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']['Shards'][0]['ShardId']
+        operations = [
+            lambda: dynamodbstreams.list_streams(TableName=table.name),
+            lambda: dynamodbstreams.describe_stream(StreamArn=arn),
+            lambda: dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard, ShardIteratorType='LATEST'),
+        ]
+        with client_headers(dynamodbstreams, {'X-Scylla-Timeout': timeout}):
+            for operation in operations:
+                if timeout == 'garbage':
+                    with pytest.raises(ClientError, match='ValidationException'):
+                        operation()
+                else:
+                    operation()
+
 
 def wait_for_active_stream(dynamodbstreams, table, timeout=60):
     exp = time.time() + timeout

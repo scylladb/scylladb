@@ -1684,7 +1684,8 @@ public:
     };
 
     // Steps of the Paxos protocol
-    future<ballot_and_data> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
+    future<ballot_and_data> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write,
+            std::optional<db::timeout_clock::time_point> preimage_deadline);
     future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
     future<bool> accept_proposal(lw_shared_ptr<paxos::proposal> proposal, bool timeout_if_partially_accepted);
     future<> learn_decision(lw_shared_ptr<paxos::proposal> proposal, bool allow_hints = false, cdc::per_request_options cdc_opts = {});
@@ -2316,7 +2317,8 @@ paxos_response_handler::~paxos_response_handler() {
  * nodes have seen the most recent commit. Otherwise, return null.
  */
 future<paxos_response_handler::ballot_and_data>
-paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
+paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write,
+        std::optional<db::timeout_clock::time_point> preimage_deadline) {
     api::timestamp_type min_timestamp_micros_to_use = 0;
     auto _ = shared_from_this(); // hold the handler until co-routine ends
 
@@ -2376,7 +2378,10 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
 
             if (is_accepted) {
                 try {
-                    co_await learn_decision(std::move(refreshed_in_progress), false);
+                    // Recovery shares the current request's deadline, but its
+                    // preimage and other CDC options belong to another update.
+                    co_await learn_decision(std::move(refreshed_in_progress), false,
+                            cdc::per_request_options{.preimage_deadline = preimage_deadline});
                     continue;
                 } catch (mutation_write_timeout_exception& e) {
                     e.type = db::write_type::CAS;
@@ -7183,7 +7188,7 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
             // a ballot (round identifier) which is a) unique b) has good chances of being
             // recent enough.
-            auto [ballot, qr] = co_await handler->begin_and_repair_paxos(query_options.cstate, contentions, write);
+            auto [ballot, qr] = co_await handler->begin_and_repair_paxos(query_options.cstate, contentions, write, cdc_opts.preimage_deadline);
             // Read the current values and check they validate the conditions.
             if (qr) {
                 paxos::paxos_state::logger.debug("CAS[{}]: Using prefetched values for CAS precondition",

@@ -632,7 +632,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         db::consistency_level cl,
         filter filter,
         query::partition_slice::option_set custom_opts,
-        service::client_state& client_state,
+        alternator::client_state& client_state,
         alternator::stats& stats,
         tracing::trace_state_ptr trace_state,
         service_permit permit,
@@ -689,7 +689,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(old_paging_state));
     auto p = service::pager::query_pagers::pager(proxy, query_schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
-    std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
+    std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::request_timeout(client_state));
     if (!p->is_exhausted()) {
         // No plan to record: this pager was pointed at the table or index to scan
         // here, rather than by a CQL plan a resumed page could pick differently.
@@ -2471,7 +2471,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     // Query the vector store for the approximate nearest neighbors.
     // Each returned item includes a key, a score, and optionally additional
     // attributes specified by vs_return_columns.
-    auto timeout = executor::default_timeout();
+    auto timeout = executor::request_timeout(client_state);
     abort_on_expiry aoe(timeout);
     // Note that we need routing=false so that the vector store will use
     // the specific index_name chosen by the user, and not route the request
@@ -2780,7 +2780,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
             co_await _proxy.query_result(
                 schema, std::move(command), std::move(partition_ranges), cl,
-                service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state));
+                service::storage_proxy::coordinator_query_options(executor::request_timeout(client_state), std::move(permit), client_state, trace_state));
     if (!rqr) {
         co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
     }
@@ -2909,7 +2909,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             };
             future<batch_get_item_result> f = 
                     _proxy.query_result(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
-                        service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
+                        service::storage_proxy::coordinator_query_options(executor::request_timeout(client_state), permit, client_state, trace_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get, item_callback = std::move(item_callback)] (service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr) mutable -> future<batch_get_item_result> {
                 if (!rqr) {
                     return make_ready_future<batch_get_item_result>(std::move(rqr).as_failure());

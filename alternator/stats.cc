@@ -122,6 +122,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     seastar::metrics::description("number writes that had to be bounced from this shard because of LWT requirements"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("requests_blocked_memory", stats.requests_blocked_memory,
                     seastar::metrics::description("Counts a number of requests blocked due to memory pressure."), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("requests_timed_out_before_execution", stats.requests_timed_out_before_execution,
+                    seastar::metrics::description("number of requests whose deadline expired before execution or before their write started"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("requests_shed", stats.requests_shed,
                     seastar::metrics::description("Counts a number of requests shed due to overload."), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("conditional_check_failed", stats.conditional_check_failed,

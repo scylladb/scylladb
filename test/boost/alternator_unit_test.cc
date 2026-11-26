@@ -33,6 +33,21 @@ namespace alternator {
     extern const sstring NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY;
 }
 
+// A shard hop must carry the HTTP deadline rather than restarting the timeout
+// or slicing it away when the base service::client_state is reconstructed.
+BOOST_AUTO_TEST_CASE(test_request_deadline_survives_shard_snapshot) {
+    alternator::client_state state(service::client_state::internal_tag{});
+    BOOST_REQUIRE(!state.request_deadline());
+    auto deadline = db::timeout_clock::now() + std::chrono::seconds(5);
+    state.set_request_deadline(deadline);
+    auto moved = state.move_to_other_shard().get();
+    BOOST_REQUIRE(moved.request_deadline());
+    BOOST_CHECK(*moved.request_deadline() == deadline);
+    auto moved_again = moved.move_to_other_shard().get();
+    BOOST_REQUIRE(moved_again.request_deadline());
+    BOOST_CHECK(*moved_again.request_deadline() == deadline);
+}
+
 // Builds a schema_ptr simulating a GSI with an irrelevant to the user
 // "base_range" column appended simulating materialized view's correctness
 // requirement regarding base table HASH and RANGE keys.

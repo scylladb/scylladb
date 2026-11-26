@@ -206,7 +206,7 @@ rjson::value make_import_table_description(const import_table_request& parsed) {
     return description;
 }
 
-future<executor::request_return_type> executor::import_table(service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::import_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.import_table++;
     // Audit before the rest of validation, so that requests failing it are
     // audited too. As in CreateTable, a request with an invalid TableName is
