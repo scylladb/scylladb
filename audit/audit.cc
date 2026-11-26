@@ -250,6 +250,25 @@ audit::audit(locator::shared_token_metadata& token_metadata,
         sm::make_counter("write_failures", _write_failures,
                 sm::description("Number of audit entries that failed to be written to one or more of their sinks.")),
     });
+    // The audit configuration is the same on all shards.
+    if (this_shard_id() == 0) {
+        sm::label sink_label("sink");
+        for (auto sink : audit_sink_set::full()) {
+            _metrics.add_group("audit", {
+                sm::make_gauge("sink_enabled", [this, sink] { return _audit_sinks.contains(sink) ? 1 : 0; },
+                        sm::description("1 if this audit sink is enabled, 0 otherwise."), {sink_label(sink_to_string(sink))}),
+            });
+        }
+        sm::label category_label("category");
+        for (auto category : category_set::full()) {
+            _metrics.add_group("audit", {
+                sm::make_gauge("category_enabled", [this, category] { return category_enabled(category) ? 1 : 0; },
+                        sm::description("1 if this statement category is enabled in audit_categories or in an audit rule "
+                                "that names an enabled sink, 0 otherwise."),
+                        {category_label(category_to_string(category))}),
+            });
+        }
+    }
 }
 
 audit::~audit() = default;
@@ -652,6 +671,13 @@ bool audit::rules_may_log(statement_category cat, std::string_view keyspace, std
         }
     }
     return false;
+}
+
+bool audit::category_enabled(statement_category category) const {
+    return _audited_categories.contains(category)
+        || std::ranges::any_of(_preprocessed_rules.rules(), [category] (const audit_rule& rule) {
+            return matches_category(rule, category);
+        });
 }
 
 bool audit::will_log(statement_category cat, std::string_view keyspace, std::string_view table) const {

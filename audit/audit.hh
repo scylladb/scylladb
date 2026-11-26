@@ -179,6 +179,7 @@ private:
 
     bool should_log_table(std::string_view keyspace, std::string_view name) const;
     bool rules_may_log(statement_category cat, std::string_view keyspace, std::string_view table) const;
+    bool category_enabled(statement_category category) const;
     audit_sink_set sinks_for_table(statement_category category, std::string_view keyspace, std::string_view table, std::string_view role) const;
     audit_sink_set sinks_for(const audit_info& audit_info, std::string_view role) const;
     audit_sink_set sinks_for_login(const sstring& username) const;
