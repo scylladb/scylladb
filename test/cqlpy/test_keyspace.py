@@ -6,6 +6,7 @@
 # ALTER KEYSPACE
 
 from .util import new_test_keyspace, unique_name
+from .conftest import has_tablets
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from threading import Thread
@@ -70,8 +71,10 @@ def test_create_keyspace_if_not_exists(cql, this_dc):
     # A second invocation with IF NOT EXISTS is fine:
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     # It doesn't matter if the second invocation has different parameters,
-    # they are ignored.
-    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 }")
+    # they are ignored. Disable tablets with SimpleStrategy with the tablets
+    # syntax is supported
+    tablets_opts = " AND TABLETS = { 'enabled': false }" if has_tablets else ""
+    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 }" + tablets_opts)
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
 
 # We treat ALTER to numeric RF of same count as no-op.
