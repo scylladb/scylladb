@@ -95,6 +95,11 @@ ninja build/<mode>/scylla
 - Add `--repeat <num>` to repeat a test multiple times
 - After modifying C++ source files, only rebuild the Scylla binary for Python tests
 
+### Investigating Test Failures
+- Before running `./test.py` again, even for a quick rerun, copy `testlog/<mode>/failed_test/`
+  elsewhere or pass `--save-log-on-success`: every run first deletes the logs of the previous one,
+  including the server logs and stack traces of the failed tests.
+
 ## Code Philosophy
 - Performance matters in hot paths (data read/write, inner loops)
 - Self-documenting code through clear naming
