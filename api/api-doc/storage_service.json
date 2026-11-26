@@ -3262,6 +3262,22 @@
                      "allowMultiple":false,
                      "type":"boolean",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"keyspace",
+                     "description":"the keyspace of the table to clear, given together with table",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"clear this table alone and keep the other tables of the snapshot. Clearing the last table clears the snapshot",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             }

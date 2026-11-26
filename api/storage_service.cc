@@ -1765,8 +1765,19 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         apilog.info("clear_cluster_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
         bool force = get_query_param<bool>(*req, "force");
+        auto keyspace = req->get_query_param("keyspace");
+        auto table_name = req->get_query_param("table");
+        // A blank table must not turn the request into a clear of the whole snapshot.
+        const bool by_table = req->has_query_param("keyspace") || req->has_query_param("table");
+        if (by_table && (keyspace.empty() || table_name.empty())) {
+            throw httpd::bad_param_exception("keyspace and table must be given together");
+        }
+        std::optional<std::pair<sstring, sstring>> table;
+        if (!table_name.empty()) {
+            table.emplace(std::move(keyspace), std::move(table_name));
+        }
         try {
-            auto task_id = co_await snap_ctl.local().clear_cluster_snapshot(tag, force);
+            auto task_id = co_await snap_ctl.local().clear_cluster_snapshot(tag, force, std::move(table));
             co_return json::json_return_type(fmt::to_string(task_id));
         } catch (const std::invalid_argument& e) {
             // Rejected before its task started: the tag is unknown, backed up,
