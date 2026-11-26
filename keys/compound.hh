@@ -194,6 +194,8 @@ public:
             return i;
         }
         value_type operator*() const { return _current; }
+        // Refers to the current component, which changes when the iterator advances.
+        const managed_bytes_view& current() const noexcept { return _current; }
         bool operator==(const iterator& i) const { return _remaining == i._remaining; }
     };
     static iterator begin(const managed_bytes_view& v) {
@@ -302,7 +304,7 @@ public:
         auto type = _types.begin();
         for (auto it = begin(v), e = end(v); it != e; ++it, ++type) {
             //FIXME: is it safe to assume internal serialization-format format?
-            (*type)->validate(*it);
+            (*type)->validate(it.current());
         }
     }
     bool equal(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
