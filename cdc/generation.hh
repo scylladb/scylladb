@@ -143,6 +143,20 @@ struct cdc_stream_diff {
 
 using table_streams = std::map<api::timestamp_type, committed_stream_set>;
 
+// The timestamp of the vnode streams set: the stream set that a CDC log table
+// gets when its keyspace is prepared for the migration from vnodes to tablets.
+// Until the next stream set, the table's log writes use the vnode-based CDC
+// generations, so the stream of this set is never written to. Real stream
+// sets are never this old.
+constexpr db_clock::time_point vnode_streams_timestamp{};
+
+// The only stream of every vnode streams set.
+stream_id vnode_streams_set_stream();
+
+inline bool is_vnode_streams_set(const committed_stream_set& s) {
+    return s.ts == vnode_streams_timestamp;
+}
+
 /*
  * Checks if the CDC generation is optimal, which is true if its `topology_description` is consistent
  * with `token_metadata`.
@@ -197,6 +211,9 @@ future<mutation> create_table_streams_mutation(table_id, db_clock::time_point, c
 utils::chunked_vector<mutation> make_drop_table_streams_mutations(table_id, api::timestamp_type ts);
 
 future<mutation> get_switch_streams_mutation(table_id table, db_clock::time_point stream_ts, cdc_stream_diff diff, api::timestamp_type ts);
+// The switch of a CDC log table from its vnode streams set to one stream per
+// tablet of `tablet_map`, at `stream_ts`.
+future<mutation> get_vnodes_to_tablets_switch_mutation(table_id table, db_clock::time_point stream_ts, const locator::tablet_map& tablet_map, api::timestamp_type ts);
 future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id table, db_clock::time_point base_ts, const utils::chunked_vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts);
 table_streams::const_iterator get_new_base_for_gc(const table_streams&, std::chrono::seconds ttl);
 

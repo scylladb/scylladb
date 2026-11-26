@@ -30,6 +30,7 @@
 #include "cdc/cdc_options.hh"
 #include "cdc/generation.hh"
 #include "cdc/generation_service.hh"
+#include "cdc/log.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
@@ -1893,6 +1894,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             }
                         }
 
+                        // Switch the CDC log tables from the vnode-based CDC
+                        // generations to their tablet streams.
+                        for (const auto& table : old_md->tables()) {
+                            if (!cdc::is_log_schema(*table)) {
+                                continue;
+                            }
+                            if (tablet_metadata.is_base_table(table->id())
+                                    || !_cdc_gens.get_cdc_metadata().has_only_vnode_streams_set(table->id())) {
+                                throw std::runtime_error(fmt::format(
+                                    "CDC log table {}.{} was prepared for the migration by a version that didn't support"
+                                    " CDC tables. Roll the migration back and start it again.",
+                                    ks_name, table->cf_name()));
+                            }
+                            co_await _cdc_gens.generate_vnodes_to_tablets_switch(updates, table->id(),
+                                    tablet_metadata.get_tablet_map(table->id()), guard.write_timestamp());
+                        }
+
                         // All nodes have been migrated. ALTER the keyspace to use tablets.
                         auto new_md = data_dictionary::keyspace_metadata::new_keyspace(
                             old_md->name(),
@@ -1914,9 +1932,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             updates.emplace_back(m);
                         }
                     } else {
-                        // Rollback: delete tablet maps for all tables in the keyspace.
+                        // Rollback: delete tablet maps for all tables in the keyspace,
+                        // and the CDC stream state of CDC log tables.
                         for (const auto& schema : tables) {
                             updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
+                            if (cdc::is_log_schema(*schema)) {
+                                for (auto& m : cdc::make_drop_table_streams_mutations(schema->id(), guard.write_timestamp())) {
+                                    updates.emplace_back(m);
+                                }
+                            }
                         }
                     }
                 } catch (const std::exception& e) {
@@ -3934,6 +3958,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         const auto* nts = validate_keyspace_for_migration(_db, ks_name, _topo_sm._topology);
         validate_rf_for_tablets_migration(_db, tmptr, *nts, ks_name);
         co_await validate_keyspace_views_for_tablets_migration(_db, _sys_ks, _topo_sm._topology, ks_name);
+        validate_keyspace_cdc_for_tablets_migration(_db, _feature_service, ks_name);
         auto& ks = _db.find_keyspace(ks_name);
         const auto erm = ks.get_static_effective_replication_map();
 
@@ -3953,9 +3978,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // that cannot be co-located with their base table.
         std::vector<map_to_build> tables_to_build_maps;
         // Tables that share the tablet map of another table, keyed by the
-        // table whose map they share. Currently, these are views co-located
-        // with their base table. Each only needs an entry saying so, written
-        // in the same command as the base table's map.
+        // table whose map they share: views co-located with their base table,
+        // and CDC log tables, which always are. Each only needs an entry saying
+        // so, written in the same command as the base table's map, and a CDC
+        // log table its CDC stream state.
         std::unordered_map<table_id, std::vector<std::pair<table_id, sstring>>> tables_to_colocate;
         for (const auto& [name, schema] : ks.metadata()->cf_meta_data()) {
             ++all_tables;
@@ -3963,7 +3989,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 continue;
             }
             ++remaining_tables;
-            if (auto base_id = schema->is_view() ? _db.get_base_table_for_tablet_colocation(*schema, {}) : std::nullopt) {
+            bool may_colocate = schema->is_view() || cdc::is_log_schema(*schema);
+            if (auto base_id = may_colocate ? _db.get_base_table_for_tablet_colocation(*schema, {}) : std::nullopt) {
                 tables_to_colocate[*base_id].push_back({schema->id(), name});
             } else {
                 tables_to_build_maps.emplace_back(map_to_build{0, schema->id(), name});
@@ -4011,21 +4038,75 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (utils::get_local_injector().is_enabled("prepare_migration_one_table_per_command")) {
             batch_budget = 0;
         }
+        size_t cdc_switches_budget = max_maps_size;
+        if (utils::get_local_injector().is_enabled("prepare_migration_no_room_for_cdc_switches")) {
+            cdc_switches_budget = 0;
+        }
 
-        // Appends to `out` the entries of the views co-located with `base_id`, adding their
-        // size to `size`, and returns how many there are.
+        // The command which finalizes the migration switches all CDC log tables to their
+        // tablet streams, and can't be split.
+        size_t cdc_switches_size = 0;
+        // By tablet count, which is all the size of a switch depends on.
+        std::unordered_map<size_t, size_t> cdc_switch_sizes;
+        // By target, the tablet counts of the maps a base table without one will get.
+        std::unordered_map<size_t, size_t> cdc_tablet_counts;
+        auto cdc_switch_size = [&] (table_id log_id, const locator::tablet_map& map) -> future<size_t> {
+            auto it = cdc_switch_sizes.find(map.tablet_count());
+            if (it == cdc_switch_sizes.end()) {
+                auto m = co_await cdc::get_vnodes_to_tablets_switch_mutation(log_id, db_clock::now(), map, guard.write_timestamp());
+                auto size = (co_await make_canonical_mutation_gently(m)).representation().size();
+                it = cdc_switch_sizes.emplace(map.tablet_count(), size).first;
+            }
+            co_return it->second;
+        };
+        for (const auto& schema : ks.metadata()->tables()) {
+            if (!cdc::is_log_schema(*schema)) {
+                continue;
+            }
+            const auto base_id = *_db.get_base_table_for_tablet_colocation(*schema, {});
+            if (tmptr->tablets().has_tablet_map(base_id)) {
+                cdc_switches_size += co_await cdc_switch_size(schema->id(), tmptr->tablets().get_tablet_map(base_id));
+                continue;
+            }
+            const auto target_it = targets.find(base_id);
+            const size_t target_pow2 = target_it != targets.end() ? static_cast<size_t>(target_it->second) : 0;
+            if (auto it = cdc_tablet_counts.find(target_pow2); it != cdc_tablet_counts.end()) {
+                cdc_switches_size += cdc_switch_sizes.at(it->second);
+                continue;
+            }
+            const auto base_map = co_await build_tablet_map_for_migration(erm, target_pow2);
+            cdc_tablet_counts.emplace(target_pow2, base_map.tablet_count());
+            cdc_switches_size += co_await cdc_switch_size(schema->id(), base_map);
+        }
+        if (cdc_switches_size > cdc_switches_budget) {
+            throw std::runtime_error(fmt::format(
+                    "Switching the CDC log tables of keyspace {} to tablet streams takes {} bytes, more than the"
+                    " group0 command which finalizes the migration can carry ({} bytes)",
+                    ks_name, cdc_switches_size, cdc_switches_budget));
+        }
+
+        // Appends to `out` the entries of the tables co-located with `base_id`, adding their
+        // size to `size`, and returns how many there are. A CDC log table also gets the vnode
+        // streams set.
         auto append_colocated_tablet_map_mutations = [&] (table_id base_id, utils::chunked_vector<canonical_mutation>& out,
                 size_t& size) -> future<size_t> {
             auto it = tables_to_colocate.find(base_id);
             if (it == tables_to_colocate.end()) {
                 co_return 0;
             }
-            for (const auto& [tid, cf_name] : it->second) {
-                auto cm = co_await make_canonical_mutation_gently(
-                        replica::colocated_tablet_map_to_mutation(tid, ks_name, cf_name, base_id, guard.write_timestamp()));
+            auto append = [&] (canonical_mutation cm) {
                 size += cm.representation().size();
                 out.emplace_back(std::move(cm));
+            };
+            for (const auto& [tid, cf_name] : it->second) {
+                append(co_await make_canonical_mutation_gently(
+                        replica::colocated_tablet_map_to_mutation(tid, ks_name, cf_name, base_id, guard.write_timestamp())));
                 rtlogger.info("Built co-located tablet map for {}.{} (shares the tablet map of {})", ks_name, cf_name, base_id);
+                if (cdc::is_log_schema(*_db.find_schema(tid))) {
+                    append(co_await make_canonical_mutation_gently(co_await cdc::create_table_streams_mutation(
+                            tid, cdc::vnode_streams_timestamp, utils::chunked_vector<cdc::stream_id>{cdc::vnode_streams_set_stream()},
+                            guard.write_timestamp())));
+                }
             }
             co_return it->second.size();
         };
@@ -4058,7 +4139,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         table_updates.emplace_back(std::move(cm));
                     });
             measured = table_size;
-            // The views co-located with the table go into the same command as its map.
+            // The tables co-located with the table go into the same command as its map.
             const size_t colocated = co_await append_colocated_tablet_map_mutations(tid, table_updates, table_size);
 
             // A single map can't be split: its rows have to be applied together. A command
@@ -4132,6 +4213,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             for (const auto& [tid, _] : *req.prepare_migration_tables) {
                 if (tmptr->tablets().has_tablet_map(tid)) {
                     updates.emplace_back(replica::make_drop_tablet_map_mutation(tid, guard.write_timestamp()));
+                    if (_db.column_family_exists(tid) && cdc::is_log_schema(*_db.find_schema(tid))) {
+                        for (auto& m : cdc::make_drop_table_streams_mutations(tid, guard.write_timestamp())) {
+                            updates.emplace_back(std::move(m));
+                        }
+                    }
                     ++dropped;
                 }
             }

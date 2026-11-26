@@ -208,6 +208,9 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Older nodes don't know that the vnode streams set of a CDC log table stands for
+    // the vnode-based CDC generations (see cdc::vnode_streams_timestamp).
+    gms::feature cdc_vnodes_to_tablets_migration { *this, "CDC_VNODES_TO_TABLETS_MIGRATION"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a
