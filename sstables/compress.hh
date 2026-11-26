@@ -55,6 +55,9 @@ class compressor;
 
 namespace sstables {
 
+// The maximum amount of decompressed data the compressed data source returns in one read.
+static constexpr size_t max_coalesced_output_size = 32 * 1024;
+
 struct compression {
     // To reduce the memory footpring of compression-info, n offsets are grouped
     // together into segments, where each segment stores a base absolute offset
