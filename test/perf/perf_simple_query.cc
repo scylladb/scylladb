@@ -415,7 +415,8 @@ static std::vector<query_perf_result> do_cql_test(cql_test_env& env, test_config
                 .with_column("C3", bytes_type)
                 .with_column("C4", bytes_type);
         if (cfg.collection > 0) {
-            sb.with_column("CC", map_type_impl::get_instance(bytes_type, bytes_type, true));
+            // Logstor tables cannot have non-frozen collections.
+            sb.with_column("CC", map_type_impl::get_instance(bytes_type, bytes_type, !cfg.logstor));
         }
         if (cfg.logstor) {
             sb.set_logstor();
@@ -522,7 +523,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
         ("counters", "test counters")
-        ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters)")
+        ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters; frozen with --logstor)")
         ("tablets", "use tablets")
         ("logstor", "store the table with the logstor storage engine instead of sstables (implies --tablets)")
         ("logstor-disk-size-in-mb", bpo::value<unsigned>()->default_value(1024), "size of the logstor segment pool")
