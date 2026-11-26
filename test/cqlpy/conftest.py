@@ -13,6 +13,7 @@ import pytest
 from cassandra.cluster import NoHostAvailable
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 from cassandra.protocol import ConfigurationException
+import collections
 import json
 import os
 import subprocess
@@ -158,6 +159,25 @@ def test_keyspace(request, test_keyspace_vnodes, test_keyspace_tablets, cql, thi
         cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
         yield name
         cql.execute("DROP KEYSPACE " + name)
+
+# StorageEngine holds the storage engine of a test table. It has the name of
+# the engine, which is "normal" or "logstor", and the options that select the
+# engine in a CREATE TABLE statement.
+StorageEngine = collections.namedtuple('StorageEngine', ['name', 'table_options'])
+
+# The "storage_engine" fixture runs a test once for each storage engine of a
+# table: the "normal" engine, which keeps the data in memtables and sstables,
+# and the "logstor" engine. The test adds storage_engine.table_options to the
+# CREATE TABLE statement of its table.
+# The logstor engine is a Scylla-only feature, so the fixture skips the
+# logstor case when the test runs on Cassandra.
+@pytest.fixture(params=["normal", "logstor"])
+def storage_engine(request, cql):
+    if request.param == "logstor":
+        if not is_scylla(cql):
+            skip_env("The logstor storage engine is a Scylla-only feature")
+        return StorageEngine("logstor", " WITH storage_engine = 'logstor'")
+    return StorageEngine("normal", "")
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on Apache Cassandra. A test using this fixture will be

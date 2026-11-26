@@ -13,7 +13,7 @@ import pytest
 import requests
 
 from test.conftest import dynamic_scope
-from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
+from test.cqlpy.conftest import host, cql, this_dc, storage_engine  # add required fixtures
 from test.cqlpy.util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
 from test.pylib.skip_types import skip_env
 from test.pylib.connect_options import add_host_option, add_cql_connection_options
