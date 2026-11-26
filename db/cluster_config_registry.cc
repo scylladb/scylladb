@@ -28,6 +28,7 @@
 #include "types/types.hh"
 #include "utils/chunked_string.hh"
 #include "utils/log.hh"
+#include "utils/logalloc.hh"
 #include "utils/on_internal_error.hh"
 
 namespace db::cluster_config_registry {
@@ -46,8 +47,7 @@ static_assert(std::variant_size_v<config_value> == 4);
 // The two resolution domains. CLUSTER is the shared last step of both chains, so it belongs
 // to both sets; an option that wants only part of a chain spells its scopes out.
 constexpr scope_set table_oriented_scopes = scope_set::of<scope::cluster, scope::keyspace, scope::table>();
-// Unused until the first node-oriented option ships.
-[[maybe_unused]] constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
+constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
 
 // The scopes that place an option in one domain or the other, i.e. each set without CLUSTER.
 constexpr scope_set table_only_scopes = scope_set::of<scope::keyspace, scope::table>();
@@ -60,7 +60,7 @@ constexpr bool is_single_domain(scope_set scopes) {
 }
 
 // Defined below, with the other parsers and validators.
-// Declared here so that the automatic scrub period option may take their address.
+// Declared here so that the options below may take their address.
 config_value parse_auto_scrub_period_seconds(std::string_view value);
 
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
@@ -117,6 +117,13 @@ constexpr std::array registry_options = {
         // The replica adds it to a clock. Ten years is as good as never and far from the
         // overflow.
         .valid_range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
+    },
+    option{
+        .name = option_name::lsa_background_reclaim_goal_in_mb,
+        .description = "Amount of free memory per shard, in MiB, which the background reclaimer tries to maintain. 0 disables background reclaiming",
+        .scopes = node_oriented_scopes,
+        .default_value = int64_t(logalloc::default_background_reclaim_goal >> 20),
+        .valid_range = integer_range{.min = 0, .max = std::numeric_limits<int64_t>::max()},
     },
 };
 

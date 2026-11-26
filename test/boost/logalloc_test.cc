@@ -818,7 +818,7 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     size_t std_alloc_size = 1000000; // note that managed_bytes fragments these, even in std
     for (int i = 0; i < 50; ++i) {
         // Background reclaim is supposed to eventually ensure a certain amount of free memory.
-        while (memory::free_memory() < background_reclaim_free_memory_threshold) {
+        while (memory::free_memory() < default_background_reclaim_goal) {
             seastar::sleep(std::chrono::milliseconds(1)).get();
         }
 
@@ -829,6 +829,15 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
         fmt::print("compacted {} items {} (post)\n", compacted_post, evictable_allocs.size());
         BOOST_REQUIRE_EQUAL(compacted_pre, compacted_post);
     }
+
+    // Raising the goal makes the reclaimer free more memory.
+    auto higher_goal = 2 * default_background_reclaim_goal;
+    logalloc::shard_tracker().set_background_reclaim_goal(higher_goal);
+    auto deadline = std::chrono::steady_clock::now() + 30s;
+    while (memory::free_memory() < higher_goal && std::chrono::steady_clock::now() < deadline) {
+        seastar::sleep(std::chrono::milliseconds(1)).get();
+    }
+    BOOST_REQUIRE_GE(memory::free_memory(), higher_goal);
 }
 
 inline
