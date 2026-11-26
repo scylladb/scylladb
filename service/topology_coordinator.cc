@@ -2359,6 +2359,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         sstring ks_name;
         locator::replication_strategy_config_options old_options;
         locator::replication_strategy_config_options new_options;
+        bool durable_writes;
     };
 
     // The next auto-RF change to schedule, if any. Sets `retry_at` to the earliest time
@@ -2405,7 +2406,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 auto old_options = ks_md->strategy_options();
                 old_options.emplace("class", ks_md->strategy_name());
                 new_options->emplace("class", ks_md->strategy_name());
-                changes.emplace_back(ks_name, std::move(old_options), std::move(*new_options));
+                changes.emplace_back(ks_name, std::move(old_options), std::move(*new_options), ks_md->durable_writes());
             }
         }
         if (changes.empty()) {
@@ -2445,6 +2446,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     future<> schedule_auto_rf_change(group0_guard guard, const rf_change_candidate& candidate) {
         cql3::statements::ks_prop_defs props;
         props.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, candidate.new_options);
+        // A request without the option would set it back to the default.
+        props.add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, candidate.durable_writes ? "true" : "false");
         auto flattened = props.flattened();
 
         const auto global_request_id = guard.new_group0_state_id();
