@@ -145,6 +145,34 @@ def test_cluster_clearsnapshot_requires_tag(nodetool):
             ["error processing arguments: Missing required parameter \"tag\""])
 
 
+def test_cluster_listsnapshots(nodetool):
+    res = nodetool("cluster", "listsnapshots", expected_requests=[
+        expected_request("GET", "/storage_service/tablets/snapshots", response=[
+            {"tag": "snap1", "created_at": "2026-11-26T10:00:00Z",
+             "tables": [{"keyspace": "ks1", "table": "tbl1"}, {"keyspace": "ks1", "table": "table2"}]},
+            {"tag": "snapshot2", "created_at": "2026-11-26T11:30:00Z",
+             "tables": [{"keyspace": "keyspace2", "table": "tbl1"}]},
+            {"tag": "snap3", "created_at": "2026-11-26T12:00:00Z", "tables": []},
+            ]),
+        ])
+
+    expected_output =\
+"""Snapshot name Created at           Keyspace name Table name
+snap1         2026-11-26T10:00:00Z ks1           tbl1      
+snap1         2026-11-26T10:00:00Z ks1           table2    
+snapshot2     2026-11-26T11:30:00Z keyspace2     tbl1      
+snap3         2026-11-26T12:00:00Z                         
+"""
+    assert res.stdout == expected_output
+
+
+def test_cluster_listsnapshots_no_snapshots(nodetool):
+    res = nodetool("cluster", "listsnapshots", expected_requests=[
+        expected_request("GET", "/storage_service/tablets/snapshots", response=[]),
+        ])
+    assert res.stdout == "There are no cluster snapshots\n"
+
+
 def test_listsnapshots(nodetool):
     # The creation and expiration times are optional: the expiration time is
     # reported only for snapshots taken with a ttl, and neither is reported for
