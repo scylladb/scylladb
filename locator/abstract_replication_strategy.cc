@@ -443,6 +443,20 @@ future<mutable_static_effective_replication_map_ptr> calculate_vnode_effective_r
     ring_mapping read_endpoints;
     std::unordered_set<locator::host_id> dirty_endpoints;
 
+    // Only shard 0's token_metadata has the info; other shards clone its maps, made first under the token_metadata lock.
+    // A replacing node enters the topology with its ring and the info; before that it needs none.
+    auto replacing_with_ring = [&] {
+        bool found = false;
+        tmptr->get_topology().for_each_node([&] (const node& n) { found |= n.get_state() == node::state::replacing; });
+        return found;
+    };
+    if (!tmptr->get_topology_change_info() && (!tmptr->get_bootstrap_tokens().empty() || !tmptr->get_leaving_endpoints().empty()
+            || (tmptr->is_any_node_being_replaced() && replacing_with_ring()))) {
+        on_internal_error_noexcept(rslogger,
+                format("calculate_vnode_effective_replication_map: token_metadata of ring version {} on shard {} has a topology change but no topology change info",
+                        tmptr->get_ring_version(), this_shard_id()));
+    }
+
     const auto depend_on_token = rs->natural_endpoints_depend_on_token();
     const auto& sorted_tokens = tmptr->sorted_tokens();
     replication_map.reserve(depend_on_token ? sorted_tokens.size() : 1);
