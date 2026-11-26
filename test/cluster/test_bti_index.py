@@ -7,7 +7,6 @@ import pytest
 import asyncio
 import random
 import os
-import glob
 import logging
 import time
 from typing import Any, Optional
@@ -15,6 +14,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import ScyllaMetrics
 from test.pylib.util import wait_for_feature
+from test.pylib.sstable_files import glob_live_sstable_files
 
 # main logger
 logger = logging.getLogger(__name__)
@@ -32,8 +32,8 @@ async def live_update_config(manager: ScyllaClusterManager, servers: list[Server
 
 async def get_sstable_files_for_server(data_dir, ks, cf):
     base_pattern = os.path.join(data_dir, "data", f"{ks}", f"{cf}-????????????????????????????????", "*.*")
-    sstables = glob.glob(base_pattern)
-    return sstables
+    # The files of the sstables deleted by upgrade_sstables can still be there.
+    return glob_live_sstable_files(base_pattern)
 
 def sstable_version_of(filename: str) -> str:
     # SSTable filenames look like `<version>-<generation>-<format>-<component>.db`,

@@ -10,11 +10,11 @@
 import cassandra.protocol
 import cassandra.query
 import collections
-import glob
 import json
 import os
 from . import nodetool
 from . import util
+from test.pylib.sstable_files import glob_live_sstable_files
 import pytest
 import requests
 import subprocess
@@ -396,7 +396,8 @@ def test_metadata_and_value(cql, test_keyspace, scylla_path, scylla_data_dir, sc
         requests.post(f'{nodetool.rest_api_url(cql)}/system/drop_sstable_caches')
 
         table_name = test_table.split('.')[1]
-        sstables = glob.glob(os.path.join(scylla_data_dir, test_keyspace, f"{table_name}-*", "*-Data.db"))
+        # The files of the sstables deleted by the compaction can still be there.
+        sstables = glob_live_sstable_files(os.path.join(scylla_data_dir, test_keyspace, f"{table_name}-*", "*-Data.db"))
 
         with nodetool.no_autocompaction_context(cql, "system", "system_schema"):
             res = subprocess.check_output([scylla_path, "sstable", "dump-data", "--merge"] + sstables)

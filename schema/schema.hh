@@ -632,7 +632,7 @@ public:
     // The maximum allowed length for any schema name (table, keyspace, view, or index).
     // This limit is primarily determined by the maximum table name length.
     //
-    // When a new table is created, sstables::init_table_storage() generates a directory name
+    // When a new table is created, sstables::make_table_storage_options() generates a directory name
     // by concatenating the full table name, a dash ('-'), and a 32-byte UUID. Since most Linux
     // filesystems restrict a single filename component to 255 bytes, any table name longer than
     // 222 bytes would result in a directory name exceeding this limit, causing mkdir() to fail.

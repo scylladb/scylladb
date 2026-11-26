@@ -188,6 +188,9 @@ future<> table_for_tests::stop() noexcept {
     auto data = _data;
     co_await data->cf->get_compaction_manager().remove(*data->table_s);
     co_await data->cf->stop();
+    // A test may go on creating sstables of the schema without the table,
+    // or create another table with the same schema.
+    data->cf->get_sstables_manager().forget_table(data->s->id());
 }
 
 void table_for_tests::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
