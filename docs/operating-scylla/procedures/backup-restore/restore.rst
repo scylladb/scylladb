@@ -82,7 +82,7 @@ the backup in the location by the snapshot name. The command calls ``POST /stora
 of the REST API (see the :doc:`storage_service API reference </reference/api/storage-service>`).
 
 If the backup was taken from a keyspace or a table with a different name than the destination, also pass
-``source_keyspace`` with the original keyspace name, ``source_table`` with the original table name, or both.
+``--source-keyspace`` with the original keyspace name, ``--source-table`` with the original table name, or both.
 
 The optional ``repair`` query parameter says whether to repair each tablet once it is restored: ``full``, the default,
 runs a full repair of the tablet, and ``disabled`` leaves it unrepaired. The repair needs every node to support the

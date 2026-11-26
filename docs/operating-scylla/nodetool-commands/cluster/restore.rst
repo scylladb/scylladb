@@ -22,6 +22,8 @@ Syntax
                (-s <snapshot> | --snapshot <snapshot>)
                (-l | --location) <dc>,<endpoint>,<bucket>[,<prefix>]
                [(-l | --location) <dc2>,<endpoint2>,<bucket2>[,<prefix2>]]...
+               [--source-keyspace <keyspace>]
+               [--source-table <table>]
                [--nowait]
 
 Example
@@ -33,6 +35,13 @@ Restore the table ``ks.table`` from the snapshot ``ss`` of a backup taken with t
 
     nodetool cluster restore ks --table table --snapshot ss --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz
 
+Restore the backup of ``ks.table`` into ``ks2.table2``:
+
+.. code-block:: console
+
+    nodetool cluster restore ks2 --table table2 --source-keyspace ks --source-table table --snapshot ss \
+        --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz
+
 Options
 -------
 
@@ -43,6 +52,8 @@ Options
 * ``-l`` or ``--location`` - Tuple of <dc>,<endpoint>,<bucket> and optional <prefix> to read the backup from, as given to ``nodetool cluster backup``.
   Required; repeat it for each DC the keyspace replicates to.
   Endpoints should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
+* ``--source-keyspace`` - Keyspace the snapshot was taken from, if its name differs from the keyspace to restore into.
+* ``--source-table`` - Table the snapshot was taken from, if its name differs from the table to restore into.
 * ``--nowait`` - Don't wait on the restore process
 
 See also

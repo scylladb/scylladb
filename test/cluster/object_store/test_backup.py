@@ -3199,6 +3199,11 @@ async def run_nodetool_cluster_restore(object_storage, topology, manager: Scylla
     await cql.run_async(f"TRUNCATE {ks}.{cf}")
     await restore(ks, cf)
 
+    async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}") as dst_ks:
+        dst_cf = f'{cf}_restored'
+        await cql.run_async(f"CREATE TABLE {dst_ks}.{dst_cf} (pk text primary key, value int)")
+        await restore(dst_ks, dst_cf, "--source-keyspace", ks, "--source-table", cf)
+
 
 @pytest.mark.asyncio
 async def test_nodetool_cluster_restore(manager: ScyllaClusterManager, object_storage):
