@@ -228,6 +228,16 @@ Available options
        the default, for example after a node stayed down for a long time. Must be between ``1``
        and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
        that knows the option.
+   * - ``aggregated_metrics``
+     - boolean
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Report a table's per-table metrics, aggregated across shards into one series per node;
+       ``false`` drops them for the table. Materialized views and secondary indexes follow their
+       base table; a CDC log table has its own setting, and a table's Paxos state table follows
+       only the keyspace and cluster scopes. When no scope sets it, the node's
+       ``enable_node_aggregated_table_metrics`` applies. Has no effect while
+       ``enable_keyspace_column_family_metrics`` is set. Default: the node's
+       ``enable_node_aggregated_table_metrics``, itself ``true`` by default.
 
 .. _cql-cluster-config-yaml-options:
 
