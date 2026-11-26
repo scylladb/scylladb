@@ -661,6 +661,9 @@ auto coordinator::mutate(schema_ptr schema,
     op = &get<operation_ctx>(op_result);
     table_stats = op->raft_server.table_stats();
 
+    // Resolved here, since the encoding below must not suspend.
+    const auto codec = co_await _groups_manager.codec_schemas().get(schema);
+
     while (true) {
         // `disposition` below is local to one iteration, so the pointer into
         // it must not survive into the next one.
@@ -743,14 +746,12 @@ auto coordinator::mutate(schema_ptr schema,
         // which cells from the second entry are visible while the first entry
         // still wins on the cells they share. Such a history is not
         // linearizable.
-        write_mutation write {
-            .mutation{mutation_gen(ts_with_term->timestamp)}
-        };
-        logger.trace("mutate(): add_entry({}), {}",
-            write.mutation.pretty_printer(schema), state_fmt);
+        // encode_partition() is synchronous, so the encoding keeps that guarantee.
+        const auto m = mutation_gen(ts_with_term->timestamp);
+        logger.trace("mutate(): add_entry({}), {}", m, state_fmt);
 
         raft::command raft_cmd;
-        ser::serialize(raft_cmd, raft_command{.change = std::move(write)});
+        ser::serialize(raft_cmd, raft_command{.change = encode_write_mutation(m, ts_with_term->timestamp, codec)});
         tracing::trace(trace_state, "Adding an entry of {} bytes to raft group {} in term {} with timestamp {}",
             raft_cmd.size(), op->replicas.group_id(), ts_with_term->term, ts_with_term->timestamp);
 

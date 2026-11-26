@@ -50,6 +50,12 @@ public:
         bool schema_mismatch;
     };
 
+    // A column as the writer of the data had it. name must outlive the translation.
+    struct writer_column {
+        const bytes* name;
+        data_type type;
+    };
+
 private:
 
     struct state {
@@ -59,6 +65,7 @@ private:
                 const utils::chunked_vector<serialization_header::column_desc>& src,
                 const sstable_enabled_features& features,
                 bool is_static);
+        static std::vector<column_info> build(const schema& s, const std::vector<writer_column>& src, bool is_static);
 
         schema_ptr _schema;
         table_schema_version schema_uuid;
@@ -85,6 +92,16 @@ private:
         state(const schema& s)
             : schema_uuid(s.version())
             , _empty(true)
+        {}
+
+        state(const schema& s, const std::vector<writer_column>& regular, const std::vector<writer_column>& statics,
+                column_values_fixed_lengths ck_fixed_lengths)
+            : _schema(s.shared_from_this())
+            , schema_uuid(s.version())
+            , regular_schema_columns_from_sstable(build(s, regular, false))
+            , static_schema_columns_from_sstable(build(s, statics, true))
+            , clustering_column_value_fix_lengths(std::move(ck_fixed_lengths))
+            , _empty(false)
         {}
     };
 
@@ -120,6 +137,15 @@ public:
             _state = make_lw_shared<const state>(s);
         }
         return *this;
+    }
+
+    // Use when the writer's columns are known with their types, without a serialization header.
+    // Not for dense tables, whose header columns state::build() maps specially.
+    static column_translation make(const schema& s, const std::vector<writer_column>& regular,
+            const std::vector<writer_column>& statics, column_values_fixed_lengths ck_fixed_lengths) {
+        column_translation ret;
+        ret._state = make_lw_shared<const state>(s, regular, statics, std::move(ck_fixed_lengths));
+        return ret;
     }
 
     bool empty() const {

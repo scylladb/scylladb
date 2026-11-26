@@ -72,6 +72,26 @@ def testDropColumnWithTimestampPreparedNonExistingSchema(scylla_only, cql, test_
     finally:
         cql.execute(f"DROP TABLE {table}")
 
+# A column dropped and added back as the other kind (regular to static or back)
+# keeps its name. A read of an sstable written before the drop must skip the old
+# cells, not apply them to another column. The row cache upgrades its copy of the
+# data correctly and hides the bug until a restart, so the reads bypass it.
+def test_drop_and_readd_regular_column_as_static(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, r1 int, r2 int, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, r1, r2) VALUES (1, 5, 7, 2)")
+        flush(cql, table)
+        cql.execute(f"ALTER TABLE {table} DROP r1")
+        cql.execute(f"ALTER TABLE {table} ADD r1 int static")
+        assert list(cql.execute(f"SELECT pk, ck, r1, r2 FROM {table} BYPASS CACHE")) == [(1, 5, None, 2)]
+
+def test_drop_and_readd_static_column_as_regular(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, s1 int static, s2 int static, r int, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, s1, s2, r) VALUES (1, 5, 7, 2, 3)")
+        flush(cql, table)
+        cql.execute(f"ALTER TABLE {table} DROP s1")
+        cql.execute(f"ALTER TABLE {table} ADD s1 int")
+        assert list(cql.execute(f"SELECT pk, ck, s1, s2, r FROM {table} BYPASS CACHE")) == [(1, 5, None, 2, 3)]
+
 def test_valid_percentile_speculative_retry_values(cql, test_keyspace):
     """
     In test_valid_percentile_speculative_retry_values, we verify that valid values for the

@@ -325,8 +325,9 @@ inline void write(sstable_version_types v, file_writer& out, const disk_string_v
     write(v, out, s.value);
 }
 
-template <typename Size>
-inline void write(sstable_version_types v, file_writer& out, const disk_string_view<Size>& s) {
+template <typename Size, typename W>
+requires Writer<W>
+inline void write(sstable_version_types v, W& out, const disk_string_view<Size>& s) {
     Size len;
     check_truncate_and_assign(len, s.value.size());
     write(v, out, len, s.value);

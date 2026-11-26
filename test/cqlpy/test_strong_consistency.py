@@ -271,6 +271,20 @@ def test_counter_table_creation(cql, sc_keyspace):
         cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, c counter)")
 
 
+@pytest.mark.parametrize("enable_compact_storage", [False, True])
+def test_compact_storage_table_creation(cql, sc_keyspace, enable_compact_storage):
+    """
+    COMPACT STORAGE tables are rejected in strongly consistent keyspaces:
+    strongly consistent writes are encoded with the mx partition codec,
+    which does not support compact tables. The refusal is the same
+    whether enable_create_table_with_compact_storage allows compact
+    storage or not.
+    """
+    with config_value_context(cql, 'enable_create_table_with_compact_storage', str(enable_compact_storage).lower()):
+        with pytest.raises(InvalidRequest, match="compact storage is not supported in strongly consistent keyspaces"):
+            cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, v int) WITH COMPACT STORAGE")
+
+
 def test_counter_batch_on_sc_table(cql, sc_keyspace):
     """
     Counter batches are rejected on strongly consistent keyspaces.

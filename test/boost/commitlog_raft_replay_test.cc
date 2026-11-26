@@ -7,12 +7,14 @@
  */
 
 #include <algorithm>
+#include <map>
 #include <unordered_set>
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
@@ -23,6 +25,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/commitlog_entry.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
+#include "test/lib/exception_utils.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
@@ -51,6 +54,17 @@
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
 #include "mutation/mutation.hh"
+#include "schema/schema_builder.hh"
+#include "transport/messages/result_message.hh"
+#include "utils/exceptions.hh"
+#include "db/schema_tables.hh"
+#include "mutation/frozen_mutation.hh"
+#include "schema/schema_registry.hh"
+#include "sstables/mx/partition_decoder.hh"
+#include "readers/mutation_reader.hh"
+#include "utils/multiprecision_int.hh"
+#include "vint-serialization.hh"
+#include <seastar/util/closeable.hh>
 
 // A seam into raft_commitlog_replay_buffer's parked records: finish_replay()
 // needs a database, a query processor and tablet metadata.
@@ -1639,7 +1653,7 @@ cql_test_config sc_replay_config_starting_on_damage() {
 
 
 // A COMMAND entry carrying one real mutation, encoded as the coordinator does: a
-// raft_command holding a frozen_mutation in raft::command. Dummies do not work
+// raft_command holding a write_mutation_v2 in raft::command. Dummies do not work
 // for the stale-copy test below: dropped or applied, a dummy leaves no trace.
 raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t term, raft::index_t idx,
         int32_t pk, int32_t v, api::timestamp_type ts) {
@@ -1650,7 +1664,8 @@ raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t t
     m.partition().clustered_row(*schema, ck).apply(row_marker(ts));
     raft::command cmd;
     ser::serialize(cmd, service::strong_consistency::raft_command{
-            .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+            .change = service::strong_consistency::encode_write_mutation(
+                    m, ts, service::strong_consistency::make_write_codec_schema(*schema))});
     return make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = term, .idx = idx, .data = std::move(cmd)});
 }
@@ -2302,25 +2317,13 @@ SEASTAR_TEST_CASE(test_second_replay_recovers_the_rewritten_tail) {
 // the truncation_record loop in add_batch() fails the first pass's assertion.
 SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        // Two tables: `d` carries the mutations and is read back through the
-        // ordinary path, `g` only makes the group id resolve and takes the
-        // rewritten tablet map, leaving `d`'s metadata as CQL made it.
         env.execute_cql("create table ks.d (pk int primary key, v int)").get();
-        env.execute_cql("create table ks.g (pk int primary key)").get();
         const auto schema = env.local_db().find_schema("ks", "d");
         const auto gid = make_group_id();
-        set_sc_tablet_metadata(env, env.local_db().find_schema("ks", "g")->id(), gid,
+        // The group's tablet must be `d`'s: replay refuses a write of another table.
+        set_sc_tablet_metadata(env, schema->id(), gid,
                 locator::tablet_replica_set{
                         {env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
-
-        // `d`'s tablet must have a replica on this shard: apply_committed() writes
-        // to the memtable of the shard replay runs on. Only the first tablet table
-        // created here is sure of a replica on this shard, so `d` is created first.
-        // Asserted, so reordering the CREATEs fails here, not in table::apply().
-        const auto token_metadata = env.local_db().get_shared_token_metadata().get();
-        const auto& tablets = token_metadata->tablets().get_tablet_map(schema->id());
-        BOOST_REQUIRE(tablets.has_replica(*tablets.tablet_ids().begin(),
-                locator::tablet_replica{.host = token_metadata->get_my_id(), .shard = this_shard_id()}));
 
         constexpr db::segment_id_type seg_term1 = 1;
         constexpr db::segment_id_type seg_term2 = 2;
@@ -2370,16 +2373,32 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
                     env.local_qp(), gid, this_shard_id()).get();
         };
 
-        // 1..5 stay the term-1 copies, 6..10 the term-2 ones. 11 is uncommitted:
-        // with_rows_ignore_order() rejects extra rows, so its absence is checked too.
-        std::vector<std::vector<bytes_opt>> committed_rows;
-        for (int i = 1; i <= 10; ++i) {
-            committed_rows.push_back({int32_type->decompose(i),
-                    int32_type->decompose(i <= 5 ? term1_value_base + i : term2_value_base + i)});
+        // 1..5 stay the term-1 copies, 6..10 the term-2 ones, each as
+        // make_mutation_entry() wrote it. 11 is uncommitted, so its absence is
+        // checked too. Read from the table, not over CQL, since its tablet map is
+        // the one installed above.
+        std::map<int32_t, mutation> committed;
+        for (int32_t i = 1; i <= 10; ++i) {
+            const auto [value_base, timestamp] = i <= 5
+                    ? std::pair(term1_value_base, ts_term1)
+                    : std::pair(term2_value_base, ts_term2);
+            mutation m(schema, partition_key::from_single_value(*schema, int32_type->decompose(i)));
+            m.set_clustered_cell(clustering_key::make_empty(), to_bytes("v"), data_value(value_base + i), timestamp);
+            m.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_marker(timestamp));
+            committed.emplace(i, std::move(m));
         }
         const auto require_committed_rows = [&] {
-            assert_that(env.execute_cql("select pk, v from ks.d").get())
-                    .is_rows().with_rows_ignore_order(committed_rows);
+            auto expected = committed;
+            auto reader = env.local_db().find_column_family(schema).make_mutation_reader(schema, make_reader_permit(env));
+            auto close_reader = deferred_close(reader);
+            while (auto applied = read_mutation_from_mutation_reader(reader).get()) {
+                const auto pk = value_cast<int32_t>(int32_type->deserialize(applied->key().explode(*schema).front()));
+                auto it = expected.find(pk);
+                BOOST_REQUIRE_MESSAGE(it != expected.end(), fmt::format("unexpected partition {}", *applied));
+                BOOST_REQUIRE_MESSAGE(*applied == it->second, fmt::format("applied {}, expected {}", *applied, it->second));
+                expected.erase(it);
+            }
+            BOOST_REQUIRE_MESSAGE(expected.empty(), fmt::format("{} partitions missing", expected.size()));
         };
         // The uncommitted tail, as the group must get it back from either pass.
         const auto expected_tail = sstring("2:11");
@@ -2577,11 +2596,13 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
         auto& db = env.local_db();
         const auto schema = db.find_schema("test_ks", "tbl");
         mutation m(schema, partition_key::from_singular(*schema, 1));
-        m.set_cell(clustering_key::make_empty(), "c", data_value(10), api::new_timestamp());
+        const auto ts = api::new_timestamp();
+        m.set_cell(clustering_key::make_empty(), "c", data_value(10), ts);
 
         raft::command cmd;
         ser::serialize(cmd, service::strong_consistency::raft_command{
-                .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+                .change = service::strong_consistency::encode_write_mutation(
+                        m, ts, service::strong_consistency::make_write_codec_schema(*schema))});
 
         auto entry = make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = raft::term_t(1),
@@ -2607,10 +2628,11 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
                 BOOST_REQUIRE(!segments_before.empty());
 
                 service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                service::strong_consistency::codec_schema_cache codecs;
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
                         env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
-                        make_lw_shared<service::strong_consistency::state_machine_stats>());
+                        codecs, make_lw_shared<service::strong_consistency::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 // Abort the apply after the pin is taken and before the entry reaches a memtable.
@@ -2755,10 +2777,12 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                 raft::log_entry_ptr_list entries;
                 for (int pk = 1; pk <= 3; ++pk) {
                     mutation m(schema, partition_key::from_singular(*schema, pk));
-                    m.set_cell(clustering_key::make_empty(), "c", data_value(pk), api::new_timestamp());
+                    const auto ts = api::new_timestamp();
+                    m.set_cell(clustering_key::make_empty(), "c", data_value(pk), ts);
                     raft::command cmd;
                     ser::serialize(cmd, service::strong_consistency::raft_command{
-                            .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+                            .change = service::strong_consistency::encode_write_mutation(
+                                    m, ts, service::strong_consistency::make_write_codec_schema(*schema))});
                     entries.push_back(make_lw_shared<raft::log_entry>(raft::log_entry{
                         .term = raft::term_t(1),
                         .idx = raft::index_t(pk),
@@ -2777,10 +2801,11 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
 
                 // The tablet's state machine, with no raft server around it.
                 service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                service::strong_consistency::codec_schema_cache codecs;
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
                         env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
-                        make_lw_shared<service::strong_consistency::state_machine_stats>());
+                        codecs, make_lw_shared<service::strong_consistency::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 const auto writes_before = db.get_stats().total_writes;
@@ -2788,6 +2813,683 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                 BOOST_REQUIRE_EQUAL(db.get_stats().total_writes - writes_before, 3);
             });
         });
+    }, std::move(db_cfg_ptr));
+}
+
+namespace {
+
+// A COMMAND entry whose raft_command::change index is `kind`, laid out as the IDL
+// writes a raft_command: the struct's size frame, the variant index, the alternative.
+raft::log_entry_ptr make_command_entry_of_kind(raft::term_t term, raft::index_t idx, uint8_t kind) {
+    const auto payload = to_bytes("a command of a newer version");
+    raft::command cmd;
+    ser::serialize(cmd, ser::size_type(sizeof(ser::size_type) + sizeof(kind) + payload.size()));
+    ser::serialize(cmd, kind);
+    cmd.write(payload);
+    return make_lw_shared<raft::log_entry>(raft::log_entry{
+            .term = term, .idx = idx, .data = std::move(cmd)});
+}
+
+// Asserts that no start_resize marker reached the group's row in system.raft_groups.
+void require_no_start_resize(cql_test_env& env, raft::group_id gid) {
+    auto rows = env.execute_cql(seastar::format(
+            "SELECT start_resize FROM system.raft_groups WHERE shard = {} AND group_id = {}",
+            this_shard_id(), gid.id)).get();
+    assert_that(rows).is_rows();
+    const auto& rs = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(rows)->rs().result_set();
+    for (const auto& row : rs.rows()) {
+        BOOST_REQUIRE(!row[0]);
+    }
+}
+
+} // anonymous namespace
+
+// Test: a command kind this version does not know is refused. The variant deserializer
+// returns the default alternative for an unknown index, which is a start_resize marker,
+// so without the check a newer version's command would be applied as a start_resize marker.
+SEASTAR_THREAD_TEST_CASE(test_deserialize_refuses_an_unknown_command_kind) {
+    namespace sc = service::strong_consistency;
+    constexpr auto known_kinds = std::variant_size_v<decltype(sc::raft_command::change)>;
+    const auto entry = make_command_entry_of_kind(raft::term_t(1), raft::index_t(1), known_kinds);
+    BOOST_REQUIRE_THROW(sc::detail::deserialize_raft_command(entry), sc::unknown_raft_command_error);
+
+    // The known kinds still decode, so the check reads the index from the right byte.
+    raft::command marker_cmd;
+    ser::serialize(marker_cmd, sc::raft_command{.change = sc::resize_marker{
+            .kind = sc::resize_marker_kind::end_resize, .timestamp = 42}});
+    const auto marker = sc::detail::deserialize_raft_command(make_lw_shared<raft::log_entry>(
+            raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(2), .data = std::move(marker_cmd)}));
+    BOOST_REQUIRE(std::get<sc::resize_marker>(marker.change).kind == sc::resize_marker_kind::end_resize);
+    BOOST_REQUIRE_EQUAL(std::get<sc::resize_marker>(marker.change).timestamp, 42);
+
+    auto schema = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("v", int32_type)
+            .build();
+    const auto write = sc::detail::deserialize_raft_command(
+            make_mutation_entry(schema, raft::term_t(1), raft::index_t(3), 1, 7, 100));
+    BOOST_REQUIRE(std::holds_alternative<sc::write_mutation_v2>(write.change));
+}
+
+// Test: replay refuses a committed command of an unknown kind instead of applying it,
+// and the group's row gets no start_resize marker.
+SEASTAR_TEST_CASE(test_replay_refuses_an_unknown_command_kind) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        namespace sc = service::strong_consistency;
+        const auto table = table_id(utils::UUID_gen::get_time_UUID());
+        const auto my_id = env.local_db().get_token_metadata().get_my_id();
+        const auto gid = make_group_id();
+        sc::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+        set_sc_tablet_metadata(env, table, gid,
+                locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
+
+        constexpr auto known_kinds = std::variant_size_v<decltype(sc::raft_command::change)>;
+        db::raft_commitlog_replay_buffer buffer;
+        auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+        BOOST_REQUIRE_THROW(buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, 1, raft::index_t(1),
+                std::vector<raft::log_entry_ptr>{
+                        make_command_entry_of_kind(raft::term_t(1), raft::index_t(1), known_kinds)}).get(),
+                sc::unknown_raft_command_error);
+        require_no_start_resize(env, gid);
+    }, sc_replay_config());
+}
+
+// Test: state_machine::apply() fails on a command of an unknown kind instead of
+// applying it, and the group's row gets no start_resize marker.
+SEASTAR_TEST_CASE(test_apply_refuses_an_unknown_command_kind) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+
+    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+        namespace sc = service::strong_consistency;
+        co_await env.get_storage_service().local().set_tablet_balancing_enabled(false);
+        co_await env.execute_cql("CREATE KEYSPACE test_ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                "'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'");
+        co_await env.execute_cql("CREATE TABLE test_ks.tbl (pk int PRIMARY KEY, c int)");
+
+        const auto table = env.local_db().find_schema("test_ks", "tbl")->id();
+        const auto& replicas = env.local_token_metadata_ptr()->tablets()
+                .get_tablet_map(table)
+                .get_tablet_info(locator::tablet_id(0))
+                .replicas;
+        BOOST_REQUIRE_EQUAL(replicas.size(), 1);
+
+        co_await env.db().invoke_on(replicas.front().shard, [&env, table] (replica::database& db) {
+            return seastar::async([&env, &db, table] {
+                constexpr auto known_kinds = std::variant_size_v<decltype(sc::raft_command::change)>;
+                raft::log_entry_ptr_list entries;
+                entries.push_back(make_command_entry_of_kind(raft::term_t(1), raft::index_t(1), known_kinds));
+
+                // apply() pins the commitlog segment of each entry in the storage, so store the entries first.
+                const auto gid = make_group_id();
+                sc::raft_groups_storage storage(
+                        env.qp().local(), db, gid, raft::server_id::create_random_id(),
+                        this_shard_id(), *db.commitlog(), table,
+                        sc::replayed_data_per_group{});
+                auto stop_storage = defer([&] noexcept { storage.abort().get(); });
+                storage.store_log_entries(entries).get();
+
+                sc::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                sc::codec_schema_cache codecs;
+                auto state_machine = sc::make_state_machine(
+                        locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
+                        codecs, make_lw_shared<sc::state_machine_stats>());
+                auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
+
+                auto f = state_machine->apply(entries);
+                f.wait();
+                BOOST_REQUIRE(f.failed());
+                auto ex = f.get_exception();
+                BOOST_REQUIRE(try_catch_nested<sc::unknown_raft_command_error>(ex));
+                require_no_start_resize(env, gid);
+            });
+        });
+    }, std::move(db_cfg_ptr));
+}
+
+namespace {
+
+// A COMMAND entry laid out as an older version wrote a write: the retired index 1,
+// write_mutation { frozen_mutation mutation; }. Both structs are non-final, so each
+// has a size frame counting itself; frozen_mutation is serialized as bytes.
+raft::log_entry_ptr make_frozen_write_entry(const mutation& m, raft::term_t term, raft::index_t idx) {
+    const auto fm = freeze(m);
+    const auto& rep = fm.representation();
+    const uint8_t kind = 1;
+    const auto write_size = 2 * sizeof(ser::size_type) + rep.size();
+    raft::command cmd;
+    ser::serialize(cmd, ser::size_type(sizeof(ser::size_type) + sizeof(kind) + write_size));
+    ser::serialize(cmd, kind);
+    ser::serialize(cmd, ser::size_type(write_size));
+    ser::serialize(cmd, ser::size_type(rep.size()));
+    for (bytes_view fragment : rep) {
+        cmd.write(fragment);
+    }
+    return make_lw_shared<raft::log_entry>(raft::log_entry{
+            .term = term, .idx = idx, .data = std::move(cmd)});
+}
+
+// Runs a write on a strongly consistent table, which takes QUORUM.
+future<> execute_sc_write(cql_test_env& env, sstring cql) {
+    return env.execute_cql(cql, std::make_unique<cql3::query_options>(
+            db::consistency_level::QUORUM, std::vector<cql3::raw_value>())).discard_result();
+}
+
+} // anonymous namespace
+
+// Test: the size of a write command for the 16-byte case of SCYLLADB-2476: a bigint
+// partition key and one bigint column, written by an INSERT, so with a row marker.
+// The frozen_mutation size is that of the retired index 1, laid out by hand.
+SEASTAR_THREAD_TEST_CASE(test_write_command_size) {
+    namespace sc = service::strong_consistency;
+    auto schema = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", long_type, column_kind::partition_key)
+            .with_column("v", long_type)
+            .build();
+    const auto ts = api::new_timestamp();
+    mutation m(schema, partition_key::from_singular(*schema, int64_t(1)));
+    const auto ck = clustering_key::make_empty();
+    m.set_clustered_cell(ck, to_bytes("v"), data_value(int64_t(2)), ts);
+    m.partition().clustered_row(*schema, ck).apply(row_marker(ts));
+
+    raft::command cmd;
+    ser::serialize(cmd, sc::raft_command{.change = sc::encode_write_mutation(m, ts, sc::make_write_codec_schema(*schema))});
+    const auto frozen_size = std::get<raft::command>(
+            make_frozen_write_entry(m, raft::term_t(1), raft::index_t(1))->data).size();
+    fmt::print("raft_command of the 16-byte write: {} bytes, {} bytes in the frozen_mutation format\n",
+            cmd.size(), frozen_size);
+    BOOST_CHECK_LE(cmd.size(), 80);
+    // Keeps the comparison meaningful if the frozen format ever shrinks.
+    BOOST_CHECK_GT(frozen_size, 200);
+}
+
+// Test: a write of the retired frozen_mutation format is refused by the deserializer.
+SEASTAR_THREAD_TEST_CASE(test_deserialize_refuses_a_frozen_mutation_write) {
+    namespace sc = service::strong_consistency;
+    auto schema = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("v", int32_type)
+            .build();
+    mutation m(schema, partition_key::from_singular(*schema, 1));
+    m.set_clustered_cell(clustering_key::make_empty(), to_bytes("v"), data_value(7), api::new_timestamp());
+    BOOST_REQUIRE_THROW(sc::detail::deserialize_raft_command(make_frozen_write_entry(m, raft::term_t(1), raft::index_t(1))),
+            sc::retired_raft_command_error);
+}
+
+// Test: replay refuses a committed write of the retired frozen_mutation format.
+SEASTAR_TEST_CASE(test_replay_refuses_a_frozen_mutation_write) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        namespace sc = service::strong_consistency;
+        env.execute_cql("create table ks.d (pk int primary key, v int)").get();
+        const auto schema = env.local_db().find_schema("ks", "d");
+        const auto gid = make_group_id();
+        sc::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+        set_sc_tablet_metadata(env, schema->id(), gid,
+                locator::tablet_replica_set{{env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
+
+        mutation m(schema, partition_key::from_singular(*schema, 1));
+        m.set_clustered_cell(clustering_key::make_empty(), to_bytes("v"), data_value(7), api::new_timestamp());
+        db::raft_commitlog_replay_buffer buffer;
+        auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+        BOOST_REQUIRE_THROW(buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, 1, raft::index_t(1),
+                std::vector<raft::log_entry_ptr>{make_frozen_write_entry(m, raft::term_t(1), raft::index_t(1))}).get(),
+                sc::retired_raft_command_error);
+    }, sc_replay_config());
+}
+
+// Test: a write carrying the schema version of another table is refused: as the
+// version's first write of the replay and after a valid write of the version into its
+// own table, which one schema_store remembers for every group of the replay, and as
+// the version of a table the registry holds and the database no longer has.
+// `d` takes the valid write: the keyspace's second table has no storage on shard 0.
+SEASTAR_TEST_CASE(test_replay_refuses_a_write_of_another_table) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        namespace sc = service::strong_consistency;
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        env.execute_cql("create table ks.d (pk int primary key, v int)").get();
+        env.execute_cql("create table ks.other (pk int primary key, v int)").get();
+        const auto schema = env.local_db().find_schema("ks", "d");
+        const auto other = env.local_db().find_schema("ks", "other");
+        const auto gid = make_group_id();
+        const auto other_gid = make_group_id();
+        for (const auto& [s, g] : {std::pair(schema, gid), std::pair(other, other_gid)}) {
+            sc::raft_groups_storage::store_descriptor(
+                    env.local_qp(), g, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                    raft::configuration{}, {}).get();
+            set_sc_tablet_metadata(env, s->id(), g,
+                    locator::tablet_replica_set{{env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
+        }
+
+        const auto ts = api::new_timestamp();
+        const auto make_entry = [&] (const schema_ptr& s, int32_t pk) {
+            mutation m(s, partition_key::from_singular(*s, pk));
+            m.set_clustered_cell(clustering_key::make_empty(), to_bytes("v"), data_value(pk), ts);
+            raft::command cmd;
+            ser::serialize(cmd, sc::raft_command{.change = sc::encode_write_mutation(m, ts, sc::make_write_codec_schema(*s))});
+            return std::vector<raft::log_entry_ptr>{make_lw_shared<raft::log_entry>(
+                    raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(1), .data = std::move(cmd)})};
+        };
+        const auto refused_by = [&] (db::raft_commitlog_replay_buffer& buffer, raft::group_id g, const schema_ptr& s, int32_t pk) {
+            BOOST_REQUIRE_EXCEPTION(buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                    g, 1, raft::index_t(1), make_entry(s, pk)).get(),
+                    std::runtime_error, exception_predicate::message_contains("the group's table is"));
+        };
+        // The version's first write of the replay.
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+            refused_by(buffer, other_gid, schema, 1);
+        }
+        // After a valid write of the version into its own table.
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                    gid, 1, raft::index_t(1), make_entry(schema, 2)).get();
+            refused_by(buffer, other_gid, schema, 3);
+        }
+        // The version of a table the registry holds and the database does not, as after
+        // a DROP TABLE with the schema still referenced. Refused before its table is
+        // looked up: the no_such_column_family of the lookup would pass for a drop of the
+        // group's table and discard the batch. DROP TABLE itself needs a remote query
+        // that the test env has no storage_proxy::remote for.
+        const auto gone = local_schema_registry().learn(schema_builder(this_smp_shard_count(), "ks", "gone")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("v", int32_type)
+                .build());
+        BOOST_REQUIRE_THROW(env.local_db().find_schema(gone->id()), replica::no_such_column_family);
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+            refused_by(buffer, gid, gone, 4);
+        }
+
+        // Read from the table, not over CQL, since its tablet map is the one installed
+        // above. `other` is not read: its storage is on another shard, so the read is empty
+        // either way.
+        std::vector<int32_t> keys;
+        auto reader = env.local_db().find_column_family(schema).make_mutation_reader(schema, make_reader_permit(env));
+        auto close_reader = deferred_close(reader);
+        while (auto m = read_mutation_from_mutation_reader(reader).get()) {
+            keys.push_back(value_cast<int32_t>(int32_type->deserialize(m->key().explode(*schema).front())));
+        }
+        BOOST_REQUIRE(keys == std::vector<int32_t>{2});
+    }, sc_replay_config());
+}
+
+// Test: a write of a version known only by its column mapping is refused in the group
+// of another table, after a write of the version into its own table's group cached the
+// mapping. schema_store::_column_mapping_cache serves every group of the shard. Keyed
+// by the version alone, it would hand the group the cached mapping, and the write would
+// decode into the other table. `d` takes the valid write: the keyspace's second table
+// has no storage on shard 0.
+SEASTAR_TEST_CASE(test_replay_refuses_a_cached_column_mapping_of_another_table) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        namespace sc = service::strong_consistency;
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        env.execute_cql("create table ks.d (pk int primary key, v int, w int)").get();
+        env.execute_cql("create table ks.other (pk int primary key, v int)").get();
+        const auto schema = env.local_db().find_schema("ks", "d");
+        const auto other = env.local_db().find_schema("ks", "other");
+        const auto gid = make_group_id();
+        const auto other_gid = make_group_id();
+        for (const auto& [s, g] : {std::pair(schema, gid), std::pair(other, other_gid)}) {
+            sc::raft_groups_storage::store_descriptor(
+                    env.local_qp(), g, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                    raft::configuration{}, {}).get();
+            set_sc_tablet_metadata(env, s->id(), g,
+                    locator::tablet_replica_set{{env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
+        }
+
+        // A version of `d` known only by its column mapping, with the columns of `other`,
+        // so that the misrouted write would decode without an error.
+        const auto before_add = schema_builder(schema).remove_column(to_bytes("w")).build();
+        db::schema_tables::store_column_mapping(env.get_storage_proxy(), before_add, false).get();
+        BOOST_REQUIRE(!local_schema_registry().get_or_null(before_add->version()));
+
+        const auto ts = api::new_timestamp();
+        const auto make_entry = [&] (int32_t pk) {
+            mutation m(before_add, partition_key::from_singular(*before_add, pk));
+            m.set_clustered_cell(clustering_key::make_empty(), to_bytes("v"), data_value(pk), ts);
+            raft::command cmd;
+            ser::serialize(cmd, sc::raft_command{.change = sc::encode_write_mutation(m, ts, sc::make_write_codec_schema(*before_add))});
+            return std::vector<raft::log_entry_ptr>{make_lw_shared<raft::log_entry>(
+                    raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(1), .data = std::move(cmd)})};
+        };
+        // The valid write caches the mapping for every later schema_store of the shard.
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                    gid, 1, raft::index_t(1), make_entry(1)).get();
+        }
+        // A new buffer, so a new schema_store: the refusal comes from the mapping lookup,
+        // not from the store's own map of resolved versions.
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+            BOOST_REQUIRE_EXCEPTION(buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                    other_gid, 1, raft::index_t(1), make_entry(2)).get(),
+                    std::runtime_error, exception_predicate::message_contains("couldn't find schema for table"));
+        }
+
+        // Read from the table, not over CQL, since its tablet map is the one installed
+        // above. `other` is not read: its storage is on another shard, so the read is empty
+        // either way.
+        std::vector<int32_t> keys;
+        auto reader = env.local_db().find_column_family(schema).make_mutation_reader(schema, make_reader_permit(env));
+        auto close_reader = deferred_close(reader);
+        while (auto m = read_mutation_from_mutation_reader(reader).get()) {
+            keys.push_back(value_cast<int32_t>(int32_type->deserialize(m->key().explode(*schema).front())));
+        }
+        BOOST_REQUIRE(keys == std::vector<int32_t>{1});
+    }, sc_replay_config());
+}
+
+// Test: replay decodes writes of older schema versions into the current schema: one
+// known only by its column mapping and, after ALTER TABLE DROP, writes holding the
+// dropped column, by mapping or by the registry. Cells at or before the drop are skipped,
+// so a node with such writes unflushed boots. A cell newer than the drop fails the replay.
+SEASTAR_TEST_CASE(test_replay_decodes_writes_of_older_schemas) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        namespace sc = service::strong_consistency;
+        env.execute_cql("create table ks.d (pk int primary key, v int, w int, x int)").get();
+        env.execute_cql("alter table ks.d drop x").get();
+        const auto schema = env.local_db().find_schema("ks", "d");
+        const auto drop_ts = schema->dropped_columns().at("x").timestamp;
+        const auto gid = make_group_id();
+        sc::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+        set_sc_tablet_metadata(env, schema->id(), gid,
+                locator::tablet_replica_set{{env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
+
+        // Versions from before w was added and before x was dropped. The first two are
+        // unknown to the registry, so decoding goes through their column mappings.
+        const auto before_add = schema_builder(schema).remove_column(to_bytes("w")).build();
+        const auto before_drop = schema_builder(schema).with_column("x", int32_type).build();
+        for (const auto& s : {before_add, before_drop}) {
+            db::schema_tables::store_column_mapping(env.get_storage_proxy(), s, false).get();
+            BOOST_REQUIRE(!local_schema_registry().get_or_null(s->version()));
+        }
+        const auto registered_before_drop = local_schema_registry().learn(schema_builder(schema).with_column("x", int32_type).build());
+        const auto make_entry = [] (const schema_ptr& s, raft::index_t idx, api::timestamp_type ts, std::vector<std::pair<sstring, int32_t>> cells) {
+            mutation m(s, partition_key::from_singular(*s, int32_t(idx.value())));
+            for (const auto& [name, value] : cells) {
+                m.set_clustered_cell(clustering_key::make_empty(), to_bytes(name), data_value(value), ts);
+            }
+            raft::command cmd;
+            ser::serialize(cmd, sc::raft_command{.change = sc::encode_write_mutation(m, ts, sc::make_write_codec_schema(*s))});
+            return make_lw_shared<raft::log_entry>(raft::log_entry{
+                    .term = raft::term_t(1), .idx = idx, .data = std::move(cmd)});
+        };
+
+        db::raft_commitlog_replay_buffer buffer;
+        auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+        const auto ts = api::new_timestamp();
+        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, 1, raft::index_t(3), std::vector<raft::log_entry_ptr>{
+                        make_entry(before_add, raft::index_t(1), ts, {{"v", 1}}),
+                        make_entry(before_drop, raft::index_t(2), drop_ts, {{"v", 2}, {"x", 2}}),
+                        make_entry(registered_before_drop, raft::index_t(3), drop_ts - 1, {{"v", 3}, {"x", 3}})}).get();
+        BOOST_REQUIRE_EXCEPTION(buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, 1, raft::index_t(4), std::vector<raft::log_entry_ptr>{
+                        make_entry(before_drop, raft::index_t(4), drop_ts + 1, {{"v", 4}, {"x", 4}})}).get(),
+                sstables::mx::column_mismatch_error,
+                exception_predicate::message_contains("after the column was dropped"));
+
+        // The entries ahead of the refused one were applied, in the current schema. Read
+        // from the table, not over CQL, since its tablet map is the one installed above.
+        std::map<int32_t, mutation> expected;
+        for (const auto& [pk, cell_ts] : {std::pair(1, ts), std::pair(2, drop_ts), std::pair(3, drop_ts - 1)}) {
+            mutation m(schema, partition_key::from_singular(*schema, pk));
+            m.set_clustered_cell(clustering_key::make_empty(), to_bytes("v"), data_value(pk), cell_ts);
+            expected.emplace(pk, std::move(m));
+        }
+        auto reader = env.local_db().find_column_family(schema).make_mutation_reader(schema, make_reader_permit(env));
+        auto close_reader = deferred_close(reader);
+        while (auto applied = read_mutation_from_mutation_reader(reader).get()) {
+            const auto pk = value_cast<int32_t>(int32_type->deserialize(applied->key().explode(*schema).front()));
+            auto it = expected.find(pk);
+            BOOST_REQUIRE_MESSAGE(it != expected.end(), fmt::format("unexpected partition {}", *applied));
+            BOOST_REQUIRE_MESSAGE(*applied == it->second, fmt::format("applied {}, expected {}", *applied, it->second));
+            expected.erase(it);
+        }
+        BOOST_REQUIRE_MESSAGE(expected.empty(), fmt::format("{} partitions missing", expected.size()));
+    }, sc_replay_config());
+}
+
+// Test: replay refuses a write whose payload lists other clustering key lengths than
+// the codec of its schema version was built with. The codec is cached by version, so
+// without the check the write would be read with the lengths of the version's first
+// write. A payload whose count of lengths differs from the table is refused too.
+SEASTAR_TEST_CASE(test_replay_refuses_a_write_with_other_clustering_key_lengths) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        namespace sc = service::strong_consistency;
+        env.execute_cql("create table ks.d (pk int, ck int, v int, w int, primary key (pk, ck))").get();
+        const auto schema = env.local_db().find_schema("ks", "d");
+        const auto gid = make_group_id();
+        sc::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+        set_sc_tablet_metadata(env, schema->id(), gid,
+                locator::tablet_replica_set{{env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
+
+        // A version known only by its column mapping, so the lengths come from the payload.
+        const auto before_add = schema_builder(schema).remove_column(to_bytes("w")).build();
+        db::schema_tables::store_column_mapping(env.get_storage_proxy(), before_add, false).get();
+        BOOST_REQUIRE(!local_schema_registry().get_or_null(before_add->version()));
+
+        const auto ts = api::new_timestamp();
+        const auto make_write = [&] (int32_t pk) {
+            mutation m(before_add, partition_key::from_singular(*before_add, pk));
+            m.set_clustered_cell(clustering_key::from_singular(*before_add, pk), to_bytes("v"), data_value(pk), ts);
+            return sc::encode_write_mutation(m, ts, sc::make_write_codec_schema(*before_add));
+        };
+        const auto make_entry = [] (sc::write_mutation_v2 w, raft::index_t idx) {
+            raft::command cmd;
+            ser::serialize(cmd, sc::raft_command{.change = std::move(w)});
+            return make_lw_shared<raft::log_entry>(raft::log_entry{.term = raft::term_t(1), .idx = idx, .data = std::move(cmd)});
+        };
+        // The header is the format byte, three base vints and the count vint, then one
+        // vint per clustering column: 5 for the 4-byte int, 0 for variable length.
+        auto valid = make_write(2);
+        const auto view = valid.data.linearize();
+        const bytes original(view.begin(), view.end());
+        size_t count_pos = 1;
+        for (int i = 0; i < 3; ++i) {
+            count_pos += unsigned_vint::serialized_size_from_first_byte(original[count_pos]);
+        }
+        const size_t length_pos = count_pos + unsigned_vint::serialized_size_from_first_byte(original[count_pos]);
+        BOOST_REQUIRE_EQUAL(int(original[count_pos]), 1);
+        BOOST_REQUIRE_EQUAL(int(original[length_pos]), 5);
+        const auto with_header = [&] (const bytes& b) {
+            sc::write_mutation_v2 w{.schema_version = valid.schema_version};
+            w.data.write(bytes_view(b));
+            return w;
+        };
+        const auto replay_refuses = [&] (std::vector<raft::log_entry_ptr> entries, const char* message = "clustering key lengths") {
+            db::raft_commitlog_replay_buffer buffer;
+            auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+            BOOST_REQUIRE_EXCEPTION(buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                    gid, 1, raft::index_t(entries.size()), entries).get(),
+                    std::runtime_error, exception_predicate::message_contains(message));
+        };
+
+        // A variable-length ck, after a valid write of the same version built the codec.
+        bytes other_length = original;
+        other_length[length_pos] = 0;
+        replay_refuses({make_entry(make_write(1), raft::index_t(1)), make_entry(with_header(other_length), raft::index_t(2))});
+
+        // No lengths at all: the count does not match the table.
+        bytes no_lengths(original.begin(), original.begin() + length_pos);
+        no_lengths[count_pos] = 0;
+        no_lengths.append(original.data() + length_pos + 1, original.size() - length_pos - 1);
+        replay_refuses({make_entry(with_header(no_lengths), raft::index_t(1))});
+
+        // A fixed length above the 32-bit range. Narrowed, 2^32 + 1 would pass as length 1.
+        bytes oversized(original.begin(), original.begin() + length_pos);
+        oversized.resize(length_pos + unsigned_vint::serialized_size((uint64_t(1) << 32) + 2));
+        unsigned_vint::serialize((uint64_t(1) << 32) + 2, oversized.begin() + length_pos);
+        oversized.append(original.data() + length_pos + 1, original.size() - length_pos - 1);
+        replay_refuses({make_entry(with_header(oversized), raft::index_t(1))}, "above the 32-bit range");
+    }, sc_replay_config());
+}
+
+// Test: state_machine::apply() decodes writes made with the table's current schema,
+// with a version the registry still has, and with versions known only by their column
+// mapping: one before a column was added, one before the clustering key's type went
+// from int to varint. Writes from before ALTER TABLE DROP apply with the dropped cells
+// skipped, by mapping or by the registry. A cell newer than the drop or of a column
+// the schema never had fails the apply with column_mismatch_error, and a write of the
+// retired frozen_mutation format with retired_raft_command_error. Also writes and
+// alters the table over CQL, through the coordinator's encoder.
+SEASTAR_TEST_CASE(test_apply_decodes_writes_across_schema_changes) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+
+    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+        namespace sc = service::strong_consistency;
+        co_await env.get_storage_service().local().set_tablet_balancing_enabled(false);
+        co_await env.execute_cql("CREATE KEYSPACE test_ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                "'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'");
+        co_await env.execute_cql("CREATE TABLE test_ks.tbl (pk bigint, ck varint, v int, w int, d int, PRIMARY KEY (pk, ck))");
+        co_await execute_sc_write(env, "INSERT INTO test_ks.tbl (pk, ck, v, w, d) VALUES (10, 10, 10, 10, 10)");
+        co_await env.execute_cql("ALTER TABLE test_ks.tbl ADD z int");
+        co_await execute_sc_write(env, "INSERT INTO test_ks.tbl (pk, ck, v, w, z) VALUES (11, 11, 11, 11, 11)");
+        co_await env.execute_cql("ALTER TABLE test_ks.tbl DROP d");
+
+        const auto table = env.local_db().find_schema("test_ks", "tbl")->id();
+        const auto& replicas = env.local_token_metadata_ptr()->tablets()
+                .get_tablet_map(table)
+                .get_tablet_info(locator::tablet_id(0))
+                .replicas;
+        BOOST_REQUIRE_EQUAL(replicas.size(), 1);
+
+        co_await env.db().invoke_on(replicas.front().shard, [&env, table] (replica::database& db) {
+            return seastar::async([&env, &db, table] {
+                const auto current = db.find_schema(table);
+                const auto drop_ts = current->dropped_columns().at("d").timestamp;
+                // Versions the registry has, and versions it never learned, which
+                // decode through the column mapping stored for them. The *_before_drop
+                // ones still have d, and unknown has a column the table never had.
+                const auto registered = local_schema_registry().learn(schema_builder(current).remove_column(to_bytes("z")).build());
+                const auto registered_before_drop = local_schema_registry().learn(schema_builder(current).with_column("d", int32_type).build());
+                const auto before_add = schema_builder(current).remove_column(to_bytes("w")).build();
+                const auto int_ck = schema_builder(current).alter_column_type("ck", int32_type).build();
+                const auto mapped_before_drop = schema_builder(current).with_column("d", int32_type).build();
+                const auto unknown = schema_builder(current).with_column("x", int32_type).build();
+                for (const auto& s : {before_add, int_ck, mapped_before_drop, unknown}) {
+                    db::schema_tables::store_column_mapping(env.get_storage_proxy(), s, false).get();
+                    BOOST_REQUIRE(!local_schema_registry().get_or_null(s->version()));
+                }
+
+                raft::index_t idx{0};
+                const auto make_entry = [&] (const schema_ptr& s, int64_t pk, data_value ck,
+                        std::vector<std::pair<sstring, int32_t>> cells, api::timestamp_type ts = api::new_timestamp()) {
+                    mutation m(s, partition_key::from_singular(*s, pk));
+                    const auto ckey = clustering_key::from_singular(*s, ck);
+                    m.partition().clustered_row(*s, ckey).apply(row_marker(ts));
+                    for (const auto& [name, value] : cells) {
+                        m.set_clustered_cell(ckey, to_bytes(name), data_value(value), ts);
+                    }
+                    raft::command cmd;
+                    ser::serialize(cmd, sc::raft_command{.change = sc::encode_write_mutation(m, ts, sc::make_write_codec_schema(*s))});
+                    idx = idx + raft::index_t(1);
+                    return make_lw_shared<raft::log_entry>(raft::log_entry{
+                            .term = raft::term_t(1), .idx = idx, .data = std::move(cmd)});
+                };
+                raft::log_entry_ptr_list good{
+                    make_entry(current, 1, utils::multiprecision_int(1), {{"v", 1}, {"w", 1}, {"z", 1}}),
+                    make_entry(registered, 2, utils::multiprecision_int(2), {{"v", 2}, {"w", 2}}),
+                    make_entry(before_add, 3, utils::multiprecision_int(3), {{"v", 3}, {"z", 3}}),
+                    // Without the writer's clustering key lengths the decoder would read
+                    // the 4-byte int as a length-prefixed varint.
+                    make_entry(int_ck, 4, int32_t(4), {{"v", 4}, {"w", 4}, {"z", 4}}),
+                    // d at and before the drop is dead and skipped.
+                    make_entry(mapped_before_drop, 7, utils::multiprecision_int(7), {{"v", 7}, {"w", 7}, {"z", 7}, {"d", 7}}, drop_ts),
+                    make_entry(registered_before_drop, 8, utils::multiprecision_int(8), {{"v", 8}, {"w", 8}, {"z", 8}, {"d", 8}}, drop_ts - 1),
+                };
+                raft::log_entry_ptr_list unknown_column{make_entry(unknown, 5, utils::multiprecision_int(5), {{"v", 5}, {"x", 5}})};
+                raft::log_entry_ptr_list newer_registered{
+                        make_entry(registered_before_drop, 12, utils::multiprecision_int(12), {{"v", 12}, {"d", 12}})};
+                raft::log_entry_ptr_list newer_mapped{
+                        make_entry(mapped_before_drop, 13, utils::multiprecision_int(13), {{"v", 13}, {"d", 13}})};
+                mutation retired_m(current, partition_key::from_singular(*current, int64_t(6)));
+                retired_m.set_clustered_cell(clustering_key::from_singular(*current, utils::multiprecision_int(6)),
+                        to_bytes("v"), data_value(6), api::new_timestamp());
+                idx = idx + raft::index_t(1);
+                raft::log_entry_ptr_list retired{make_frozen_write_entry(retired_m, raft::term_t(1), idx)};
+
+                const auto gid = make_group_id();
+                sc::raft_groups_storage storage(
+                        env.qp().local(), db, gid, raft::server_id::create_random_id(),
+                        this_shard_id(), *db.commitlog(), table,
+                        sc::replayed_data_per_group{});
+                auto stop_storage = defer([&] noexcept { storage.abort().get(); });
+                for (const auto& entries : {good, unknown_column, newer_registered, newer_mapped, retired}) {
+                    storage.store_log_entries(std::vector<raft::log_entry_ptr>(entries.begin(), entries.end())).get();
+                }
+
+                sc::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                sc::codec_schema_cache codecs;
+                auto state_machine = sc::make_state_machine(
+                        locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
+                        codecs, make_lw_shared<sc::state_machine_stats>());
+                auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
+
+                state_machine->apply(good).get();
+                const auto require_fails_with = [&] <typename Exception> (raft::log_entry_ptr_list entries, std::string_view message) {
+                    auto f = state_machine->apply(std::move(entries));
+                    f.wait();
+                    BOOST_REQUIRE(f.failed());
+                    auto ex = f.get_exception();
+                    const auto* e = try_catch_nested<Exception>(ex);
+                    BOOST_REQUIRE_MESSAGE(e && std::string_view(e->what()).contains(message), fmt::format("unexpected exception: {}", ex));
+                };
+                require_fails_with.operator()<sstables::mx::column_mismatch_error>(unknown_column, "is missing from the schema");
+                require_fails_with.operator()<sstables::mx::column_mismatch_error>(newer_registered, "after the column was dropped");
+                require_fails_with.operator()<sstables::mx::column_mismatch_error>(newer_mapped, "after the column was dropped");
+                require_fails_with.operator()<sc::retired_raft_command_error>(retired, "frozen_mutation format");
+            });
+        });
+
+        const auto i32 = [] (int32_t v) -> bytes_opt { return int32_type->decompose(v); };
+        const auto i64 = [] (int64_t v) -> bytes_opt { return long_type->decompose(v); };
+        const auto vi = [] (int64_t v) -> bytes_opt { return varint_type->decompose(utils::multiprecision_int(v)); };
+        const std::vector<std::vector<bytes_opt>> rows{
+            {i64(1), vi(1), i32(1), i32(1), i32(1)},
+            {i64(2), vi(2), i32(2), i32(2), std::nullopt},
+            {i64(3), vi(3), i32(3), std::nullopt, i32(3)},
+            // The varint keeps the int's 4-byte encoding, as after a real ALTER.
+            {i64(4), i32(4), i32(4), i32(4), i32(4)},
+            {i64(7), vi(7), i32(7), i32(7), i32(7)},
+            {i64(8), vi(8), i32(8), i32(8), i32(8)},
+            {i64(10), vi(10), i32(10), i32(10), std::nullopt},
+            {i64(11), vi(11), i32(11), i32(11), i32(11)},
+        };
+        // A strongly consistent read takes one partition. QUORUM reads after a read
+        // barrier, so the CQL writes above are applied.
+        for (const auto& row : rows) {
+            auto msg = co_await env.execute_cql(seastar::format("SELECT pk, ck, v, w, z FROM test_ks.tbl WHERE pk = {}",
+                    value_cast<int64_t>(long_type->deserialize(*row[0]))),
+                    std::make_unique<cql3::query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>()));
+            assert_that(msg).is_rows().with_rows({row});
+        }
+        // No refused write reached the table.
+        for (int64_t pk : {5, 6, 12, 13}) {
+            auto msg = co_await env.execute_cql(seastar::format("SELECT pk FROM test_ks.tbl WHERE pk = {}", pk),
+                    std::make_unique<cql3::query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>()));
+            assert_that(msg).is_rows().is_empty();
+        }
     }, std::move(db_cfg_ptr));
 }
 

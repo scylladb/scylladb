@@ -305,6 +305,10 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
     stmt->_use_compact_storage = _properties.use_compact_storage();
     if (stmt->_use_compact_storage) {
+        // Ahead of the config check, so that the permanent refusal is the one reported.
+        if (ks_strongly_consistent) {
+            throw exceptions::invalid_request_exception(format("Cannot use COMPACT STORAGE for table {}.{}: compact storage is not supported in strongly consistent keyspaces", keyspace(), cf_name));
+        }
         if (!cfg.enable_create_table_with_compact_storage()) {
             throw exceptions::invalid_request_exception("Support for the deprecated feature of 'CREATE TABLE WITH COMPACT STORAGE' is disabled and will eventually be removed in a future version.  To enable, set the 'enable_create_table_with_compact_storage' config option to 'true'.");
         }
