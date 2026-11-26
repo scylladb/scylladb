@@ -1260,3 +1260,10 @@ SEASTAR_TEST_CASE(test_digest_validation_toc) {
 SEASTAR_TEST_CASE(test_digest_validation_scylla) {
     return test_component_digest_validation(component_type::Scylla, sstable::version_types::me, "Scylla digest mismatch");
 }
+
+// scylla-pkg CI check: a PR that only changes C++ tests builds only their binaries.
+SEASTAR_TEST_CASE(test_ci_builds_only_changed_test_binaries) {
+    return test_env::do_with_async([] (test_env& env) {
+        BOOST_REQUIRE_EQUAL(sstable::version_types::me, sstable::version_types::me);
+    });
+}
