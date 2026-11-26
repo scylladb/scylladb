@@ -365,12 +365,13 @@ public:
     future<> stop_all_shards();
 
     // Hands Raft leadership over to another replica for every strongly consistent
-    // tablet group hosted on this shard which this node currently leads.
+    // tablet group hosted on this shard which this node currently leads, and makes
+    // sure that it gets none back: see raft::server::retire().
     //
     // Transferring leadership takes a round of Raft RPCs with the other replicas,
     // so it must run while messaging_service is still up. In a normal shutdown,
     // stop_all_shards() runs after storage_service::stop_transport() has shut the
-    // transport down, so we need a separate entry point to trigger stepdown().
+    // transport down, so we need a separate entry point to trigger it.
     future<> stepdown_leaders();
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);

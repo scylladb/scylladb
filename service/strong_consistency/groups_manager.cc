@@ -1495,17 +1495,16 @@ future<> groups_manager::stepdown_leaders() {
         if (!srv) {
             co_return;
         }
-        // The other replicas see this node as alive until its transport stops, and one
-        // of them would hand the leadership back to a preferred leader.
-        srv->server().decline_leadership();
-        if (!srv->server().is_leader()) {
-            co_return;
-        }
-
+        const bool was_leader = srv->server().is_leader();
         try {
-            co_await srv->server().stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
-            ++transferred;
-            logger.debug("stepdown_leaders(): group id {}: leadership transferred", gid);
+            // Also if we don't lead: the other replicas see this node as alive until its
+            // transport stops, and one of them would hand the leadership back to a
+            // preferred leader.
+            co_await srv->server().retire(raft::logical_clock::duration(stepdown_timeout_ticks));
+            if (was_leader) {
+                ++transferred;
+                logger.debug("stepdown_leaders(): group id {}: leadership transferred", gid);
+            }
         } catch (...) {
             logger.info("stepdown_leaders(): group id {}: failed to transfer leadership: {}",
                 gid, std::current_exception());
