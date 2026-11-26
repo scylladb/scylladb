@@ -25,6 +25,7 @@ from test.pylib.driver_utils import safe_shutting_down
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
 
 import asyncio
+import contextlib
 import pytest
 import logging
 import time
@@ -4548,3 +4549,38 @@ async def test_truncate_coordinator_crash_dedup(manager: ScyllaClusterManager):
         rows = await select_rows(cql, f"SELECT c FROM {ks}.test WHERE pk = 9999")
         assert [r.c for r in rows] == [9999]
 
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_cql_server_restart_with_pending_forwarded_request(manager: ScyllaClusterManager):
+    """Re-enabling the CQL server must neither fail nor wait for a forwarded request the old server still runs."""
+    config = {'request_timeout_on_shutdown_in_seconds': 1}
+    servers = await manager.servers_add(2, config=config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    injection = "wait_before_handling_forwarded_request"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        leader_id = await wait_for_leader(manager, servers[0], group_id)
+        leader_idx = [str(h) for h in host_ids].index(str(leader_id))
+        leader, follower_host = servers[leader_idx], hosts[1 - leader_idx]
+
+        # The follower forwards writes to the leader, where they pause.
+        await manager.api.enable_injection(leader.ip_addr, injection, one_shot=False)
+        write = None
+        try:
+            write = asyncio.ensure_future(cql.run_async(SimpleStatement(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1)", retry_policy=FallthroughRetryPolicy()), host=follower_host))
+            await manager.api.wait_for_injection_enter(leader.ip_addr, injection)
+
+            await manager.api.client.delete("/storage_service/native_transport", host=leader.ip_addr, timeout=5)
+            await manager.api.client.post("/storage_service/native_transport", host=leader.ip_addr, timeout=5)
+        finally:
+            await manager.api.disable_injection(leader.ip_addr, injection)
+            await manager.api.message_injection(leader.ip_addr, injection)
+            if write is not None:
+                with contextlib.suppress(Exception):
+                    await write
+
+        # The restarted server serves forwarded requests.
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.test (pk, c) VALUES (2, 2)", retry_policy=FallthroughRetryPolicy()), host=follower_host)

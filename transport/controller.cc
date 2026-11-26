@@ -14,6 +14,7 @@
 #include <seastar/net/unix_address.hh>
 #include <seastar/core/file-types.hh>
 #include <seastar/core/with_scheduling_group.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
 #include "db/config.hh"
@@ -290,10 +291,27 @@ future<> controller::do_start_server() {
             start_listening_on_maintenance_socket(*cserver).get();
         }
 
+        if (!_used_by_maintenance_socket && !_forward_cql) {
+            auto fwd = std::make_unique<sharded<forward_cql_handler>>();
+            fwd->start(std::ref(_messaging)).get();
+            auto stop_fwd = defer([&fwd] noexcept { fwd->stop().get(); });
+            fwd->invoke_on_all(&forward_cql_handler::register_verbs).get();
+            stop_fwd.cancel();
+            _forward_cql = std::move(fwd);
+        }
+        // Runs before on_error, so a failed start never stops an attached server.
+        auto on_error_detach = defer([this] noexcept {
+            if (_forward_cql) {
+                _forward_cql->invoke_on_all([] (forward_cql_handler& h) { h.detach(); }).get();
+            }
+        });
         if (!_used_by_maintenance_socket) {
+            // Attach before announcing readiness, so forwarded requests find the server.
+            _forward_cql->invoke_on_all([&cserver] (forward_cql_handler& h) { h.attach(cserver->local()); }).get();
             set_cql_ready(true).get();
         }
 
+        on_error_detach.cancel();
         on_error.cancel();
         on_error_unsub.cancel();
         _server = std::move(cserver);
@@ -308,8 +326,23 @@ future<> controller::stop_server() {
         _stopped = true;
         _ops_sem.broken();
         _listen_addresses.clear();
-        co_await do_stop_server();
-        co_await _bg_stops.close();
+        // Clean up even if stopping fails, as _stopped makes a retry return early.
+        auto f = co_await coroutine::as_future(do_stop_server());
+        auto f2 = co_await coroutine::as_future(_bg_stops.close());
+        auto f3 = _forward_cql ? co_await coroutine::as_future(_forward_cql->stop()) : make_ready_future<>();
+        // Report the first failure; the rest are consumed.
+        std::exception_ptr ex;
+        for (auto* r : {&f, &f2, &f3}) {
+            if (r->failed()) {
+                auto e = r->get_exception();
+                if (!ex) {
+                    ex = std::move(e);
+                }
+            }
+        }
+        if (ex) {
+            std::rethrow_exception(std::move(ex));
+        }
     }
 }
 
@@ -335,6 +368,11 @@ future<> controller::do_stop_server() {
         co_await set_cql_ready(false);
     } catch (...) {
         ex = std::current_exception();
+    }
+
+    // Detach only after peers stop seeing us as ready, so they don't forward to a detached handler.
+    if (_forward_cql) {
+        co_await _forward_cql->invoke_on_all([] (forward_cql_handler& h) { h.detach(); });
     }
 
     auto& server = *cserver;
