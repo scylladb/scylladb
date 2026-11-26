@@ -983,6 +983,25 @@ future<> snapshot_table_helper::delete_snapshot_entry(std::string_view snapshot_
             { sstring(snapshot_name) }, cql3::query_processor::cache_internal::yes).discard_result();
 }
 
+future<utils::chunked_vector<snapshot_entry>> snapshot_table_helper::get_snapshots(db::consistency_level cl) {
+    utils::chunked_vector<snapshot_entry> entries;
+
+    static const sstring query = format("SELECT name, created_at, expires_at, namespace_version, manifest_version FROM {}.{}",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOTS);
+
+    co_await _qp.query_internal(query, cl, {}, 1000, [&] (const cql3::untyped_result_set_row& row) {
+        entries.emplace_back(row.get_as<sstring>("name")
+            , row.get_as<db_clock::time_point>("created_at")
+            , row.get_as<db_clock::time_point>("expires_at")
+            , row.get_as<sstring>("namespace_version")
+            , row.get_as<sstring>("manifest_version")
+        );
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+
+    co_return entries;
+}
+
 future<> snapshot_table_helper::insert_snapshot_attempt(std::string_view tag, utils::UUID attempt, snapshot_attempt_committed committed, db::consistency_level cl) {
     static const sstring query = format("INSERT INTO {}.{} (tag, attempt, committed) VALUES (?, ?, ?)",
             system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_ATTEMPTS);

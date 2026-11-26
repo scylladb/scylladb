@@ -270,6 +270,10 @@ public:
     /* Deletes the snapshots row. It is the commit marker of a cluster snapshot,
      * so a clear deletes it last, after everything else of the tag is gone. */
     future<> delete_snapshot_entry(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
+    /**
+     * Get the entries of all snapshots. Scans the whole table.
+     */
+    future<utils::chunked_vector<snapshot_entry>> get_snapshots(db::consistency_level cl = db::consistency_level::QUORUM);
 
     /* The row is written before the attempt's RPCs and committed by the coordinator's
      * commit step, which writes it with committed = true.*/
