@@ -1090,6 +1090,46 @@ SEASTAR_TEST_CASE(test_replay_buffer_destructor_detaches_unclaimed_records) {
     });
 }
 
+// Test: discard_groups() releases the records of the groups it drops, unlike stop(),
+// so a group that never starts does not pin its segments until shutdown.
+SEASTAR_TEST_CASE(test_replay_buffer_discard_groups_frees_the_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group data;
+        raft::index_t next{1};
+        while (log.get_num_dirty_segments() == 0) {
+            raft::log_entry_ptr_list batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                next = next + raft::index_t{1};
+            }
+            auto handle = co_await service::strong_consistency::write_raft_batch(
+                    log, tid, gid, raft::index_t(0), batch);
+            service::strong_consistency::account_batch(data.records, rg_tid, std::move(handle), batch);
+        }
+        const auto dirty = log.get_num_dirty_segments();
+        BOOST_REQUIRE_GT(dirty, 0);
+
+        db::raft_commitlog_replay_buffer buffer;
+        raft_replay_buffer_tester::seed(buffer, gid, std::move(data));
+
+        // A group the predicate keeps holds its segments.
+        buffer.discard_groups([] (raft::group_id) { return false; });
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
+
+        buffer.discard_groups([&] (raft::group_id id) { return id == gid; });
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+        BOOST_REQUIRE(buffer.take_replayed_group_entries(gid).records.empty());
+
+        co_await buffer.stop();
+    });
+}
+
 // Test: a group destroyed deliberately gives up its segment references instead
 // of detaching them: see raft_commitlog::release_all() (SCYLLADB-3827).
 SEASTAR_TEST_CASE(test_raft_commitlog_release_all_frees_the_segments) {
