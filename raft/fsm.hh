@@ -801,9 +801,17 @@ public:
         return _log.in_memory_size();
     }
 
+    // Drop the entries the snapshot covers, whether a member still needs them
+    // or not. A member that does is brought up to date by a snapshot transfer.
+    void drop_trailing_log();
+
     size_t log_memory_usage() const {
         return _log.memory_usage();
     };
+
+    size_t log_memory_usage_after(index_t idx) const {
+        return _log.memory_usage_after(idx);
+    }
 
     // Returns the log entry at the given index, which must be present in
     // the log: above the last snapshot index and at most the last index

@@ -2454,3 +2454,105 @@ SEASTAR_THREAD_TEST_CASE(test_full_follower_with_everything_applied_does_not_dea
 
     cluster.connect_all();
 }
+
+// Snapshots every 10 entries, and leaves up to 100 entries in the log for
+// followers that are behind.
+static raft::server::configuration trailing_log_config() {
+    return raft::server::configuration {
+        .snapshot_threshold = 10,
+        .snapshot_threshold_log_size = 1024 * 1024,
+        .snapshot_trailing = 100,
+        .snapshot_trailing_size = 512 * 1024,
+        .max_log_size = 4 * 1024 * 1024,
+        .enable_forwarding = false,
+    };
+}
+
+static raft_cluster<std::chrono::steady_clock> get_trailing_log_cluster(std::vector<raft::server::configuration> configs,
+        lw_shared_ptr<raft::server_stats> stats) {
+    return raft_cluster<std::chrono::steady_clock>{
+        test_case {
+            .nodes = 3,
+            .config = std::move(configs),
+            .stats = std::move(stats),
+        },
+        ::apply_changes,
+        100000,  // apply_entries, above what any test adds
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+}
+
+// drop_trailing_log() frees what the leader keeps for a lagging follower,
+// which then gets a snapshot.
+SEASTAR_THREAD_TEST_CASE(test_drop_trailing_log) {
+    auto stats = make_lw_shared<raft::server_stats>();
+    auto cluster = get_trailing_log_cluster(std::vector(3, trailing_log_config()), stats);
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.add_entries(5, 0).get();
+    cluster.wait_log_all().get();
+    cluster.disconnect(2);
+    cluster.add_entries(50, 0).get();
+    auto& leader = cluster.get_server(0);
+    leader.read_barrier(nullptr).get();
+    // Snapshots were taken, and left what follower 2 misses in the log.
+    BOOST_CHECK_GE(leader.get_status().last_snapshot_idx, raft::index_t{40});
+    BOOST_CHECK_GE(leader.get_status().in_memory_log_size, 50);
+
+    leader.drop_trailing_log();
+    const auto status = leader.get_status();
+    BOOST_CHECK_EQUAL(status.in_memory_log_size, (status.last_idx - status.last_snapshot_idx).value());
+
+    cluster.connect_all();
+    cluster.add_entries(10, 0).get();
+    cluster.wait_log_all().get();
+    BOOST_CHECK_GT(stats->install_snapshot_sent, 0);
+}
+
+// on_applied runs after every applied batch, once the batch's snapshot is
+// taken, and may drop the log of the server it runs on.
+SEASTAR_THREAD_TEST_CASE(test_on_applied_may_drop_trailing_log) {
+    auto stats = make_lw_shared<raft::server_stats>();
+    size_t calls = 0;
+    bool drop = false;
+    raft::server* leader_ptr = nullptr;
+    std::vector<raft::server::configuration> configs(3, trailing_log_config());
+    configs[0].on_applied = [&] {
+        ++calls;
+        if (drop && leader_ptr) {
+            leader_ptr->drop_trailing_log();
+        }
+    };
+    auto cluster = get_trailing_log_cluster(std::move(configs), stats);
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+    auto& leader = cluster.get_server(0);
+    leader_ptr = &leader;
+
+    cluster.add_entries(5, 0).get();
+    cluster.wait_log_all().get();
+    BOOST_CHECK_GT(calls, 0);
+
+    // A disconnected follower makes the leader keep what it misses...
+    cluster.disconnect(2);
+    cluster.add_entries(50, 0).get();
+    leader.read_barrier(nullptr).get();
+    BOOST_CHECK_GE(leader.get_status().in_memory_log_size, 50);
+
+    // ...until the callback drops it, after the next batch.
+    drop = true;
+    const auto before = calls;
+    cluster.add_entries(1, 0).get();
+    leader.read_barrier(nullptr).get();
+    BOOST_CHECK(eventually_true([&] {
+        const auto status = leader.get_status();
+        return calls > before && status.in_memory_log_size == (status.last_idx - status.last_snapshot_idx).value();
+    }));
+
+    cluster.connect_all();
+    cluster.add_entries(10, 0).get();
+    cluster.wait_log_all().get();
+    BOOST_CHECK_GT(stats->install_snapshot_sent, 0);
+}

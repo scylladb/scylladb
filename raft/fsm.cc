@@ -114,6 +114,13 @@ future<fsm::memory_permit> fsm::wait_for_memory_permit(seastar::abort_source* as
     });
 }
 
+void fsm::drop_trailing_log() {
+    const auto units = _log.drop_trailing();
+    if (units && is_leader()) {
+        leader_state().log_limiter_semaphore->signal(units);
+    }
+}
+
 server_status fsm::get_status() const {
     server_status status {
         .is_leader = is_leader(),

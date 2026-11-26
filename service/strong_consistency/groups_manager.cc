@@ -34,6 +34,7 @@
 #include "utils/exceptions.hh"
 #include "utils/on_internal_error.hh"
 #include <seastar/core/lowres_clock.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -333,9 +334,10 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
     auto& persistence_ref = *storage;
     auto config = raft::server::configuration {
-        // Snapshotting is not implemented yet for strong consistency,
-        // so effectively disable periodic snapshotting.
-        // TODO: Revert after snapshots are implemented
+        // take_snapshot() is free here. The entry-count trigger is off; the
+        // size threshold truncates a group's log at 10MB, and
+        // reclaim_raft_log_memory() and drop_idle_raft_logs() snapshot a group
+        // whenever they drop its log, to bound the logs of the shard.
         .snapshot_threshold = std::numeric_limits<size_t>::max(),
         .snapshot_threshold_log_size = 10 * 1024 * 1024, // 10MB
         .max_log_size = raft_max_log_size,
@@ -346,6 +348,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
                 ::format("table {}, tablet {} raft group {} background error {}", 
                     tablet.table, tablet.tablet, group_id, e));
         },
+        .on_applied = [this, group_id] { on_raft_log_applied(group_id); },
         .tag = format("sc-{}", group_id),
         // Spread initial tablet-group leadership across nodes: derive the
         // fast-bootstrap leader choice from the group id so that different
@@ -443,6 +446,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
             state.metrics->remove_server(*state.server);
             state.metrics = nullptr;
         }
+        forget_raft_log(state);
         _raft_gr.destroy_server(id);
         state.server = nullptr;
         // The hold is for the server which bounced; a restarted one starts clean.
@@ -1208,6 +1212,9 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
         co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats), std::move(rpc_stats),
                 std::move(apply_stats), state.effective_priority_members());
         state.server = &_raft_gr.get_server(id);
+        // Account for the log the server replayed and applied while it was
+        // starting, when nothing was there to account for it.
+        on_raft_log_applied(id);
         state.metrics = std::move(m);
         if (state.metrics) {
             state.metrics->add_server(*state.server);
@@ -1439,6 +1446,21 @@ void groups_manager::start() {
         }
         check_commitlog_can_hold_a_raft_entry(*commitlog);
 
+        _idle_raft_log_timer.set_callback([this] {
+            if (_idle_raft_log_sweep_running || _idle_raft_log_gate.is_closed()) {
+                return;
+            }
+            _idle_raft_log_sweep_running = true;
+            (void)with_gate(_idle_raft_log_gate, [this] {
+                return drop_idle_raft_logs();
+            }).handle_exception([] (std::exception_ptr ep) {
+                logger.warn("Dropping the raft logs of idle groups failed: {}", ep);
+            }).finally([this] {
+                _idle_raft_log_sweep_running = false;
+            });
+        });
+        _idle_raft_log_timer.arm_periodic(raft_log_idle_time);
+
         // A round names one table, and only a round naming system.raft_groups says
         // which of a group's segments are closed: a segment holding a live segment
         // record is dirty under system.raft_groups because of the record's own
@@ -1516,6 +1538,225 @@ future<> groups_manager::stepdown_leaders() {
         transferred);
 }
 
+size_t groups_manager::raft_log_memory_budget() const {
+    if (const auto budget = utils::get_local_injector().inject_parameter<int64_t>("sc_raft_log_memory_budget")) {
+        return *budget;
+    }
+    // A share of the shard's memory small enough not to compete with the
+    // memtables and the cache, and still several times a group's own limit
+    // (see snapshot_threshold_log_size), so that the groups written to most
+    // recently keep their logs.
+    return seastar::memory::stats().total_memory() * 5 / 100; // 5%
+}
+
+bool groups_manager::raft_logs_over_budget() const {
+    return _raft_log_memory - _raft_log_memory_unapplied > raft_log_memory_budget();
+}
+
+bool groups_manager::account_raft_log(raft_group_state& state) {
+    const auto status = state.server->get_status();
+    _raft_log_memory = _raft_log_memory - state.log_memory + status.log_memory_usage;
+    state.log_memory = status.log_memory_usage;
+    _raft_log_memory_unapplied = _raft_log_memory_unapplied - state.log_memory_unapplied + status.unapplied_log_memory_usage;
+    state.log_memory_unapplied = status.unapplied_log_memory_usage;
+    // Dummy and configuration entries are counted as 0 bytes, so a log may
+    // hold entries and no bytes: keep it listed, so that it is dropped too.
+    if (!status.in_memory_log_size) {
+        state.raft_log_hook.unlink();
+        return false;
+    }
+    return true;
+}
+
+void groups_manager::forget_raft_log(raft_group_state& state) {
+    _raft_log_memory -= state.log_memory;
+    state.log_memory = 0;
+    _raft_log_memory_unapplied -= state.log_memory_unapplied;
+    state.log_memory_unapplied = 0;
+    state.raft_log_hook.unlink();
+    notify_raft_log_room();
+}
+
+bool groups_manager::drop_raft_log(raft_group_state& state) {
+    if (state.log_drop_running) {
+        return false;
+    }
+    // A group being started or stopped keeps its log for now.
+    auto srv = try_acquire_server(state);
+    if (!srv) {
+        return false;
+    }
+    auto& server = srv->server();
+    const auto status = server.get_status();
+    if (status.applied_idx <= status.last_snapshot_idx) {
+        // The log holds the entries the snapshot left in it, if any, and
+        // those not applied yet, which may not be dropped.
+        if (status.in_memory_log_size <= (status.last_idx - status.last_snapshot_idx).value()) {
+            return false;
+        }
+        server.drop_trailing_log();
+        account_raft_log(state);
+        return true;
+    }
+    if (_raft_log_drop_gate.is_closed()) {
+        return false;
+    }
+    // snapshot_raft_log() marks the drop as running before it first yields,
+    // so a failure to start it, e.g. bad_alloc, leaves no mark behind.
+    auto f = with_gate(_raft_log_drop_gate, [this, srv = std::move(*srv)] mutable {
+        return snapshot_raft_log(std::move(srv));
+    });
+    if (f.failed()) {
+        logger.debug("Dropping the raft log of a group failed to start: {}", f.get_exception());
+        return false;
+    }
+    (void)f;
+    return true;
+}
+
+future<> groups_manager::snapshot_raft_log(raft_server srv) {
+    // The handle keeps the server and the state until this finishes, and a
+    // stopping server or shard fails the wait.
+    auto& state = srv._state;
+    state.log_drop_running = true;
+    state.log_memory_being_dropped = state.log_memory - state.log_memory_unapplied;
+    _raft_log_memory_being_dropped += state.log_memory_being_dropped;
+    auto f = co_await coroutine::as_future(srv.server().trigger_snapshot(&_as));
+    if (f.failed()) {
+        logger.debug("Dropping the raft log of a group failed: {}", f.get_exception());
+    } else {
+        f.ignore_ready_future();
+        // A snapshot from the leader may have come first, and left trailing
+        // entries in the log.
+        srv.server().drop_trailing_log();
+    }
+    state.log_drop_running = false;
+    _raft_log_memory_being_dropped -= std::exchange(state.log_memory_being_dropped, 0);
+    account_raft_log(state);
+    notify_raft_log_room();
+}
+
+void groups_manager::on_raft_log_applied(raft::group_id id) {
+    const auto it = _raft_groups.find(id);
+    // The server applies entries before start_raft_group() publishes it;
+    // those are accounted for once it is published.
+    if (it == _raft_groups.end() || !it->second.server) {
+        return;
+    }
+    auto& state = it->second;
+    state.last_apply = lowres_clock::now();
+    state.log_group_id = id;
+    state.raft_log_hook.unlink();
+    if (account_raft_log(state)) {
+        _raft_logs_by_last_apply.push_back(state);
+    }
+    if (raft_logs_over_budget()) {
+        reclaim_raft_log_memory();
+    }
+    notify_raft_log_room();
+}
+
+void groups_manager::notify_raft_log_room() {
+    if (!raft_logs_over_budget()) {
+        _raft_log_room.broadcast();
+    }
+}
+
+future<> groups_manager::wait_for_raft_log_room(db::timeout_clock::time_point timeout, abort_source& as,
+        noncopyable_function<bool()> still_leader) {
+    // Neither an abort nor a lost leadership signals the condition variable,
+    // so look at them at least this often.
+    static constexpr auto recheck = std::chrono::milliseconds(100);
+    while (raft_logs_over_budget()) {
+        if (as.abort_requested() || !still_leader() || db::timeout_clock::now() >= timeout) {
+            // The caller reports the abort or the timeout, or redirects.
+            co_return;
+        }
+        // Nothing may be applied while the writes wait, e.g. when every log
+        // holds only applied entries, so start dropping them here rather
+        // than wait for a batch to do it. The wait then ends once the drops
+        // finish.
+        reclaim_raft_log_memory();
+        if (!raft_logs_over_budget()) {
+            break;
+        }
+        try {
+            co_await _raft_log_room.wait(std::min(timeout, db::timeout_clock::now() + recheck));
+        } catch (const condition_variable_timed_out&) {
+            // Look at the abort, the leadership and the deadline again.
+        } catch (const broken_condition_variable&) {
+            // The groups manager is stopping, and with it the raft servers.
+            throw raft::stopped_error("the strongly consistent groups manager is stopping");
+        }
+    }
+}
+
+void groups_manager::reclaim_raft_log_memory() {
+    // Only the applied entries count: the others cannot be dropped, and are
+    // bounded by max_log_size per group. So the logs of the shard hold at
+    // most the budget, plus max_log_size per group not applied yet.
+    const size_t budget = raft_log_memory_budget();
+    const size_t total_before = _raft_log_memory;
+    // Over the budget even once the drops already running finish.
+    const auto over = [&] {
+        return _raft_log_memory - _raft_log_memory_unapplied > budget + _raft_log_memory_being_dropped;
+    };
+    size_t dropped_logs = 0;
+    for (auto it = _raft_logs_by_last_apply.begin(); it != _raft_logs_by_last_apply.end() && over(); ) {
+        auto& state = *it++;
+        if (!state.server) {
+            forget_raft_log(state);
+            continue;
+        }
+        if (state.log_drop_running) {
+            continue;
+        }
+        // A log shrinks without a batch as the replicas acknowledge, so the
+        // accounted size may be stale.
+        account_raft_log(state);
+        if (over() && drop_raft_log(state)) {
+            ++dropped_logs;
+        }
+    }
+    if (dropped_logs) {
+        static thread_local logger::rate_limit rate_limit{std::chrono::seconds(10)};
+        logger.log(log_level::info, rate_limit, "The raft logs of this shard held {} bytes in memory, over the budget of {}: "
+                "dropping the applied entries of {} groups, written to the longest ago",
+                total_before, budget, dropped_logs);
+    }
+}
+
+future<> groups_manager::drop_idle_raft_logs() {
+    const auto idle_since = lowres_clock::now() - raft_log_idle_time;
+    // Collect the groups first: the list may change while this yields.
+    std::vector<raft::group_id> idle;
+    for (auto it = _raft_logs_by_last_apply.begin(); it != _raft_logs_by_last_apply.end() && it->last_apply <= idle_since; ) {
+        auto& state = *it++;
+        if (!state.server) {
+            forget_raft_log(state);
+            continue;
+        }
+        idle.push_back(state.log_group_id);
+    }
+    size_t dropped_logs = 0;
+    for (const auto id : idle) {
+        co_await coroutine::maybe_yield();
+        // The group may have been written to, or gone, meanwhile.
+        const auto it = _raft_groups.find(id);
+        if (it == _raft_groups.end() || !it->second.server || it->second.last_apply > idle_since) {
+            continue;
+        }
+        if (drop_raft_log(it->second)) {
+            ++dropped_logs;
+        }
+    }
+    if (dropped_logs) {
+        logger.debug("Dropping the applied raft log entries of {} groups not written to for {}s",
+                dropped_logs, raft_log_idle_time.count());
+    }
+    notify_raft_log_room();
+}
+
 void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
     auto table = _db.get_tables_metadata().get_table_if_exists(id);
     if (!table) {
@@ -1547,6 +1788,12 @@ future<> groups_manager::stop_shard() {
         co_return;
     }
     logger.info("stop_shard() enter");
+
+    _idle_raft_log_timer.cancel();
+    _raft_log_room.broken();
+    co_await _idle_raft_log_gate.close();
+    // _as is aborted, which ends the drops waiting for a snapshot.
+    co_await _raft_log_drop_gate.close();
 
     // The segments must survive so replay can recover the log.
     schedule_raft_groups_deletion(true, log_disposition::keep);

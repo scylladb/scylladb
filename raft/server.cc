@@ -278,6 +278,7 @@ public:
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as, term_t append_in_term);
     server_status get_status() const override;
+    void drop_trailing_log() override;
     size_t max_command_size() const override;
 private:
     seastar::condition_variable _events;
@@ -1984,6 +1985,10 @@ future<> server_impl::applier_fiber() {
                 const auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
                 co_await take_snapshot(max_trailing, max_trailing_bytes);
             }
+
+            if (_config.on_applied) {
+                _config.on_applied();
+            }
         }
     };
 
@@ -2427,9 +2432,14 @@ server_impl::get_configuration() const {
     return _fsm->get_configuration();
 }
 
+void server_impl::drop_trailing_log() {
+    _fsm->drop_trailing_log();
+}
+
 server_status server_impl::get_status() const {
     auto status = _fsm->get_status();
     status.applied_idx = _applied_idx;
+    status.unapplied_log_memory_usage = _fsm->log_memory_usage_after(_applied_idx);
     // The entries waiting for their turn to be appended wait for the log
     // memory too, for as long as the entry ahead of them does.
     if (status.log_limiter_waiters) {

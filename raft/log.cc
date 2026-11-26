@@ -146,6 +146,32 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
     return my_term == term ? std::make_pair(true, term_t(0)) : std::make_pair(false, my_term);
 }
 
+size_t log::memory_usage_after(index_t idx) const {
+    // Walk from the back: callers ask about the last few entries.
+    size_t result = 0;
+    for (auto it = _log.rbegin(); it != _log.rend() && (*it)->idx > idx; ++it) {
+        result += memory_usage_of(**it, _max_command_size);
+    }
+    return result;
+}
+
+size_t log::drop_trailing() {
+    // The log then starts right after the snapshot, as apply_snapshot()
+    // leaves it with no trailing entries, so term_for() still knows the term
+    // of the entry before it.
+    const auto idx = _snapshot.idx + index_t{1};
+    if (idx <= _first_idx) {
+        return 0;
+    }
+    const auto entries_to_remove = std::min((idx - _first_idx).value(), _log.size());
+    const auto released_memory = range_memory_usage(_log.begin(), _log.begin() + entries_to_remove);
+    _log.erase(_log.begin(), _log.begin() + entries_to_remove);
+    _log.shrink_to_fit();
+    _memory_usage -= released_memory;
+    _first_idx = idx;
+    return released_memory;
+}
+
 std::optional<term_t> log::term_for(index_t idx) const {
     if (!_log.empty() && idx >= _first_idx) {
         return _log[(idx - _first_idx).value()]->term;

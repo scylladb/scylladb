@@ -117,6 +117,9 @@ public:
     // Used in elections to not vote for a candidate with
     // a less recent term.
     term_t last_term() const;
+    // Drop the entries the snapshot covers which apply_snapshot() left in
+    // the log for followers that are behind. Returns the memory released.
+    size_t drop_trailing();
     // Return the number of log entries in memory
     size_t in_memory_size() const {
         return _log.size();
@@ -125,6 +128,8 @@ public:
     size_t memory_usage() const {
         return _memory_usage;
     }
+    // Returns memory usage of the log entries after the given index in bytes
+    size_t memory_usage_after(index_t idx) const;
 
     // The function returns current snapshot state of the log
     const snapshot_descriptor& get_snapshot() const {
