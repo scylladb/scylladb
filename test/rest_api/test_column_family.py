@@ -156,6 +156,28 @@ def test_column_family_compaction_strategy(cql, this_dc, rest_api):
             check_strategy("IncrementalCompactionStrategy")
 
 
+# Test that the minimum partition size of a table, which nodetool cfstats
+# shows, is the minimum of the shards that hold partitions of the table.
+# The table has one partition, so only one shard holds a partition of the
+# table, and a shard that holds no partition must not make the minimum 0.
+def test_column_family_min_row_size(cql, this_dc, rest_api):
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as test_keyspace:
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as t:
+            test_table = t.split('.')[1]
+            cql.execute(f"INSERT INTO {t} (pk, v) VALUES (1, 1)")
+            resp = rest_api.send("POST", f"storage_service/keyspace_flush/{test_keyspace}")
+            resp.raise_for_status()
+
+            resp = rest_api.send("GET", f"column_family/metrics/min_row_size/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            assert resp.json() > 0
+
+            resp = rest_api.send("GET", "column_family/metrics/min_row_size")
+            resp.raise_for_status()
+            assert resp.json() > 0
+
+
 # Test that get_live|total_disk_space_used returns sane values
 def test_sstables_total_disk_space_sanity(cql, this_dc, rest_api):
     ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"

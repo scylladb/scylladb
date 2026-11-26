@@ -236,11 +236,19 @@ future<json::json_return_type> get_cf_unleveled_sstables(sharded<replica::databa
     }, std::plus<int64_t>());
 }
 
+// Returns the minimum partition size of the table on this shard, or INT64_MAX when the shard holds
+// no partition of the table, so that the shard does not change the minimum of the reduce.
 int64_t min_partition_size(replica::column_family& cf) {
     int64_t res = INT64_MAX;
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::min(res, i->get_stats_metadata().estimated_partition_size.min());
     }
+    return res;
+}
+
+// Returns the minimum that the reduce of min_partition_size() gives, or 0 when no shard holds a
+// partition.
+json::json_return_type min_partition_size_json(int64_t res) {
     return (res == INT64_MAX) ? 0 : res;
 }
 
@@ -885,12 +893,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     // FIXME: this refers to partitions, not rows.
     cf::get_min_row_size.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(db, req->get_path_param("name"), INT64_MAX, min_partition_size, min_int64);
+        return map_reduce_cf_raw(db, req->get_path_param("name"), INT64_MAX, min_partition_size, min_int64).then(min_partition_size_json);
     });
 
     // FIXME: this refers to partitions, not rows.
     cf::get_all_min_row_size.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(db, INT64_MAX, min_partition_size, min_int64);
+        return map_reduce_cf_raw(db, INT64_MAX, min_partition_size, min_int64).then(min_partition_size_json);
     });
 
     // FIXME: this refers to partitions, not rows.
