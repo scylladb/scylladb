@@ -514,6 +514,14 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     setup_metrics();
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
+    // Ghost slots are standard (non-LSA) memory taken from the shard, so keep them a small share of it.
+    size_t ghost_bytes = size_t(_cfg.cache_ghost_list_size_mb()) << 20;
+    size_t max_ghost_bytes = dbcfg.available_memory / 100;
+    if (ghost_bytes > max_ghost_bytes) {
+        dblog.warn("cache_ghost_list_size_mb={} exceeds 1% of shard memory, using {} MB", _cfg.cache_ghost_list_size_mb(), max_ghost_bytes >> 20);
+        ghost_bytes = max_ghost_bytes;
+    }
+    _row_cache_tracker.set_ghost_list_size(ghost_bytes);
 
     setup_scylla_memory_diagnostics_producer();
 }

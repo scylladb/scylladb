@@ -263,7 +263,7 @@ private:
     mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
     mutation_reader make_scanning_reader(const dht::partition_range&, std::unique_ptr<cache::read_context>);
     void on_partition_hit();
-    void on_partition_miss();
+    void on_partition_miss(dht::token);
     void on_row_hit();
     void on_row_miss();
     void on_static_row_insert();

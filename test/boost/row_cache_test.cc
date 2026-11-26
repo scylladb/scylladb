@@ -1040,6 +1040,60 @@ SEASTAR_THREAD_TEST_CASE(test_eviction_age_markers_bounded) {
     BOOST_REQUIRE_EQUAL(eviction_age_samples(tracker, 900), eviction_age_total(tracker));
 }
 
+template <typename Histogram>
+static uint64_t histogram_samples(const Histogram& h) {
+    uint64_t total = 0;
+    for (size_t i = 0; i < h.size(); ++i) {
+        total += h.get(i);
+    }
+    return total;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_ghost_hits_only_after_pressure_eviction) {
+    auto s = make_schema();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto mt = make_lw_shared<replica::memtable>(s);
+    cache_tracker tracker;
+    tracker.set_ghost_list_size(1 << 20);
+    row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+    std::vector<mutation> muts;
+    for (int i = 0; i < 10; ++i) {
+        muts.push_back(make_new_mutation(s));
+        mt->apply(muts.back());
+        cache.populate(muts.back());
+    }
+    auto read_all = [&] {
+        for (auto& m : muts) {
+            auto pr = dht::partition_range::make_singular(m.decorated_key());
+            auto rd = cache.make_reader(s, semaphore.make_permit(), pr);
+            auto close_rd = deferred_close(rd);
+            rd.fill_buffer().get();
+        }
+    };
+
+    auto evict_all = [&] {
+        while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    };
+
+    evict_all();
+    read_all();
+    auto hits = histogram_samples(tracker.ghost_hit_age());
+    // Ghost slots are direct-mapped; a rare collision drops one.
+    BOOST_REQUIRE_GE(hits, 9);
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.ghost_hit_evicted_bytes()), hits);
+
+    // Re-populated without a miss, then forcibly cleared: those misses are not capacity misses.
+    evict_all();
+    for (auto& m : muts) {
+        cache.populate(m);
+    }
+    tracker.clear();
+    read_all();
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.ghost_hit_age()), hits);
+}
+
 void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::deque<int> expected)
 {
     auto close_reader = deferred_close(reader);

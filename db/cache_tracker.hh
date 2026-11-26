@@ -12,6 +12,7 @@
 #include "utils/logalloc.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/updateable_value.hh"
+#include "utils/chunked_vector.hh"
 #include "mutation/partition_version.hh"
 #include "mutation/mutation_cleaner.hh"
 #include "utils/cached_file_stats.hh"
@@ -82,7 +83,15 @@ public:
         }
     };
     using eviction_age_histogram = utils::approx_exponential_histogram<1, 1 << 17, 4>;
+    // 1 MB to 128 GB.
+    using ghost_bytes_histogram = utils::approx_exponential_histogram<1 << 20, 1ULL << 37, 4>;
 private:
+    // A partition evicted under memory pressure; fingerprint 0 marks a free slot.
+    struct ghost {
+        uint64_t fingerprint = 0;
+        uint32_t evicted_at = 0; // seconds since _ghost_epoch
+        uint32_t evicted_before = 0; // _pressure_evicted_bytes at eviction, in 4 KB units
+    };
     // LRU sentinel: entries behind it were last touched after _ts, which bounds their age at eviction.
     class age_marker final : public evictable {
     public:
@@ -108,6 +117,13 @@ private:
     seastar::lowres_clock::duration _age_marker_interval = min_age_marker_interval;
     seastar::timer<seastar::lowres_clock> _age_timer;
     eviction_age_histogram _eviction_age;
+    // Empty unless enabled; a slot is overwritten by any later eviction hashing to it.
+    utils::chunked_vector<ghost> _ghosts;
+    seastar::lowres_clock::time_point _ghost_epoch = seastar::lowres_clock::now();
+    uint64_t _pressure_evicted_bytes = 0;
+    bool _evicting_under_pressure = false;
+    eviction_age_histogram _ghost_hit_age;
+    ghost_bytes_histogram _ghost_hit_evicted_bytes;
     lru _lru;
     mutation_cleaner _garbage;
     mutation_cleaner _memtable_cleaner;
@@ -119,6 +135,7 @@ private:
     void pop_front_age_markers() noexcept;
     void on_age_timer() noexcept;
     void refresh_age_markers(seastar::lowres_clock::time_point) noexcept;
+    ghost& ghost_slot(uint64_t fingerprint) noexcept { return _ghosts[fingerprint % _ghosts.size()]; }
 public:
     using register_metrics = bool_class<class register_metrics_tag>;
     cache_tracker(utils::updateable_value<double> index_cache_fraction, mutation_application_stats&, register_metrics);
@@ -174,6 +191,13 @@ public:
     unsigned linked_age_markers() const noexcept { return _age_markers_linked; }
     seastar::lowres_clock::time_point lru_front_timestamp() const noexcept { return _front_ts; }
     const eviction_age_histogram& eviction_age() const noexcept { return _eviction_age; }
+    // Remembers up to bytes / sizeof(ghost) recently evicted partitions; 0 disables.
+    void set_ghost_list_size(size_t bytes);
+    void on_partition_evicted(const cache_entry&) noexcept;
+    // Records a miss on a partition evicted under pressure, then forgets it.
+    void check_ghost(table_id, dht::token) noexcept;
+    const eviction_age_histogram& ghost_hit_age() const noexcept { return _ghost_hit_age; }
+    const ghost_bytes_histogram& ghost_hit_evicted_bytes() const noexcept { return _ghost_hit_evicted_bytes; }
 };
 
 cache_tracker* get_current_cache_tracker() noexcept;
