@@ -671,6 +671,11 @@ public:
         return _stream_position;
     }
 
+    // Returns the offset of the first byte after the range being consumed.
+    uint64_t end_position() const {
+        return _stream_position.position + _remain;
+    }
+
     bool eof() const {
         return _remain == 0;
     }

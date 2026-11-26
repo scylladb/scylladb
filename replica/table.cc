@@ -5320,8 +5320,11 @@ table::local_base_lock(
     // This will allow more parallelism in concurrent modifications to the
     // same row - probably not a very urgent case.
     _row_locker.upgrade(s);
-    if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
-        // A single clustering row is involved.
+    if (rows.size() == 1 && query::is_single_row(*s, rows[0]) && !rows[0].start()->value().is_empty(*s)) {
+        // A single clustering row is involved. A singular range of a key
+        // prefix covers all rows under that prefix, and a row lock on the
+        // prefix doesn't exclude locks on these rows, so it takes the
+        // partition lock below.
         return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _row_locker_stats);
     } else {
         // More than a single clustering row is involved. Most commonly it's
