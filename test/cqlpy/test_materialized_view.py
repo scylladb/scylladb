@@ -1830,3 +1830,258 @@ def test_prepared_view_options_validated_on_every_execute(cql, test_keyspace):
 
         with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
             rejected_twice(cql.prepare(f"ALTER MATERIALIZED VIEW {mv}{bad_options}"))
+<<<<<<< HEAD
+||||||| parent of 4d4daf8569 (test: cqlpy: rename a base column while a view is being built)
+
+# When a materialized view has finished building, an entry for it appears in
+# system_distributed.view_build_status, and this is what wait_for_view_built()
+# checks. In this test we check that when the materialized view is DROPed,
+# this entry must be removed - immediately. If we don't remove it, and a new
+# view with the same name is re-created, wait_for_view_built() will think
+# the new view has finished building immediately.
+# As long as tablets and vnodes are still both supported, we run this test on
+# both because the view-building tracking code has different code paths for
+# tablets and vnodes.
+# If the entry in system_distributed.view_build_status is never removed, this
+# test will always fail; But if the entry is removed eventually instead of
+# immediately (before DROP returns), this test will fail intermittently,
+# reproducing SCYLLADB-4869.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_view_build_status_removed_on_drop(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            wait_for_view_built(cql, mv)
+            # Although wait_for_view_built() does the same check, let's be
+            # explicit here: After the view is built, it gets an entry in
+            # system_distributed.view_build_status:
+            ks, name = mv.split('.')
+            query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{name}'",
+                        consistency_level=ConsistencyLevel.ONE)
+            assert [r.status for r in cql.execute(query)] == ['SUCCESS']
+        # Leaving the "with" above dropped the view. The view_build_status
+        # entry must already be gone *now* - it's not enough that it
+        # is removed eventually in the background, because if this entry
+        # remains and a user re-creates the same view immediately after the
+        # drop of the old one, the user might think the *new* view has
+        # already been built (this was SCYLLADB-4869).
+        assert list(cql.execute(query)) == []
+
+# Same as test_view_build_status_removed_on_drop, but reproduces SCYLLADB-4869
+# deterministically instead of intermittently. With vnodes, the entry is
+# removed by a background fiber that first needs the view builder's
+# semaphore on every shard, so it is delayed as long as the view builder is
+# busy building some other view. We use error injection to pause the view
+# builder in the middle of building another view (while holding that
+# semaphore), and then drop our view.
+# scylla_only because it uses error injection. The test above,
+# test_view_build_status_removed_on_drop does run on both Cassandra and
+# Scylla and reproduces the same bug, but only intermittently.
+def test_view_build_status_removed_on_drop_while_building(scylla_only, cql, test_keyspace_vnodes):
+    injection = 'view_builder_consume_end_of_partition_delay'
+    with new_test_table(cql, test_keyspace_vnodes, 'p int PRIMARY KEY, v int') as table, \
+         new_test_table(cql, test_keyspace_vnodes, 'p int PRIMARY KEY, v int') as other_table:
+        # The other view's build must go through at least one partition,
+        # to reach the injection point.
+        cql.execute(f'INSERT INTO {other_table} (p, v) VALUES (1, 2)')
+        # Our view must be built before the view builder is paused, but
+        # dropped while it is still paused, so it can't use a "with"
+        # nested with the other view's.
+        mv = f'{test_keyspace_vnodes}.{unique_name()}'
+        cql.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} WHERE v IS NOT NULL AND p IS NOT NULL PRIMARY KEY (v, p)')
+        try:
+            wait_for_view_built(cql, mv)
+            ks, name = mv.split('.')
+            query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{name}'",
+                        consistency_level=ConsistencyLevel.ONE)
+            assert [r.status for r in cql.execute(query)] == ['SUCCESS']
+            with scylla_inject_error(cql, injection, one_shot=True):
+                with new_materialized_view(cql, other_table, '*', 'v, p', 'v is not null and p is not null'):
+                    try:
+                        # The view builder is now paused in the middle of
+                        # building the other view.
+                        wait_for_injection_enter(cql, injection)
+                        cql.execute(f'DROP MATERIALIZED VIEW {mv}')
+                        assert list(cql.execute(query)) == []
+                    finally:
+                        message_injection(cql, injection)
+        finally:
+            cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {mv}')
+
+# A UDT literal with a case-sensitive field name in a view's WHERE clause.
+# The view's WHERE clause is saved in the schema as text, and parsed again
+# when the view is used, so the field name must be saved with its quotes.
+# Reproduces SCYLLADB-5279 (the quotes were lost, so building the view, and
+# writes to the base table, failed with "Unknown field 'a'").
+def test_mv_where_udt_case_sensitive_field(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '("A" int, b int)') as udt:
+        with new_test_table(cql, test_keyspace, f'p frozen<{udt}>, c int, v int, PRIMARY KEY (p, c)') as table:
+            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 1, b: 2}}, 3, 4)')
+            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 5, b: 2}}, 6, 7)')
+            with new_materialized_view(cql, table, '*', 'c, p', 'p = {"A": 1, b: 2} AND c IS NOT NULL') as mv:
+                wait_for_view_built(cql, mv)
+                cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 1, b: 2}}, 8, 9)')
+                # The view update may be asynchronous, so wait for it.
+                expected = [(3, 4), (8, 9)]
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    rows = sorted((r.c, r.v) for r in cql.execute(f'SELECT c, v FROM {mv}'))
+                    if rows == expected:
+                        break
+                    time.sleep(0.1)
+                assert rows == expected
+
+# A call to a function with a case-sensitive name in a view's WHERE clause.
+# The view's WHERE clause is saved in the schema as text, and parsed again
+# when the view is used, so the function name must be saved with its quotes -
+# otherwise a different function (or none) would be called. The writes which
+# would call the function aren't checked here, because a user-defined function
+# in a view's WHERE clause can't be executed yet (#13746).
+# Reproduces SCYLLADB-5198.
+def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    body = "LANGUAGE lua AS 'return 2'" if is_scylla(cql) else "LANGUAGE java AS 'return 2;'"
+    name = '"' + unique_name().upper() + '"'
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int') as table:
+        with new_function(cql, test_keyspace, f'() CALLED ON NULL INPUT RETURNS int {body}', name=name):
+            with new_materialized_view(cql, table, '*', 'v, k', f'k = {test_keyspace}.{name}() AND v IS NOT NULL') as mv:
+                ks, view = mv.split('.')
+                [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
+                assert f'{name}()' in where_clause
+=======
+
+# When a materialized view has finished building, an entry for it appears in
+# system_distributed.view_build_status, and this is what wait_for_view_built()
+# checks. In this test we check that when the materialized view is DROPed,
+# this entry must be removed - immediately. If we don't remove it, and a new
+# view with the same name is re-created, wait_for_view_built() will think
+# the new view has finished building immediately.
+# As long as tablets and vnodes are still both supported, we run this test on
+# both because the view-building tracking code has different code paths for
+# tablets and vnodes.
+# If the entry in system_distributed.view_build_status is never removed, this
+# test will always fail; But if the entry is removed eventually instead of
+# immediately (before DROP returns), this test will fail intermittently,
+# reproducing SCYLLADB-4869.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_view_build_status_removed_on_drop(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            wait_for_view_built(cql, mv)
+            # Although wait_for_view_built() does the same check, let's be
+            # explicit here: After the view is built, it gets an entry in
+            # system_distributed.view_build_status:
+            ks, name = mv.split('.')
+            query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{name}'",
+                        consistency_level=ConsistencyLevel.ONE)
+            assert [r.status for r in cql.execute(query)] == ['SUCCESS']
+        # Leaving the "with" above dropped the view. The view_build_status
+        # entry must already be gone *now* - it's not enough that it
+        # is removed eventually in the background, because if this entry
+        # remains and a user re-creates the same view immediately after the
+        # drop of the old one, the user might think the *new* view has
+        # already been built (this was SCYLLADB-4869).
+        assert list(cql.execute(query)) == []
+
+# Same as test_view_build_status_removed_on_drop, but reproduces SCYLLADB-4869
+# deterministically instead of intermittently. With vnodes, the entry is
+# removed by a background fiber that first needs the view builder's
+# semaphore on every shard, so it is delayed as long as the view builder is
+# busy building some other view. We use error injection to pause the view
+# builder in the middle of building another view (while holding that
+# semaphore), and then drop our view.
+# scylla_only because it uses error injection. The test above,
+# test_view_build_status_removed_on_drop does run on both Cassandra and
+# Scylla and reproduces the same bug, but only intermittently.
+def test_view_build_status_removed_on_drop_while_building(scylla_only, cql, test_keyspace_vnodes):
+    injection = 'view_builder_consume_end_of_partition_delay'
+    with new_test_table(cql, test_keyspace_vnodes, 'p int PRIMARY KEY, v int') as table, \
+         new_test_table(cql, test_keyspace_vnodes, 'p int PRIMARY KEY, v int') as other_table:
+        # The other view's build must go through at least one partition,
+        # to reach the injection point.
+        cql.execute(f'INSERT INTO {other_table} (p, v) VALUES (1, 2)')
+        # Our view must be built before the view builder is paused, but
+        # dropped while it is still paused, so it can't use a "with"
+        # nested with the other view's.
+        mv = f'{test_keyspace_vnodes}.{unique_name()}'
+        cql.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} WHERE v IS NOT NULL AND p IS NOT NULL PRIMARY KEY (v, p)')
+        try:
+            wait_for_view_built(cql, mv)
+            ks, name = mv.split('.')
+            query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{name}'",
+                        consistency_level=ConsistencyLevel.ONE)
+            assert [r.status for r in cql.execute(query)] == ['SUCCESS']
+            with scylla_inject_error(cql, injection, one_shot=True):
+                with new_materialized_view(cql, other_table, '*', 'v, p', 'v is not null and p is not null'):
+                    try:
+                        # The view builder is now paused in the middle of
+                        # building the other view.
+                        wait_for_injection_enter(cql, injection)
+                        cql.execute(f'DROP MATERIALIZED VIEW {mv}')
+                        assert list(cql.execute(query)) == []
+                    finally:
+                        message_injection(cql, injection)
+        finally:
+            cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {mv}')
+
+# Rename a base table's key column while a view is being built. The view
+# builder is paused after it picked the view's schema for a partition, but
+# before it reads the base's schema to generate the partition's view updates.
+# Reproduces SCYLLADB-6324 (the old view schema was paired with the new base
+# schema, which aborted the node).
+# scylla_only because it uses error injection.
+@pytest.mark.parametrize("test_keyspace", ["vnodes", "tablets"], indirect=True)
+def test_rename_base_column_while_building(scylla_only, cql, test_keyspace):
+    injection = 'view_builder_consume_end_of_partition_delay'
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (1, 2, 3)')
+        with scylla_inject_error(cql, injection, one_shot=True):
+            with new_materialized_view(cql, table, '*', 'c, p', 'c is not null and p is not null') as mv:
+                try:
+                    wait_for_injection_enter(cql, injection)
+                    cql.execute(f'ALTER TABLE {table} RENAME c TO c2')
+                finally:
+                    message_injection(cql, injection)
+                wait_for_view_built(cql, mv)
+                assert [(2, 1, 3)] == list(cql.execute(f'SELECT c2, p, v FROM {mv}'))
+
+# A UDT literal with a case-sensitive field name in a view's WHERE clause.
+# The view's WHERE clause is saved in the schema as text, and parsed again
+# when the view is used, so the field name must be saved with its quotes.
+# Reproduces SCYLLADB-5279 (the quotes were lost, so building the view, and
+# writes to the base table, failed with "Unknown field 'a'").
+def test_mv_where_udt_case_sensitive_field(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '("A" int, b int)') as udt:
+        with new_test_table(cql, test_keyspace, f'p frozen<{udt}>, c int, v int, PRIMARY KEY (p, c)') as table:
+            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 1, b: 2}}, 3, 4)')
+            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 5, b: 2}}, 6, 7)')
+            with new_materialized_view(cql, table, '*', 'c, p', 'p = {"A": 1, b: 2} AND c IS NOT NULL') as mv:
+                wait_for_view_built(cql, mv)
+                cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 1, b: 2}}, 8, 9)')
+                # The view update may be asynchronous, so wait for it.
+                expected = [(3, 4), (8, 9)]
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    rows = sorted((r.c, r.v) for r in cql.execute(f'SELECT c, v FROM {mv}'))
+                    if rows == expected:
+                        break
+                    time.sleep(0.1)
+                assert rows == expected
+
+# A call to a function with a case-sensitive name in a view's WHERE clause.
+# The view's WHERE clause is saved in the schema as text, and parsed again
+# when the view is used, so the function name must be saved with its quotes -
+# otherwise a different function (or none) would be called. The writes which
+# would call the function aren't checked here, because a user-defined function
+# in a view's WHERE clause can't be executed yet (#13746).
+# Reproduces SCYLLADB-5198.
+def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    body = "LANGUAGE lua AS 'return 2'" if is_scylla(cql) else "LANGUAGE java AS 'return 2;'"
+    name = '"' + unique_name().upper() + '"'
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int') as table:
+        with new_function(cql, test_keyspace, f'() CALLED ON NULL INPUT RETURNS int {body}', name=name):
+            with new_materialized_view(cql, table, '*', 'v, k', f'k = {test_keyspace}.{name}() AND v IS NOT NULL') as mv:
+                ks, view = mv.split('.')
+                [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
+                assert f'{name}()' in where_clause
+>>>>>>> 4d4daf8569 (test: cqlpy: rename a base column while a view is being built)
