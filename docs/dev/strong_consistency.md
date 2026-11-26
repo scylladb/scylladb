@@ -229,10 +229,10 @@ entries is reclaimed only once a durable descriptor covers them.
 A leader change that discards an uncommitted tail cannot be expressed by the
 descriptor alone, so it appends a `truncation_record {segment, from, to}` to the
 `truncations` column. Replay needs it to tell a discarded copy from a live one. Records
-are dropped from the column once the commitlog no longer lists their segment. The
-segment file is removed a moment later, in the background, so a crash in between
-leaves copies on disk with no record covering them. SCYLLADB-4094 tracks closing
-that window.
+are dropped from the column once `commitlog::min_position()` passes their segment.
+`min_position()` stays at or below a segment of the running commitlog instance until the
+removal or recycling of its file is synced to the commitlog directory, and for the rest
+of the process if that sync fails.
 
 ### Asking for the flush a release missed
 
