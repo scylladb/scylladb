@@ -1052,7 +1052,7 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
             throw api_error::validation("Second key in KeySchema must have string AttributeName");
         }
         validate_attr_name_length(supplementary_context, v->GetStringLength(), true, "RANGE key in KeySchema - ");
-        range_key = v->GetString();
+        range_key = rjson::to_string(*v);
     }
     return {hash_key, range_key};
 }

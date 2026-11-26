@@ -14,7 +14,7 @@ from re import fullmatch
 import pytest
 from botocore.exceptions import ClientError
 
-from .util import list_tables, unique_table_name, create_test_table, random_string, new_test_table, is_aws, scylla_config_read
+from .util import list_tables, unique_table_name, create_test_table, random_string, new_test_table, is_aws, scylla_config_read, full_scan, full_query
 
 
 # Utility function for create a table with a given name and some valid
@@ -353,6 +353,25 @@ def test_create_table_special_column_name(dynamodb):
             expected = {'p': p, c: s, 'hello': random_string()}
             table.put_item(Item=expected)
             assert expected == table.get_item(Key={'p': p, c: s}, ConsistentRead=True)['Item']
+
+# A key attribute name may contain a null character; the whole name is the key.
+# Not verified on DynamoDB, which may reject such a name.
+@pytest.mark.parametrize('h,r', [('p', 'c\x00x'), ('p\x00x', 'p')])
+def test_create_table_null_in_key_name(dynamodb, scylla_only, h, r):
+    with new_test_table(dynamodb,
+        KeySchema=[{ 'AttributeName': h, 'KeyType': 'HASH' },
+                   { 'AttributeName': r, 'KeyType': 'RANGE' }],
+        AttributeDefinitions=[{ 'AttributeName': h, 'AttributeType': 'S' },
+                              { 'AttributeName': r, 'AttributeType': 'S' }]) as table:
+        p = random_string()
+        items = [{h: p, r: s, 'c': random_string()} for s in sorted([random_string(), random_string()])]
+        for item in items:
+            table.put_item(Item=item)
+        assert items[0] == table.get_item(Key={h: p, r: items[0][r]}, ConsistentRead=True)['Item']
+        assert items == sorted(full_scan(table), key=lambda i: i[r])
+        # Limit=1 makes the query page through LastEvaluatedKey.
+        assert items == full_query(table, Limit=1, KeyConditionExpression='#h = :p',
+            ExpressionAttributeNames={'#h': h}, ExpressionAttributeValues={':p': p})
 
 # Whereas test_create_table_special_column_name above tests what happen when
 # the name ":attrs" is used for a key column (partition key or sort key), in
