@@ -1761,6 +1761,54 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
     });
 
+    ss::clear_cluster_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("clear_cluster_snapshot: {}", req->get_query_params());
+        auto tag = req->get_query_param("tag");
+        bool force = get_query_param<bool>(*req, "force");
+        auto keyspace = req->get_query_param("keyspace");
+        auto table_name = req->get_query_param("table");
+        // A blank table must not turn the request into a clear of the whole snapshot.
+        const bool by_table = req->has_query_param("keyspace") || req->has_query_param("table");
+        if (by_table && (keyspace.empty() || table_name.empty())) {
+            throw httpd::bad_param_exception("keyspace and table must be given together");
+        }
+        std::optional<std::pair<sstring, sstring>> table;
+        if (!table_name.empty()) {
+            table.emplace(std::move(keyspace), std::move(table_name));
+        }
+        try {
+            auto task_id = co_await snap_ctl.local().clear_cluster_snapshot(tag, force, std::move(table));
+            co_return json::json_return_type(fmt::to_string(task_id));
+        } catch (const std::invalid_argument& e) {
+            // Rejected before its task started: the tag is unknown, backed up,
+            // uncommitted, or in use by a backup or a snapshot.
+            throw httpd::bad_param_exception(e.what());
+        } catch (...) {
+            apilog.error("clear_cluster_snapshot failed: {:t}", std::current_exception());
+            throw;
+        }
+    });
+
+    ss::get_cluster_snapshots.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        std::vector<ss::cluster_snapshot> res;
+        for (auto& snapshot : co_await snap_ctl.local().list_cluster_snapshots()) {
+            ss::cluster_snapshot s;
+            s.tag = std::move(snapshot.tag);
+            const auto created_at = db_clock::to_time_t(snapshot.created_at);
+            ::tm t;
+            ::gmtime_r(&created_at, &t);
+            s.created_at = t;
+            for (auto& [ks, table] : snapshot.tables) {
+                ss::cluster_snapshot_table st;
+                st.keyspace = std::move(ks);
+                st.table = std::move(table);
+                s.tables.push(std::move(st));
+            }
+            res.push_back(std::move(s));
+        }
+        co_return res;
+    });
+
     ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("del_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
@@ -1860,6 +1908,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 void unset_snapshot(http_context& ctx, routes& r) {
     ss::get_snapshot_details.unset(r);
     ss::take_snapshot.unset(r);
+    ss::clear_cluster_snapshot.unset(r);
+    ss::get_cluster_snapshots.unset(r);
     ss::del_snapshot.unset(r);
     ss::true_snapshots_size.unset(r);
     ss::start_backup.unset(r);

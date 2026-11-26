@@ -3190,6 +3190,20 @@
          "path":"/storage_service/tablets/snapshots",
          "operations":[
             {
+               "method":"GET",
+               "summary":"Lists the cluster snapshots and the tables each of them contains. Snapshots taken per node are not listed.",
+               "type":"array",
+               "items":{
+                  "type":"cluster_snapshot"
+               },
+               "nickname":"get_cluster_snapshots",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
                "method":"POST",
                "summary":"Takes the snapshot for the given keyspaces/tables. A snapshot name must be specified.",
                "type":"void",
@@ -3217,6 +3231,49 @@
                   {
                      "name":"table",
                      "description":"Table(s) to snapshot. Multiple tables (in a single keyspace) can be provided using a comma-separated list. If omitted, snapshot all tables in the given keyspace(s).",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Clears the cluster snapshot with the given tag: its snapshot directories, bucket references and catalog rows. Returns the id of the task doing the work. A backed-up tag, or one left by a failed attempt, is rejected unless force is set.",
+               "type":"string",
+               "nickname":"clear_cluster_snapshot",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"tag",
+                     "description":"the tag of the snapshot to clear",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"force",
+                     "description":"also delete the backup of a backed-up snapshot, or the leftovers of a snapshot that was never committed",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"keyspace",
+                     "description":"the keyspace of the table to clear, given together with table",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"clear this table alone and keep the other tables of the snapshot. Clearing the last table clears the snapshot",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -3798,6 +3855,41 @@
                   "type":"snapshot"
                },
                "description":"The column family"
+            }
+         }
+      },
+      "cluster_snapshot_table":{
+         "id":"cluster_snapshot_table",
+         "description":"A table of a cluster snapshot",
+         "properties":{
+            "keyspace":{
+               "type":"string",
+               "description":"The keyspace name"
+            },
+            "table":{
+               "type":"string",
+               "description":"The table name"
+            }
+         }
+      },
+      "cluster_snapshot":{
+         "id":"cluster_snapshot",
+         "description":"A cluster snapshot",
+         "properties":{
+            "tag":{
+               "type":"string",
+               "description":"The tag given to the snapshot"
+            },
+            "created_at":{
+               "type":"datetime",
+               "description":"The time the snapshot was requested"
+            },
+            "tables":{
+               "type":"array",
+               "items":{
+                  "type":"cluster_snapshot_table"
+               },
+               "description":"The tables the snapshot contains"
             }
          }
       },

@@ -65,10 +65,12 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
         _delete_expired_snapshots = delete_expired_snapshots();
     }
     ser::snapshot_backup_rpc_verbs::register_backup_snapshot_sstables(&_ms, std::bind_front(&snapshot_ctl::backup_sstables, this));
+    ser::snapshot_backup_rpc_verbs::register_clear_snapshot_directory(&_ms, std::bind_front(&snapshot_ctl::clear_snapshot_directory, this));
 }
 
 future<> snapshot_ctl::stop() {
     co_await ser::snapshot_backup_rpc_verbs::unregister_backup_snapshot_sstables(&_ms);
+    co_await ser::snapshot_backup_rpc_verbs::unregister_clear_snapshot_directory(&_ms);
     co_await disable_all_operations();
     co_await _task_manager_module->stop();
 }
@@ -282,7 +284,14 @@ future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace
             // Resolve every keyspace first so a later failure doesn't delete
             // snapshots that were already matched in earlier keyspaces.
             for (const auto& ks_name : keyspace_names) {
-                resolved_targets.emplace_back(ks_name, resolve_table_name(ks_name, cf_name));
+                auto resolved = resolve_table_name(ks_name, cf_name);
+                // A table on object storage has no snapshot directory to clear,
+                // its snapshots are references in the bucket and catalog rows.
+                if (_db.local().find_column_family(ks_name, resolved).get_storage_options().is_object_storage_type()) {
+                    throw std::invalid_argument(fmt::format(
+                            "Cannot clear a snapshot of {}.{}: the table is on object storage, use the cluster clearsnapshot API", ks_name, resolved));
+                }
+                resolved_targets.emplace_back(ks_name, std::move(resolved));
             }
             for (auto& [ks_name, resolved_cf_name] : resolved_targets) {
                 co_await _db.local().clear_snapshot(tag, {ks_name}, std::move(resolved_cf_name));
@@ -319,6 +328,26 @@ snapshot_ctl::get_snapshot_details() {
 
         co_return details;
     }));
+}
+
+future<std::vector<snapshot_ctl::cluster_snapshot_info>> snapshot_ctl::list_cluster_snapshots() {
+    auto holder = _ops.hold();
+    db::snapshot_table_helper sth(_qp.local());
+    std::vector<cluster_snapshot_info> res;
+    for (auto& snapshot : co_await sth.get_snapshots()) {
+        // The table rows live under the committed attempt's name. A marker
+        // with no committed attempt belongs to a snapshot that is going away.
+        const auto name = co_await sth.find_committed_snapshot_name(snapshot.name);
+        if (!name) {
+            snap_log.debug("list_cluster_snapshots: skipping '{}', it has no committed attempt", snapshot.name);
+            continue;
+        }
+        auto& info = res.emplace_back(sstring(snapshot.name), snapshot.created_at);
+        for (auto& table : co_await sth.get_snapshot_tables(*name)) {
+            info.tables.emplace_back(std::move(table.keyspace_name), std::move(table.table_name));
+        }
+    }
+    co_return res;
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size() {
@@ -385,6 +414,31 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
         return state->run(self.get_abort_source());
     });
     co_return task->id();
+}
+
+future<> snapshot_ctl::clear_snapshot_directory(sstring ks_name, sstring cf_name, sstring tag) {
+    snap_log.debug("clear_snapshot_directory: tag={} table={}.{}", tag, ks_name, cf_name);
+    co_await container().invoke_on(0, [&] (auto& sc) {
+        return sc.cancel_expiration(tag, {ks_name}, cf_name);
+    });
+    co_return co_await run_snapshot_modify_operation(
+            [this, tag = std::move(tag), ks_name = std::move(ks_name), cf_name = std::move(cf_name)] (this auto) -> future<> {
+        co_await _db.local().clear_snapshot(tag, {ks_name}, cf_name);
+    });
+}
+
+future<tasks::task_id> snapshot_ctl::clear_cluster_snapshot(sstring tag, bool force, std::optional<std::pair<sstring, sstring>> table) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [&] (auto& local) {
+            return local.clear_cluster_snapshot(tag, force, table);
+        });
+    }
+    if (!db::is_valid_user_snapshot_tag(tag)) {
+        throw std::invalid_argument(fmt::format("Invalid snapshot tag '{}': a tag must be non-empty and must not contain '/'", tag));
+    }
+    co_await coroutine::switch_to(_config.backup_sched_group);
+    co_return co_await snapshot::start_cluster_clear_snapshot(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module),
+            std::string(tag), force, std::move(table));
 }
 
 future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files) {

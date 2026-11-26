@@ -485,7 +485,7 @@ An object storage can copy an object only inside one endpoint. So the backup and
 
 The restore recognizes a backup in the unified layout when the backup has the same endpoint, bucket and prefix as the table. The object names of such a backup do not contain the generation. The restore takes the `sstable_id` from `system_distributed.snapshot_sstables`, and the generation, version and format from the `toc_name` of the manifest.
 
-The snapshot can be dropped while the restore runs. So after the restore creates the node reference of a shared SSTable, the restore checks that the snapshot still has its reference `refs/snapshot-{tag}/{generation}`. If not, the restore removes the node reference and the entry, and fails. The components are deleted if no other reference is left.
+The snapshot can be dropped while the restore runs. So after the restore creates the node reference of a shared SSTable, the restore checks that the tag still holds a reference on the SSTable, the plain `refs/snapshot-{tag}/{generation}` of a backup uploaded from a local table or the `refs/snapshot-{tag}/{attempt}/{generation}` of a cluster snapshot attempt. If not, the restore removes the node reference and the entry, and fails. The components are deleted if no other reference is left.
 
 No backup writes the unified layout yet. `/storage_service/backup` and the cluster backup keep the generation in the component names. So today every restore copies.
 
@@ -637,7 +637,7 @@ Restoring into the cluster where the snapshot still lives must not let the resto
 Restore writes its working rows (`snapshot_sstables`, `snapshot_remote_locations`, `snapshot_tables`) under the snapshot name of the restore request,
 with a 3-day TTL so that crashed restores and currently even successful restores clean up their rows automatically.
 The snapshot's rows live under the attempt name `{tag}/{attempt}`, so the restore never touches them, and the snapshot's references keep the components alive while cloning.
-The `snapshot_remote_locations` row of a backup is keyed by the plain tag like the restore's, so an in-place restore of a backup overwrites it with a TTL'd row.
+A backup keys its `snapshot_remote_locations` rows by the attempt name as well, so the restore's TTL'd row under the plain tag does not replace them.
 
 ### Crashing behavior
 
@@ -656,9 +656,27 @@ a) Collection of failed attempts, done by the coordinator after the commit. For 
 stopped being replicas since. A failed request collects its own attempt the same way. A crash between the group0 write of the
 attempt and its snapshot_attempts row leaves an attempt named only in the request entry.
 b) Boot GC, it's node local, it reaps the registry entries of sstables whose creation or removal did not complete, deleting their refs and components if the last ref was dropped.
-c) (future work) `clearsnapshot --force` it's operator driven which is able to delete garbage if no re-take happens for a previously crashed tag.
+c) `nodetool cluster clearsnapshot`, operator driven. It collects every attempt of the tag the same way, the committed one included, and with `--force` the residue of a tag that never committed, when no re-take is wanted. See "Clearing a snapshot" below.
 d) (future work) background healing operation as a last resort process: cleaning refs whose rows are gone, also covers some edge cases like
 departed nodes or tables dropped in a particular bad moment. It'll also do automatic expiration of snapshots.
+
+### Clearing a snapshot
+
+`nodetool cluster clearsnapshot -t tag` runs as a task on the node that gets the request. It reads the marker, the
+`snapshot_attempts` ledger, the schema rows and the `snapshot_remote_locations` rows of every attempt, and
+rejects the request (HTTP 400) when the tag is unknown, when a backup or a snapshot of it is in progress, and, unless
+`--force`, when the tag has no marker (the residue of a failed attempt) or has location rows (it is backed up, and the
+backup goes with the snapshot). Then, in this order:
+
+1. the committed attempt is flipped to `committed=false`, so a backup started from now on finds no committed attempt instead of writing under a tag going away;
+2. the manifests of the backups, at every location of the tag, for every table of every attempt;
+3. the `refs/snapshot-{tag}/{gen}` references a backup uploaded from local tables, with the components when the reference was the sstable's last claim;
+4. for every attempt: the snapshot directories of local tables on the nodes of its `snapshot_nodes` rows, then its references and rows through the collector the coordinator uses for failed attempts, its schema rows, its location rows and its ledger row;
+5. the marker last.
+
+A crash anywhere leaves the marker, so the clear is accepted again with the same flags and resumes from whatever is left;
+until the marker is gone the tag cannot be retaken. Nodes that left the cluster keep their snapshot directories, and a
+dropped table's references can only be reclaimed by bucket healing.
 
 ### Layout examples for local and remote tables
 
@@ -696,7 +714,7 @@ catalog (in this order):
 ~~~
 
 b) Backup
-The coordinator marks the destination in `snapshot_remote_locations` (state=being_backed_up) and fans out per-node upload requests.
+The coordinator marks the destination in `snapshot_remote_locations` under the committed attempt name (state=being_backed_up) and fans out per-node upload requests.
 Each node uploads its snapshotted components into the refs-based layout under the destination prefix `bucket/bk/sstables/3gqe…tor/<component>`
 and creates a snapshot reference `bucket/bk/sstables/3gqe…tor/refs/snapshot-<tag>/<gen>` before uploading, so the uploaded sstable is pinned exactly like a native object-storage one. As uploads complete, the node's `snapshot_sstables` rows flip to state=remote_and_local (or remote, when the local snapshot files are removed after upload).
 Finally one manifest per destination is written at `bucket/bk/snapshots/ks/t/tagalong/manifest.json` and `snapshot_remote_locations` flips to the final state.
@@ -714,7 +732,7 @@ bucket (per destination, last):
   backups/bk/snapshots/ks/t/tagalong/manifest.json
 
 catalog:
-  snapshot_remote_locations ('tagalong','dc1') -> endpoint, 'backups', 'bk',
+  snapshot_remote_locations ('tagalong/<attempt>','dc1') -> endpoint, 'backups', 'bk',
                             state: being_backed_up -> remote_and_local
                             (remote with --move-files)
   snapshot_sstables         row of 3gqe…tor rewritten with state=remote_and_local,
@@ -774,6 +792,8 @@ b) Backup
 This is mostly an in-place promotion.
 The components are already in the table's own bucket and pinned by the snapshot references since snapshot time,
 so nothing is uploaded and no new references are created.
+The destination named in the backup request must be the table's own location (endpoint, bucket and prefix),
+any other destination is rejected before the backup starts.
 The `snapshot_remote_locations` catalog rows flip state to `remote`.
 For the `snapshot_sstables` catalog, the per-node handler rewrites each uploaded sstable's row with the state promoted.
 The only new created object on remote is the manifest at `scylla-bucket/sstables/snapshots/ks/t/<tag>/manifest.json`.
@@ -785,7 +805,7 @@ bucket:
        snapshot references since snapshot time)
 
 catalog:
-  snapshot_remote_locations ('tagalong','dc1') -> endpoint, 'scylla-bucket',
+  snapshot_remote_locations ('tagalong/<attempt>','dc1') -> endpoint, 'scylla-bucket',
                             'sstables', state=remote
   snapshot_sstables         rows rewritten with state=remote
 ~~~
@@ -798,9 +818,9 @@ the target table's sstables are cloned by reference sharing, each node creates i
 ~~~
 bucket:
   scylla-bucket/sstables/3gqe…tor/refs/nodes/aaaa0001/<clone generation>
-      (the clone's node ref, created after verifying that the snapshot
-       reference still exists; the clone is undone if the snapshot vanished
-       mid-restore)
+      (the clone's node ref, created after verifying that the tag still
+       holds a reference on the sstable, plain or attempt-named; the clone
+       is undone if the snapshot vanished mid-restore)
   no components are copied; a backup elsewhere on the same endpoint is
   byte-copied under a fresh sstable id; a backup on another endpoint is rejected
 node-local:

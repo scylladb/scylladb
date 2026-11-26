@@ -130,9 +130,11 @@ class RESTClient(metaclass=ABCMeta):
 
     async def delete(self, resource_uri: str, host: Optional[str] = None,
                      port: Optional[int] = None, params: Optional[dict[str, str]] = None,
-                     json: Optional[Mapping] = None, timeout: Optional[float] = None) -> None:
-        await self._fetch("DELETE", resource_uri, host = host, port = port, params = params,
-                          json = json, timeout = timeout)
+                     json: Optional[Mapping] = None, response_type: Optional[str] = None,
+                     timeout: Optional[float] = None) -> Any:
+        ret = await self._fetch("DELETE", resource_uri, response_type = response_type, host = host,
+                                port = port, params = params, json = json, timeout = timeout)
+        return ret
 
 
 class TCPRESTClient(RESTClient):
@@ -494,6 +496,10 @@ class ScyllaRESTAPIClient:
             params['table'] = ','.join(tables)
         await self.client.post(f"/storage_service/tablets/snapshots", host=node_ip, params=params)
 
+    async def list_cluster_snapshots(self, node_ip: str) -> list[dict]:
+        """List the cluster snapshots with the tables each of them contains"""
+        return await self.client.get_json("/storage_service/tablets/snapshots", host=node_ip)
+
     async def delete_snapshot(self, node_ip: str, tag: str, keyspace: str = "") -> None:
         """Delete a snapshot by tag, optionally filtered by keyspace"""
         params = {
@@ -501,6 +507,19 @@ class ScyllaRESTAPIClient:
             **({"kn": keyspace} if keyspace else {}),
         }
         await self.client.delete("/storage_service/snapshots", host=node_ip, params=params)
+
+    async def clear_cluster_snapshot(self, node_ip: str, tag: str, force: bool = False,
+                                     keyspace: Optional[str] = None, table: Optional[str] = None) -> str:
+        """Clear a cluster snapshot, or one table of it; returns the task id"""
+        params = {"tag": tag}
+        if force:
+            params["force"] = "true"
+        if keyspace:
+            params["keyspace"] = keyspace
+        if table:
+            params["table"] = table
+        return await self.client.delete("/storage_service/tablets/snapshots", response_type="json",
+                                        host=node_ip, params=params)
 
     async def backup_cluster_snapshot_to_locations(self, node_ip: str, ks: str, snapshot: str, locations: list, tables: list[str] = None) -> str:
         """Backup cluster snapshot"""

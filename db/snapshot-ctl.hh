@@ -150,6 +150,24 @@ public:
 
     future<tasks::task_id> start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files);
 
+    // Clears a cluster snapshot. It deletes the snapshot directories of its local tables,
+    // the bucket references of its object-storage tables and its catalog
+    // rows. A tag that is backed up, or one left by a failed attempt, is
+    // rejected unless `force` is passed true, which deletes the backup along with the snapshot.
+    // With `table`, a (keyspace, table) pair, it clears that table alone.
+    future<tasks::task_id> clear_cluster_snapshot(sstring tag, bool force, std::optional<std::pair<sstring, sstring>> table = std::nullopt);
+
+    struct cluster_snapshot_info {
+        sstring tag;
+        db_clock::time_point created_at;
+        // (keyspace, table) pairs
+        std::vector<std::pair<sstring, sstring>> tables;
+    };
+
+    // Lists the committed cluster snapshots from the snapshot catalog, so any
+    // node gives the same answer. A snapshot taken per node is not listed.
+    future<std::vector<cluster_snapshot_info>> list_cluster_snapshots();
+
     future<> disable_all_operations();
 
     // Must be called on shard 0
@@ -217,6 +235,9 @@ private:
 
     future<> delete_expired_snapshots();
     future<> backup_sstables(table_id, std::string, std::string, std::string, std::string, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
+    // The per-node step of a cluster clearsnapshot, it removes the snapshot
+    // directory of one table
+    future<> clear_snapshot_directory(sstring ks_name, sstring cf_name, sstring tag);
 };
 
 }

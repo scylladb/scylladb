@@ -871,6 +871,15 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
     return ret;
 }
 
+static bool has_snapshot_ref(const object_storage_reference_names& refs, std::string_view tag, generation_type gen) {
+    auto prefix = fmt::format("snapshot-{}/", tag);
+    auto suffix = fmt::format("/{}", gen);
+    return std::ranges::any_of(refs, [&] (const sstring& name) {
+        std::string_view n{name};
+        return n.starts_with(prefix) && n.ends_with(suffix);
+    });
+}
+
 template <typename Container>
 static future<> collect_lister_entries(abstract_lister& lister, Container& entries) {
     while (auto entry = co_await lister.get()) {
@@ -978,6 +987,38 @@ future<> release_object_storage_snapshot_refs_by_listing(object_storage_client& 
         co_return;
     }
     co_await delete_object_storage_components(client, bucket, prefix, sid, std::move(components));
+}
+
+future<> release_object_storage_backup_ref(object_storage_client& client, sstring bucket, sstring prefix,
+        sstable_id sid, std::string_view tag) {
+    auto objects = co_await list_object_storage_sstable_objects(client, bucket, prefix, sid);
+    const auto tag_prefix = fmt::format("refs/snapshot-{}/", tag);
+    bool other_refs = false;
+    std::vector<sstring> components;
+    std::optional<sstring> toc;
+    for (auto& name : objects) {
+        std::string_view sv(name);
+        if (sv.starts_with(std::string_view(tag_prefix))) {
+            co_await delete_object_storage_snapshot_ref(client, object_name(bucket, prefix, sid, name));
+        } else if (sv.starts_with("refs/")) {
+            other_refs = true;
+        } else if (sv.ends_with(std::string_view(sstable_version_constants::TOC_SUFFIX))) {
+            toc = std::move(name);
+        } else {
+            components.push_back(std::move(name));
+        }
+    }
+    if (other_refs) {
+        co_return;
+    }
+    co_await coroutine::parallel_for_each(components, [&] (const sstring& component) -> future<> {
+        co_await client.delete_object(object_name(bucket, prefix, sid, component));
+    });
+    // The TOC is deleted last. While it exists the sstable is still discoverable,
+    // so a crash mid-way leaves a deletable sstable.
+    if (toc) {
+        co_await client.delete_object(object_name(bucket, prefix, sid, *toc));
+    }
 }
 
 future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
@@ -1435,10 +1476,13 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
     if (share_components) {
         // The snapshot can be dropped before this node reference is created. Then the
         // drop can delete the components, and the clone would point to missing objects.
-        // So check that the snapshot still has its reference. If not, undo the clone:
-        // remove the node reference with remove_by_registry_entry(), which deletes the
-        // components when no reference is left, remove the registry entry, and fail.
-        if (!co_await _client->object_exists(make_snapshot_ref_object_name(sid, src.generation(), snapshot_tag), as)) {
+        // So check that the tag still holds a reference on the sstable. Any reference
+        // of the tag at the source generation is enough.
+        // If none is left, undo the clone, remove the node reference
+        // with remove_by_registry_entry(), which deletes the components when no
+        // reference is left, remove the registry entry, and fail.
+        auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
+        if (!has_snapshot_ref(refs, snapshot_tag, src.generation())) {
             co_await remove_by_registry_entry(desc, node_owner);
             co_await src.manager().sstables_registry().delete_entry(owner(), node_owner, gen);
             co_await coroutine::return_exception(std::runtime_error(fmt::format("Cannot restore {}: snapshot {} does not hold the components of sstable_id={}",

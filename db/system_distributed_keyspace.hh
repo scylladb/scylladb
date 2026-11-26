@@ -218,6 +218,14 @@ public:
     future<> delete_snapshot_schema_rows(std::string_view snapshot_name, int64_t write_timestamp,
             db::consistency_level cl = db::consistency_level::QUORUM);
 
+    /* Deletes the snapshot_tables row of one table and, with `drop_keyspace_row`,
+     * the snapshot_keyspaces row of its keyspace. With `commit`, a (tag, attempt)
+     * pair, it also marks that attempt committed. All of it is one logged batch, so
+     * a failure cannot leave the table row gone and the snapshot uncommitted. */
+    future<> delete_snapshot_table_schema_row(std::string_view snapshot_name, std::string_view ks, std::string_view table, bool drop_keyspace_row,
+            std::optional<std::pair<std::string_view, utils::UUID>> commit, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
     /* Deletes one name's snapshot_nodes partition with a tombstone at the
      * given timestamp. The rows have no regular column to read a write
      * timestamp from, so the caller picks it; nothing writes under a failed
@@ -267,6 +275,13 @@ public:
      * Find a snapshot entry. 
      */
     future<std::optional<snapshot_entry>> get_snapshot(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
+    /* Deletes the snapshots row. It is the commit marker of a cluster snapshot,
+     * so a clear deletes it last, after everything else of the tag is gone. */
+    future<> delete_snapshot_entry(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
+    /**
+     * Get the entries of all snapshots. Scans the whole table.
+     */
+    future<utils::chunked_vector<snapshot_entry>> get_snapshots(db::consistency_level cl = db::consistency_level::QUORUM);
 
     /* The row is written before the attempt's RPCs and committed by the coordinator's
      * commit step, which writes it with committed = true.*/
@@ -291,6 +306,9 @@ public:
      * Get all remote locations for snapshot
      */
     future<utils::chunked_vector<snapshot_remote_location_entry>> get_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Deletes every backup location row of a snapshot. */
+    future<> delete_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Add keyspaces to a snapshot
