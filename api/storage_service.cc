@@ -1778,6 +1778,26 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
     });
 
+    ss::get_cluster_snapshots.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        std::vector<ss::cluster_snapshot> res;
+        for (auto& snapshot : co_await snap_ctl.local().list_cluster_snapshots()) {
+            ss::cluster_snapshot s;
+            s.tag = std::move(snapshot.tag);
+            const auto created_at = db_clock::to_time_t(snapshot.created_at);
+            ::tm t;
+            ::gmtime_r(&created_at, &t);
+            s.created_at = t;
+            for (auto& [ks, table] : snapshot.tables) {
+                ss::cluster_snapshot_table st;
+                st.keyspace = std::move(ks);
+                st.table = std::move(table);
+                s.tables.push(std::move(st));
+            }
+            res.push_back(std::move(s));
+        }
+        co_return res;
+    });
+
     ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("del_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
@@ -1878,6 +1898,7 @@ void unset_snapshot(http_context& ctx, routes& r) {
     ss::get_snapshot_details.unset(r);
     ss::take_snapshot.unset(r);
     ss::clear_cluster_snapshot.unset(r);
+    ss::get_cluster_snapshots.unset(r);
     ss::del_snapshot.unset(r);
     ss::true_snapshots_size.unset(r);
     ss::start_backup.unset(r);

@@ -3190,6 +3190,20 @@
          "path":"/storage_service/tablets/snapshots",
          "operations":[
             {
+               "method":"GET",
+               "summary":"Lists the cluster snapshots and the tables each of them contains. Snapshots taken per node are not listed.",
+               "type":"array",
+               "items":{
+                  "type":"cluster_snapshot"
+               },
+               "nickname":"get_cluster_snapshots",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
                "method":"POST",
                "summary":"Takes the snapshot for the given keyspaces/tables. A snapshot name must be specified.",
                "type":"void",
@@ -3825,6 +3839,41 @@
                   "type":"snapshot"
                },
                "description":"The column family"
+            }
+         }
+      },
+      "cluster_snapshot_table":{
+         "id":"cluster_snapshot_table",
+         "description":"A table of a cluster snapshot",
+         "properties":{
+            "keyspace":{
+               "type":"string",
+               "description":"The keyspace name"
+            },
+            "table":{
+               "type":"string",
+               "description":"The table name"
+            }
+         }
+      },
+      "cluster_snapshot":{
+         "id":"cluster_snapshot",
+         "description":"A cluster snapshot",
+         "properties":{
+            "tag":{
+               "type":"string",
+               "description":"The tag given to the snapshot"
+            },
+            "created_at":{
+               "type":"datetime",
+               "description":"The time the snapshot was requested"
+            },
+            "tables":{
+               "type":"array",
+               "items":{
+                  "type":"cluster_snapshot_table"
+               },
+               "description":"The tables the snapshot contains"
             }
          }
       },
