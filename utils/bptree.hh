@@ -11,6 +11,7 @@
 #include <boost/intrusive/parent_from_member.hpp>
 #include <seastar/util/defer.hh>
 #include <cassert>
+#include <memory>
 #include <vector>
 #include "utils/assert.hh"
 #include "utils/allocation_strategy.hh"
@@ -1860,29 +1861,29 @@ public:
 
 private:
     class prealloc {
-        std::vector<node*> _nodes;
+        struct node_deleter {
+            void operator()(node* n) const noexcept { node::destroy(*n); }
+        };
+        using node_ptr = std::unique_ptr<node, node_deleter>;
+
+        std::vector<node_ptr> _nodes;
     public:
-        bool empty() noexcept { return _nodes.empty(); }
+        bool empty() const noexcept { return _nodes.empty(); }
 
         void push() {
-            _nodes.push_back(node::create());
+            node_ptr n(node::create());
+            _nodes.push_back(std::move(n));
         }
 
         node* pop() noexcept {
             SCYLLA_ASSERT(!_nodes.empty());
-            node* ret = _nodes.back();
+            node* ret = _nodes.back().release();
             _nodes.pop_back();
             return ret;
         }
 
         void drain() noexcept {
-            while (!empty()) {
-                node::destroy(*pop());
-            }
-        }
-
-        ~prealloc() {
-            drain();
+            _nodes.clear();
         }
     };
 

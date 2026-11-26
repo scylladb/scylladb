@@ -11,6 +11,7 @@
 #include <fmt/core.h>
 
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 #include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "collection_stress.hh"
@@ -524,6 +525,51 @@ SEASTAR_THREAD_TEST_CASE(test_insert_push_allocates_no_node) {
         BOOST_REQUIRE_LE(allocations - live, st.leaves);
     });
 }
+
+#ifdef SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
+// Checks that an insert that fails on an allocation frees all that it allocated, also the nodes
+// that it allocated ahead of a split. The test injects a failure at each allocation of each insert
+// in turn. A failed insert changes nothing, so the next try inserts the same key into the same
+// tree. The region is not reclaimed, so its used space must be the same as before a failed insert.
+SEASTAR_THREAD_TEST_CASE(test_insert_frees_nodes_on_allocation_failure) {
+    constexpr int TEST_NODE_SIZE = 4;
+    using test_tree = tree<int, unsigned long, int_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
+
+    auto& injector = memory::local_failure_injector();
+    logalloc::region mem;
+    with_allocator(mem.allocator(), [&] {
+        tree_pointer<test_tree> t(int_compare{});
+        // The first insert into an empty tree creates the root before anything that can fail, and the
+        // root stays when the insert fails, so the loop starts with a root in place.
+        t->emplace(0, 0);
+        uint64_t failures = 0;
+        for (int i = 1; i < 1000; i++) {
+            for (uint64_t fail_at = 0; ; ++fail_at) {
+                const auto used = mem.occupancy().used_space();
+                bool threw = false;
+                injector.fail_after(fail_at);
+                try {
+                    t->emplace(i, i);
+                    injector.cancel();
+                } catch (const std::bad_alloc&) {
+                    injector.cancel();
+                    threw = true;
+                }
+                if (threw) {
+                    ++failures;
+                    BOOST_REQUIRE_EQUAL(mem.occupancy().used_space(), used);
+                    BOOST_REQUIRE(t->find(i) == t->end());
+                }
+                if (!injector.failed()) {
+                    break;
+                }
+            }
+            BOOST_REQUIRE(t->find(i) != t->end());
+        }
+        BOOST_REQUIRE_GT(failures, 0u);
+    });
+}
+#endif
 
 SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
     constexpr int TEST_NODE_SIZE = 7;

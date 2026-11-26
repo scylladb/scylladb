@@ -35,8 +35,9 @@ static_assert(std::is_nothrow_move_constructible_v<single_row_partition>);
 //   2. Destroys and frees this object via the LSA allocator.
 //
 // The back-pointer (_slot_link) is an entangled paired with the
-// primary_index_entry::_cached_entry._entry_link, which lives in the
-// standard-heap B+tree and is therefore stable across LSA compaction.
+// primary_index_entry::_cached_entry._entry_link. The index entry lives in the
+// LSA region of its index, so either side can move, and the pair repairs
+// itself on each move.
 class cached_partition_entry final : public evictable {
     schema_ptr _schema;
     partition_key _key;
