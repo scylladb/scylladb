@@ -108,6 +108,8 @@ CREATE TABLE keyspace.user_profiles (
 
 Logstor tables cannot be created in strongly consistent keyspaces (`consistency = 'global'`) yet.
 
+The `storage_engine` of an existing table cannot be altered, and materialized views and indexes cannot be created on logstor tables.
+
 ### Basic Operations
 
 **Insert/Update:**

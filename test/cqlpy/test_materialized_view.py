@@ -353,6 +353,13 @@ def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
+# ALTER MATERIALIZED VIEW can't change the id, like ALTER TABLE (Scylla-only).
+def test_alter_materialized_view_id_disabled(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with new_materialized_view(cql, table, "*", "v, pk", "v is not null and pk is not null") as mv:
+            with pytest.raises(ConfigurationException, match="Cannot alter table id"):
+                cql.execute(f"ALTER MATERIALIZED VIEW {mv} WITH id = 5e22f0e4-8a6f-4a1c-9a57-1d5f4b6c7e10")
+
 # Test that a view can be altered with synchronous_updates property and that
 # the synchronous updates code path is then reached for such view.
 # The synchronous_updates feature is a ScyllaDB extension, so this is a
