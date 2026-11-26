@@ -25,6 +25,7 @@ from functools import partial
 from collections import OrderedDict
 from requests import Response
 from typing_extensions import Optional
+from abc import abstractmethod
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -37,6 +38,34 @@ class Policy:
         self.error_count: int = 0
         self.max_errors: int = random.choice(list(range(1, max_retries)))
 
+
+class PolicyHandler:
+    @abstractmethod
+    def get_policy(self, path: str) -> Policy:
+        """
+        Get policy for path
+        """
+    @abstractmethod
+    def remove(self, path: str):
+        """
+        Remove
+        """
+
+class NoErrorPolicyHandler(PolicyHandler):
+    """
+    Handler for injecting no errors
+    """
+    def __init__(self, max_retries:int = 3):
+        self.policy = Policy(max_retries)
+        self.policy.max_errors = 0
+        self.policy.should_fail = False
+        self.policy.server_should_fail = False
+
+    def get_policy(self, path):
+        return self.policy
+
+    def remove(self, path: str):
+        self.policy.error_count = 0
 
 class LRUCache:
     lock = threading.Lock()
@@ -65,6 +94,31 @@ class LRUCache:
             if key in self.cache:
                 del self.cache[key]
 
+class InjectErrorPolicyHandler(PolicyHandler):
+    """
+    Handler for injecting errors
+    """
+    def __init__(self, policies: LRUCache, max_retries:int = 3):
+        self.policies = policies
+        self.max_retries = max_retries
+
+    def get_policy(self, path):
+        policy = self.policies.get(path)
+        if policy is None:
+            policy = Policy(self.max_retries)
+            policy.should_forward = true_or_false()
+            if policy.should_forward:
+                policy.should_fail = true_or_false()
+            else:
+                policy.should_fail = True
+
+            if policy.should_fail:
+                policy.server_should_fail = true_or_false()
+            self.policies.put(path, policy)
+        return policy
+
+    def remove(self, path: str):
+        self.policies.remove(path)
 
 # Simple proxy between s3 client and the S3 server to randomly inject errors and simulate cases when the request succeeds but the wire got "broken"
 def true_or_false():
@@ -147,7 +201,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
                         "ThrottlingException",
                         "ThrottledException",
                         "Throttling",
-                        "SlowDownException",
+                        "SlowDownException",    
                         "SlowDown",
                         "RequestTimeTooSkewedException",
                         "RequestTimeTooSkewed",
@@ -157,11 +211,10 @@ class InjectingHandler(BaseHTTPRequestHandler):
                         "ExpiredTokenException",
                         ))
 
-    def __init__(self, policies, logger, s3_uri, max_retries, *args, **kwargs):
+    def __init__(self, policies: PolicyHandler, logger, s3_uri, *args, **kwargs):
         self.s3_uri = s3_uri
         self.policies = policies
         self.logger = logger
-        self.max_retries = max_retries
         super().__init__(*args, **kwargs)
         self.close_connection = False
 
@@ -182,24 +235,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
         return query_components
 
     def get_policy(self):
-        policy = self.policies.get(self.path)
-        if policy is None:
-            policy = Policy(self.max_retries)
-            policy.should_forward = true_or_false()
-            if policy.should_forward:
-                policy.should_fail = true_or_false()
-            else:
-                policy.should_fail = True
-
-            if policy.should_fail:
-                policy.server_should_fail = true_or_false()
-            self.policies.put(self.path, policy)
-
-        # Unfortunately MPU completion retry on already completed upload would introduce flakiness to unit tests, for example `s3_test`
-        if self.command == "POST" and "uploadId" in self.parsed_qs():
-            policy.should_forward = not policy.should_fail
-
-        return policy
+        return self.policies.get_policy(self.path)
 
     def get_retryable_http_codes(self):
         return random.choice(self.retryable_codes), random.choice(self.error_names)
@@ -269,7 +305,12 @@ class InjectingHandler(BaseHTTPRequestHandler):
             if content_length:
                 body = self.rfile.read(int(content_length))
 
-            if policy.should_forward:
+            should_forward = policy.should_forward
+            # Unfortunately MPU completion retry on already completed upload would introduce flakiness to unit tests, for example `s3_test`
+            if self.command == "POST" and "uploadId" in self.parsed_qs():
+                should_forward = not policy.should_fail
+
+            if should_forward:
                 target_url = self.s3_uri + self.path
                 headers = {key: value for key, value in self.headers.items()}
                 try:
@@ -329,12 +370,14 @@ class InjectingHandler(BaseHTTPRequestHandler):
 # addition, it is possible just to start this server using another script - `start_s3_proxy.py` to run it locally to
 # provide proxy between tests and the S3 server
 class S3ProxyServer:
-    def __init__(self, host: str, port: int, s3_uri: str, max_retries: int, seed: int, logger):
+    def __init__(self, host: str, port: int, s3_uri: str, max_retries: int, seed: int, logger, policies: PolicyHandler = None):
         self.logger = logger
         self.logger.info('Setting S3 proxy random seed to %s', seed)
         random.seed(seed)
         self.req_states = LRUCache(10000)
-        handler = partial(InjectingHandler, self.req_states, logger, s3_uri, max_retries)
+        if not policies:
+            policies = InjectErrorPolicyHandler(self.req_states, max_retries)
+        handler = partial(InjectingHandler, policies, logger, s3_uri)
         self.server = ThreadingHTTPServer((host, port), handler)
         self.server_thread = None
         self.server.request_queue_size = 1000
@@ -343,14 +386,20 @@ class S3ProxyServer:
         self.server.socket.listen(1000)
         self.is_running = False
         self.envs = {'PROXY_S3_SERVER_PORT': f'{port}', 'PROXY_S3_SERVER_HOST': f'{host}'}
+        self.oldvars = {}
 
     def _set_environ(self):
+        self.oldvars = { k : os.environ.get(k) for k in self.envs }
         for key, value in self.envs.items():
             os.environ[key] = value
 
     def _unset_environ(self):
         for key in self.envs.keys():
-            del os.environ[key]
+            v = self.oldvars.get(key)
+            if v:
+                os.environ[key] = v
+            elif os.environ.get(key):
+                del os.environ[key]
 
     def get_envs_settings(self):
         return self.envs

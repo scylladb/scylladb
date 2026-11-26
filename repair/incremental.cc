@@ -15,9 +15,13 @@ extern logging::logger rlogger;
 
 namespace repair {
 
+bool is_repaired(int64_t sstables_repaired_at, int64_t sstable_stats_repaired_at) {
+    return sstable_stats_repaired_at !=0 && sstable_stats_repaired_at <= sstables_repaired_at;
+}
+
 bool is_repaired(int64_t sstables_repaired_at, const sstables::shared_sstable& sst) {
     auto& stats = sst->get_stats_metadata();
-    bool repaired = stats.repaired_at !=0 && stats.repaired_at <= sstables_repaired_at;
+    bool repaired = is_repaired(sstables_repaired_at, stats.repaired_at);
     rlogger.debug("Checking sst={} repaired_at={} sstables_repaired_at={} repaired={}",
             sst->toc_filename(), stats.repaired_at, sstables_repaired_at, repaired);
     return repaired;
