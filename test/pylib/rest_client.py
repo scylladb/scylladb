@@ -496,6 +496,10 @@ class ScyllaRESTAPIClient:
             params['table'] = ','.join(tables)
         await self.client.post(f"/storage_service/tablets/snapshots", host=node_ip, params=params)
 
+    async def list_cluster_snapshots(self, node_ip: str) -> list[dict]:
+        """List the cluster snapshots with the tables each of them contains"""
+        return await self.client.get_json("/storage_service/tablets/snapshots", host=node_ip)
+
     async def delete_snapshot(self, node_ip: str, tag: str, keyspace: str = "") -> None:
         """Delete a snapshot by tag, optionally filtered by keyspace"""
         params = {
