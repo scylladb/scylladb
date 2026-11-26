@@ -2688,6 +2688,63 @@ end: {}
     }
 }
 
+void cluster_restore_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+    for (auto required_param : {"keyspace", "table", "snapshot"}) {
+        if (!vm.contains(required_param)) {
+            throw std::invalid_argument(fmt::format("missing required parameter: {}", required_param));
+        }
+        params[required_param] = vm[required_param].as<sstring>();
+    }
+    if (!vm.contains("location")) {
+        throw std::invalid_argument("missing required parameter: location");
+    }
+
+    auto locations = rjson::empty_array();
+    for (const auto& location : vm["location"].as<std::vector<sstring>>()) {
+        auto values = std::views::split(location, ","sv) | std::ranges::to<std::vector<sstring>>();
+        if (values.size() < 3 || values.size() > 4) {
+            throw std::invalid_argument(fmt::format("Invalid 'location' argument: {}", location));
+        }
+        auto entry = rjson::empty_object();
+        rjson::add(entry, "datacenter", rjson::from_string(values[0]));
+        rjson::add(entry, "endpoint", rjson::from_string(values[1]));
+        rjson::add(entry, "bucket", rjson::from_string(values[2]));
+        rjson::add(entry, "prefix", rjson::from_string(values.size() > 3 ? values[3] : sstring()));
+        rjson::push_back(locations, std::move(entry));
+    }
+
+    const auto restore_res = client.post("/storage_service/tablets/restore", std::move(params), request_body{"application/json", rjson::print(locations)});
+    const auto task_id = rjson::to_string_view(restore_res);
+    if (vm.contains("nowait")) {
+        fmt::print(R"(The task id of this operation is {}
+Please use the 'task' subcommands to manage the task.
+)",
+                   task_id);
+        return;
+    }
+
+    const auto url = seastar::format("/task_manager/wait_task/{}", task_id);
+    const auto wait_res = client.get(url);
+    const auto& status = wait_res.GetObject();
+    auto state = rjson::to_string_view(status["state"]);
+    fmt::print("{}", state);
+    int exit_code = EXIT_SUCCESS;
+    if (state != "done") {
+        exit_code = EXIT_FAILURE;
+        fmt::print(": {}", rjson::to_string_view(status["error"]));
+    }
+    fmt::print(R"(
+start: {}
+end: {}
+)",
+               rjson::to_string_view(status["start_time"]),
+               rjson::to_string_view(status["end_time"]));
+    if (exit_code != EXIT_SUCCESS) {
+        throw operation_failed_with_status{exit_code};
+    }
+}
+
 void migrate_to_tablets_start_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm["keyspace"].empty()) {
         throw std::invalid_argument("keyspace is required");
@@ -4346,6 +4403,25 @@ For more information, see: {}
                             typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to backup"),
                         },
                     },
+                    {
+                        "restore",
+                        "Restore a table from a cluster-wide backup in object storage",
+fmt::format(R"(
+The replicas of each tablet download the SSTables of the tablet from the
+backup location of their datacenter. No data is streamed between nodes.
+
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/cluster/restore.html")),
+                        {
+                            typed_option<sstring>("table", "The table to restore into"),
+                            typed_option<sstring>("snapshot,s", "The name of the snapshot to restore"),
+                            typed_option<std::vector<sstring>>("location,l", "Tuples of <dc>,<endpoint>,<bucket>[,<prefix>] locations to read the backup from. Repeat for each dc the keyspace replicates to."),
+                            typed_option<>("nowait", "Don't wait on the restore process"),
+                        },
+                        {
+                            typed_option<sstring>("keyspace", "The keyspace to restore into", 1),
+                        },
+                    },
                 }
             },
             {
@@ -4361,6 +4437,9 @@ For more information, see: {}
                     },
                     {
                         "backup", { cluster_backup_operation }
+                    },
+                    {
+                        "restore", { cluster_restore_operation }
                     },
                 }
             }

@@ -75,12 +75,11 @@ The backup holds the SSTables and their manifests only. It does not include the 
 must exist before the restore starts: recreate them from the schema backup taken with ``DESC SCHEMA WITH INTERNALS AND PASSWORDS``,
 as described in the :ref:`prerequisites <restore-prerequisites>`.
 
-There is no nodetool command for this restore yet. It is started through the REST API
-(see the :doc:`storage_service API reference </reference/api/storage-service>`), with
-``POST /storage_service/tablets/restore``. The query parameters are the destination ``keyspace`` and ``table``
-and the ``snapshot`` name. The request body is a JSON array with one entry per datacenter the keyspace replicates to,
-each giving the ``datacenter`` and the ``endpoint``, ``bucket`` and ``prefix`` of the backup location. ScyllaDB finds
-the backup in the location by the snapshot name.
+The restore is started with :doc:`nodetool cluster restore </operating-scylla/nodetool-commands/cluster/restore>`.
+It takes the destination keyspace and table, the ``--snapshot`` name, and one ``--location`` per datacenter the keyspace
+replicates to, each giving the datacenter and the endpoint, bucket and prefix of the backup location. ScyllaDB finds
+the backup in the location by the snapshot name. The command calls ``POST /storage_service/tablets/restore``
+of the REST API (see the :doc:`storage_service API reference </reference/api/storage-service>`).
 
 If the backup was taken from a keyspace or a table with a different name than the destination, also pass
 ``source_keyspace`` with the original keyspace name, ``source_table`` with the original table name, or both.
@@ -100,16 +99,13 @@ which skips the SSTables it already downloaded and repairs the tablets.
 
    .. code-block:: shell
 
-      curl -X POST -H 'Content-Type: application/json' \
-        'http://<node>:10000/storage_service/tablets/restore?keyspace=mykeyspace&table=team_roster&snapshot=mysnapshot' \
-        -d '[{"datacenter": "mydc",
-              "endpoint": "s3.us-east-2.amazonaws.com",
-              "bucket": "bucket-foo",
-              "prefix": "backups/mysnapshot"}]'
+      nodetool cluster restore mykeyspace --table team_roster --snapshot mysnapshot \
+        --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,backups/mysnapshot
 
-   The call returns the ID of the restore task.
+   The command waits for the restore to finish and prints its final status.
 
-#. Monitor the restore with the :doc:`nodetool tasks </operating-scylla/nodetool-commands/tasks/index>` commands, for example
+#. To run the restore in the background, add ``--nowait``. The command then prints the ID of the restore task and returns.
+   Monitor the task with the :doc:`nodetool tasks </operating-scylla/nodetool-commands/tasks/index>` commands, for example
    ``nodetool tasks wait <task ID>`` to wait for it to finish, or ``nodetool tasks status <task ID>`` to see its progress.
 
 .. note::

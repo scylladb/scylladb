@@ -98,4 +98,6 @@ See also
 
 :doc:`Nodetool restore </operating-scylla/nodetool-commands/restore/>`
 
+:doc:`Nodetool cluster restore </operating-scylla/nodetool-commands/cluster/restore/>`
+
 .. include:: nodetool-index.rst

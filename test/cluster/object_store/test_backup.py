@@ -3171,6 +3171,45 @@ async def test_cluster_snapshot_backup_and_restore_by_tag(manager: ScyllaCluster
                                         , object_storage, True, True, topology)
 
 
+async def run_nodetool_cluster_restore(object_storage, topology, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper
+    """
+    prefix = unique_name('kokomo')
+    await run_cluster_backup(object_storage, prefix, manager, snapshot_name, ks, cf, servers)
+    cql = manager.get_cql()
+    s = servers[0]
+    exe = await manager.server_get_exe(s.server_id)
+
+    async def restore(dst_ks, dst_cf, *options):
+        cmd = [exe, "nodetool", "-h", s.ip_addr, "cluster", "restore", dst_ks,
+               "--table", dst_cf,
+               "--snapshot", snapshot_name,
+               "--location", f"{s.datacenter},{object_storage.address},{object_storage.bucket_name},{prefix}",
+               *options]
+        res = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+        assert res.returncode == 0 and res.stdout.startswith('done'), f"nodetool cluster restore failed: {res.returncode=} {res.stdout=} {res.stderr=}"
+
+        # Restore reverts the tablet hints it forced on the table, which lets the
+        # balancer resize and rebalance it. Wait for that to settle: a migration in
+        # flight would double-count the moving replica in check_mutation_replicas()
+        await manager.api.quiesce_topology(s.ip_addr)
+        await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, dst_ks, dst_cf)
+
+    await cql.run_async(f"TRUNCATE {ks}.{cf}")
+    await restore(ks, cf)
+
+
+@pytest.mark.asyncio
+async def test_nodetool_cluster_restore(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that nodetool cluster restore restores a cluster backup and waits for the restore to finish
+    """
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_nodetool_cluster_restore, object_storage, topology)
+                                        , object_storage, True, True, topology)
+
+
 @pytest.mark.asyncio
 async def test_cluster_snapshot_backup_and_restore_by_tag_multidc(manager: ScyllaClusterManager, object_storage):
     """

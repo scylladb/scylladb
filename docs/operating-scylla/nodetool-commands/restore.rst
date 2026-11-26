@@ -76,4 +76,6 @@ See also
 
 :doc:`Nodetool backup </operating-scylla/nodetool-commands/backup/>`
 
+:doc:`Nodetool cluster restore </operating-scylla/nodetool-commands/cluster/restore/>`
+
 .. include:: nodetool-index.rst
