@@ -133,13 +133,21 @@ public:
 
     virtual ~server() = default;
 
-    // Makes sure listening sockets no longer generate new connections and aborts the
-    // connected sockets, so that new requests are not served and existing requests don't
-    // send responses back.
+    // Makes sure listening sockets no longer generate new connections and new requests
+    // are not received, waits (at most for the shutdown timeout) for the requests in
+    // flight on the connections to finish, and then shuts the connections down.
     //
-    // It does _not_ wait for any internal activity started by the established connections
-    // to finish. It's the .stop() method that does it
-    future<> shutdown();
+    // It does not abort the requests that run with this server's abort source. A request
+    // bounced to this shard runs with it even though its connection belongs to another
+    // shard, so a sharded server should call abort_requests() only once the connections
+    // of all shards are shut down.
+    future<> shutdown_connections();
+
+    // Aborts the requests that run with this server's abort source.
+    void abort_requests() noexcept;
+
+    // shutdown_connections() followed by abort_requests(), then waits for any internal
+    // activity started by the established connections to finish.
     future<> stop();
 
     future<> listen(socket_address addr,
