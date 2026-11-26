@@ -22,7 +22,7 @@ ks-filters  List of keyspaces
 ----------  -----------------------------------
 cf-filters  List of Tables (Column Families)
 ----------  -----------------------------------
-capacity    The capacity of the sampler; higher values increase accuracy at the cost of memory (default 256 keys).
+capacity    The capacity of the sampler; higher values increase accuracy at the cost of memory (default 256 keys, at most 10000).
 ----------  -----------------------------------
 size        The number of top partitions to list (default 10); must be smaller than capacity.
 ----------  -----------------------------------

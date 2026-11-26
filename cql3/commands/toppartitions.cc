@@ -123,8 +123,8 @@ public:
         if (duration <= 0ms || duration > max_duration) {
             throw exceptions::invalid_request_exception(format("duration must be in [1, {}] ms", max_duration.count()));
         }
-        if (capacity <= 0) {
-            throw exceptions::invalid_request_exception("capacity must be positive");
+        if (capacity <= 0 || size_t(capacity) > db::toppartitions_query::max_capacity) {
+            throw exceptions::invalid_request_exception(format("capacity must be in [1, {}]", db::toppartitions_query::max_capacity));
         }
         if (list_size <= 0) {
             throw exceptions::invalid_request_exception("list_size must be positive");

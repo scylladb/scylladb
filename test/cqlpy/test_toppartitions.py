@@ -96,6 +96,20 @@ def test_toppartitions_matches_rest(scylla_only, cql, test_keyspace):
         assert cql_reads[0].partition_key == rest_result['read'][0]['partition']
 
 
+# A capacity above the sampler's default of 256 must keep every key, not evict.
+def test_toppartitions_capacity_above_default(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        # cqlpy runs --smp 2, so each shard sees about 500 keys, above the old 256.
+        def traffic(cql, tables, done):
+            insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+            while not done():
+                for pk in range(1000):
+                    cql.execute(insert, [pk, 0])
+        _, writes = cql_toppartitions(cql, keyspace, cf, duration=10000, traffic=traffic, capacity=4096, list_size=4096)
+        assert len(writes) == 1000
+
+
 # With only the table given, nodetool's defaults (capacity 256, list_size 10) apply.
 def test_toppartitions_default_capacity_and_list_size(scylla_only, cql, test_keyspace):
     with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
@@ -115,6 +129,7 @@ def test_toppartitions_default_capacity_and_list_size(scylla_only, cql, test_key
     "capacity = 20 AND list_size = 512",  # list_size must be <= capacity
     "capacity = 20 AND list_size = 0",    # list_size must be positive
     "capacity = -1 AND list_size = -2",   # capacity must be positive
+    "capacity = 10001",                   # capacity is capped
     "kind = 'bogus'",                     # only 'read' or 'write'
     "duration = 0",                       # no sampling window
     "duration = 3600001",                 # window is capped at an hour
@@ -173,8 +188,8 @@ def test_toppartitions_malformed_is_a_syntax_error(scylla_only, cql, query):
         cql.execute(query)
 
 
-# capacity is not capped: like nodetool's, it sizes the merged result, not the per-shard trackers.
-@pytest.mark.parametrize("capacity,list_size", [(2, 1), (1000000, 10)])
+# Both ends of the accepted capacity range work.
+@pytest.mark.parametrize("capacity,list_size", [(2, 1), (10000, 10)])
 def test_toppartitions_capacity_boundaries(scylla_only, cql, test_keyspace, capacity, list_size):
     with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
         keyspace, cf = table.split('.')

@@ -14,7 +14,7 @@ Parameters:
 * ``local``: mandatory, must be ``true``
 * ``keyspace_name``, ``table_name``: sample one keyspace or one table (default: all tables)
 * ``duration``: sampling window in milliseconds (``-d``, default 5000, at most one hour)
-* ``capacity``: sampler capacity (``-s``, default 256)
+* ``capacity``: sampler capacity (``-s``, default 256, at most 10000)
 * ``list_size``: partitions reported per sampler (``-k``, default 10 or ``capacity`` if smaller, at most ``capacity``)
 * ``kind``: ``'read'`` or ``'write'`` to report a single sampler (``-a``, default both)
 
