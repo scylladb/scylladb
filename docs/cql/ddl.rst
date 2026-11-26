@@ -352,7 +352,8 @@ other.
 
 :doc:`Repair </operating-scylla/procedures/maintenance/repair>` doesn't apply to strongly
 consistent keyspaces: Raft replicates their writes. A repair of their tables is refused,
-and :doc:`automatic repair </features/automatic-repair>` skips them.
+:doc:`automatic repair </features/automatic-repair>` skips them, and neither the keyspace
+nor its tables accept the automatic repair options.
 
 .. _preferred-rack-option:
 

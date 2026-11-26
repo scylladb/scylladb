@@ -8,6 +8,7 @@
 
 #include "statement_helpers.hh"
 
+#include "db/cluster_config_registry.hh"
 #include "exceptions/exceptions.hh"
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_options.hh"
@@ -60,6 +61,17 @@ std::optional<locator::tablet_version_block> tablet_version_block_for(const serv
             && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)
             ? options.get_tablet_version_block()
             : std::nullopt;
+}
+
+void reject_auto_repair_options_for_strong_consistency(const property_definitions& props) {
+    for (const auto name : {db::cluster_config_registry::option_name::auto_repair_enabled,
+            db::cluster_config_registry::option_name::auto_repair_threshold_in_seconds}) {
+        const sstring property(name);
+        if (props.has_property(property) && !props.is_null_keyword(property)) {
+            throw exceptions::configuration_exception(seastar::format(
+                    "Property '{}' is not supported in strongly consistent keyspaces: repair doesn't apply to them", name));
+        }
+    }
 }
 
 }

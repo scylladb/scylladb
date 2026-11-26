@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cql3/cql_statement.hh"
+#include "cql3/statements/property_definitions.hh"
 #include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
 
@@ -39,5 +40,10 @@ void validate_write_consistency_level(const db::consistency_level& cl);
 // targeting a single partition is served all the same, just without routing information.
 std::optional<locator::tablet_version_block> tablet_version_block_for(const service::query_state& qs,
         const query_options& options, bool may_use_token_aware_routing);
+
+// Repair doesn't apply to the tables of a strongly consistent keyspace.
+// Throw exceptions::configuration_exception if props specify any invalid
+// repair property.
+void reject_auto_repair_options_for_strong_consistency(const property_definitions& props);
 
 }
