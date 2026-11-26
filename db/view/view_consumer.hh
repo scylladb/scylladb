@@ -56,6 +56,9 @@ protected:
     virtual reader_permit& permit() = 0;
 
     void add_fragment(auto&& fragment);
+    // Replaces the views to build with their current schemas, so they match the
+    // base schema read at the same point. Call with no preemption in between.
+    void refresh_views_to_build();
     void flush_fragments();
 
 public:

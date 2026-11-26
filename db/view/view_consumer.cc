@@ -41,12 +41,26 @@ void view_consumer::add_fragment(auto&& fragment) {
     }
 }
 
+void view_consumer::refresh_views_to_build() {
+    // A schema change updates the base table and its views together, without yielding.
+    const auto& current_views = base()->views();
+    std::vector<view_ptr> refreshed;
+    for (const auto& v : _views_to_build) {
+        auto it = std::ranges::find(current_views, v->id(), [] (const view_ptr& c) { return c->id(); });
+        if (it != current_views.end()) {
+            refreshed.push_back(*it);
+        }
+    }
+    _views_to_build = std::move(refreshed);
+}
+
 void view_consumer::flush_fragments() {
     inject_failure("view_builder_flush_fragments");
     _as.check();
     if (!_fragments.empty()) {
         _fragments.emplace_front(*reader().schema(), permit(), partition_start(get_current_key(), tombstone()));
         auto base_schema = base()->schema();
+        refresh_views_to_build();
         auto fragments_reader = make_mutation_reader_from_fragments(reader().schema(), permit(), std::move(_fragments));
         auto close_reader = defer([&fragments_reader] noexcept { fragments_reader.close().get(); });
         fragments_reader.upgrade_schema(base_schema);

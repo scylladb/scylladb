@@ -1915,6 +1915,27 @@ def test_view_build_status_removed_on_drop_while_building(scylla_only, cql, test
         finally:
             cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {mv}')
 
+# Rename a base table's key column while a view is being built. The view
+# builder is paused after it picked the view's schema for a partition, but
+# before it reads the base's schema to generate the partition's view updates.
+# Reproduces SCYLLADB-6324 (the old view schema was paired with the new base
+# schema, which aborted the node).
+# scylla_only because it uses error injection.
+@pytest.mark.parametrize("test_keyspace", ["vnodes", "tablets"], indirect=True)
+def test_rename_base_column_while_building(scylla_only, cql, test_keyspace):
+    injection = 'view_builder_consume_end_of_partition_delay'
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (1, 2, 3)')
+        with scylla_inject_error(cql, injection, one_shot=True):
+            with new_materialized_view(cql, table, '*', 'c, p', 'c is not null and p is not null') as mv:
+                try:
+                    wait_for_injection_enter(cql, injection)
+                    cql.execute(f'ALTER TABLE {table} RENAME c TO c2')
+                finally:
+                    message_injection(cql, injection)
+                wait_for_view_built(cql, mv)
+                assert [(2, 1, 3)] == list(cql.execute(f'SELECT c2, p, v FROM {mv}'))
+
 # A UDT literal with a case-sensitive field name in a view's WHERE clause.
 # The view's WHERE clause is saved in the schema as text, and parsed again
 # when the view is used, so the field name must be saved with its quotes.
