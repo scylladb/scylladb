@@ -123,6 +123,11 @@ ninja build/<mode>/scylla
 - Tests in debug are always slower, so if needed, reduce number of iterations, rows, data used, cycles, etc. in debug mode.
 - Tests should strive to be repeatable, and not use random input that will make their results unpredictable.
 - Tests should consume as little resources as possible. Prefer running tests on a single node if it is sufficient, for example.
+- Test CQL behaviour in `test/cqlpy`, Scylla-only behaviour included (the `scylla_only` fixture). Use boost tests only for what cqlpy cannot reach, such as internal APIs or exact node-wide counters, and `test/cluster` only when the test needs more than one node.
+- Base the verdict of a test on observable state: query results, metrics, system tables, REST responses. Check log lines only when nothing else shows the event, such as the end of a configuration reload: logs are output and can change at any time.
+- Check a signal the test owns, such as a per-table metric or the test's own table, not a node-wide counter that other tests and background work also move. A cqlpy test may share its node with other tests, so compare values before and after the operation instead of with absolute numbers.
+- If an existing error injection reaches a case, test the case with it. Add a new injection point to production code only when nothing else reaches the case: each one is a hook in production code that tests then depend on.
+- Write expected values and error messages as literals in the test, in full. Do not compute them from the code under test or assemble them from fragments.
 
 ## Git and GitHub Workflow
 - Never push a branch, open a pull request or force-push without being asked to.
