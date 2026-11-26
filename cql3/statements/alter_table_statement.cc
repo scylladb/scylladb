@@ -20,6 +20,7 @@
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/alter_type_statement.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "exceptions/exceptions.hh"
 #include "index/secondary_index_manager.hh"
 #include "prepared_statement.hh"
@@ -548,6 +549,10 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
         return make_pair(std::move(new_base_schema), std::move(view_updates));
     }
     case alter_table_statement::type::ttl:
+        // Not supported yet: SCYLLADB-6584.
+        if (_ttl_change && strong_consistency::is_strongly_consistent(db, keyspace())) {
+            throw exceptions::configuration_exception("Per-row TTL is not supported in strongly consistent keyspaces");
+        }
         if (!db.features().cql_row_ttl) {
             throw exceptions::invalid_request_exception("The CQL per-row TTL feature is not yet supported by this cluster. Upgrade all nodes to use it.");
         }

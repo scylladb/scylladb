@@ -350,6 +350,19 @@ The ``consistency`` option cannot be changed after the keyspace is created. To c
 it, recreate the keyspace. ``ALTER KEYSPACE`` accepts the current value and rejects any
 other.
 
+Tables in a keyspace with `local` or `global` consistency do not support:
+
+- ``counter`` columns
+- materialized views and indexes
+- CDC
+- per-row TTL
+- per-partition rate limits (``per_partition_rate_limit``)
+- large data guardrails (``large_data_guardrails_enabled``)
+- ``paxos_grace_seconds``
+- the ``logstor`` storage engine
+
+The ``speculative_retry`` option has no effect on them.
+
 .. _preferred-rack-option:
 
 Keyspace ``preferred_rack`` option :label-caution:`Experimental`
@@ -1039,6 +1052,8 @@ when replicas are slow or unresponsive.  The following are legal values (case-in
 ========================= ================ =============================================================================
 
 This setting does not affect reads with consistency level ``ALL`` because they already query all replicas.
+It does not affect tables in keyspaces with :ref:`strong consistency <consistency-option>` either:
+their reads query a single replica.
 
 Note that frequently reading from additional replicas can hurt cluster performance.
 When in doubt, keep the default ``99PERCENTILE``.

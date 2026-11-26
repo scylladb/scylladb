@@ -12,6 +12,7 @@
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "alternator/ttl_tag.hh"
 #include "compaction/compaction_strategy_impl.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
@@ -181,6 +182,13 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         throw exceptions::configuration_exception("Per-partition rate limit is not supported in strongly consistent keyspaces");
     }
 
+    // A statement can set this tag with scylla_tags, and DESCRIBE prints it for a
+    // TTL column. Per-row TTL is not supported yet: SCYLLADB-6584.
+    auto tags_ext = get_schema_extension<db::tags_extension>(schema_extensions, db::tags_extension::NAME);
+    if (tags_ext && tags_ext->tags().contains(TTL_TAG_KEY) && strong_consistency::is_strongly_consistent(db, ks_name)) {
+        throw exceptions::configuration_exception("Per-row TTL is not supported in strongly consistent keyspaces");
+    }
+
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
     validate_tombstone_gc_options(tombstone_gc_options, db, ks_name);
 
@@ -193,6 +201,9 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
+    if (has_property(KW_PAXOSGRACESECONDS) && strong_consistency::is_strongly_consistent(db, ks_name)) {
+        throw exceptions::configuration_exception("paxos_grace_seconds is not supported in strongly consistent keyspaces");
+    }
     validate_minimum_int(KW_PAXOSGRACESECONDS, 0, DEFAULT_GC_GRACE_SECONDS);
     // Both end up as the TTL of cells, which the sstable reader rejects above
     // max_ttl, like USING TTL does (see attributes::get_time_to_live()).
@@ -253,6 +264,10 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     if (has_property(KW_LARGE_DATA_GUARDRAILS_ENABLED) && get_boolean(KW_LARGE_DATA_GUARDRAILS_ENABLED, false)) {
+        // Not supported yet: SCYLLADB-6585.
+        if (strong_consistency::is_strongly_consistent(db, ks_name)) {
+            throw exceptions::configuration_exception("Large data guardrails are not supported in strongly consistent keyspaces");
+        }
         if (!db.features().large_data_guardrails) {
             throw exceptions::configuration_exception("large_data_guardrails_enabled cannot be used until all nodes in the cluster enable this feature");
         }

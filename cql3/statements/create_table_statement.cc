@@ -85,6 +85,12 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
     bool created = true;
     cql3::cql_warnings_vec warnings;
 
+    // The checks ran when the statement was prepared, but the keyspace may
+    // have been dropped and created again with other options since then.
+    auto db = qp.db();
+    _properties->validate(db, keyspace(), _properties->make_schema_extensions(db.extensions()));
+    validate_columns_for_keyspace(db);
+
     if (auto warning = check_deprecated_compaction_strategy(_properties->get_compaction_strategy_class(),
                 qp.db().get_config().allow_deprecated_size_tiered_compaction_strategy())) {
         warnings.emplace_back(std::move(*warning));
@@ -182,6 +188,32 @@ void create_table_statement::add_column_metadata_from_aliases(schema_builder& bu
     }
 }
 
+void create_table_statement::validate_columns_for_keyspace(const data_dictionary::database db) const {
+    bool ks_uses_tablets;
+    try {
+        ks_uses_tablets = db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets();
+    } catch (const data_dictionary::no_such_keyspace& e) {
+        throw exceptions::invalid_request_exception("Cannot create a table in a non-existent keyspace: " + keyspace());
+    }
+    const bool ks_strongly_consistent = strong_consistency::is_strongly_consistent(db, keyspace());
+    const bool has_counters = std::ranges::any_of(_columns | std::views::values, [] (const data_type& type) {
+        return type->is_counter();
+    });
+
+    if (ks_strongly_consistent && has_counters) {
+        throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: counters are not supported in strongly consistent keyspaces", keyspace(), column_family()));
+    }
+
+    if (ks_uses_tablets && has_counters && !db.features().counters_with_tablets) {
+        throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: Counters are not yet supported with tablets", keyspace(), column_family()));
+    }
+
+    // Not supported yet: SCYLLADB-6584.
+    if (ks_strongly_consistent && _ttl_column) {
+        throw exceptions::configuration_exception("Per-row TTL is not supported in strongly consistent keyspaces");
+    }
+}
+
 std::unique_ptr<prepared_statement>
 create_table_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     // Cannot happen; create_table_statement is never instantiated as a raw statement
@@ -252,14 +284,6 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
     auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _ttl_column, _properties.properties()->get_id());
 
-    bool ks_uses_tablets;
-    try {
-        ks_uses_tablets = db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets();
-    } catch (const data_dictionary::no_such_keyspace& e) {
-        throw exceptions::invalid_request_exception("Cannot create a table in a non-existent keyspace: " + keyspace());
-    }
-    const bool ks_strongly_consistent = strong_consistency::is_strongly_consistent(db, keyspace());
-
     std::optional<std::map<bytes, data_type>> defined_multi_cell_columns;
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
@@ -267,14 +291,6 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
         if (has_default_ttl && pt.is_counter()) {
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
-        }
-
-        if (ks_strongly_consistent && pt.is_counter()) {
-            throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: counters are not supported in strongly consistent keyspaces", keyspace(), cf_name));
-        }
-
-        if (ks_uses_tablets && pt.is_counter() && !db.features().counters_with_tablets) {
-            throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: Counters are not yet supported with tablets", keyspace(), cf_name));
         }
 
         if (pt.get_type()->is_multi_cell()) {
@@ -297,6 +313,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         }
         stmt->_columns.emplace(id, pt.get_type()); // we'll remove what is not a column below
     }
+    stmt->validate_columns_for_keyspace(db);
     if (_key_aliases.empty()) {
         throw exceptions::invalid_request_exception("No PRIMARY KEY specified (exactly one required)");
     } else if (_key_aliases.size() > 1) {

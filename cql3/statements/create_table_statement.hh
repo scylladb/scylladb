@@ -92,6 +92,8 @@ private:
 
     void apply_properties_to(schema_builder& builder, const data_dictionary::database) const;
 
+    void validate_columns_for_keyspace(const data_dictionary::database db) const;
+
     void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const;
 
     ::shared_ptr<event_t> created_event() const;
