@@ -9,6 +9,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <unordered_set>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -39,6 +40,10 @@ struct table_request_stats {
 /// Metrics of the strongly consistent tablets of one table on this shard. At most one
 /// instance per keyspace and table name may exist at a time, or their series would collide.
 class table_metrics : public seastar::weakly_referencable<table_metrics> {
+public:
+    enum class reporting { none, per_node, per_shard };
+
+private:
     lw_shared_ptr<raft::server_stats> _server_stats = make_lw_shared<raft::server_stats>();
     lw_shared_ptr<raft_rpc::stats> _rpc_stats = make_lw_shared<raft_rpc::stats>();
     lw_shared_ptr<table_request_stats> _request_stats = make_lw_shared<table_request_stats>();
@@ -59,6 +64,11 @@ class table_metrics : public seastar::weakly_referencable<table_metrics> {
     };
     sample sweep() const;
 
+    sstring _ks_name;
+    sstring _cf_name;
+    // Set once the series of the mode are registered.
+    std::optional<reporting> _mode;
+
     // Destroyed first, so that no gauge is evaluated once _servers is gone.
     seastar::metrics::metric_groups _metrics;
 
@@ -67,12 +77,13 @@ class table_metrics : public seastar::weakly_referencable<table_metrics> {
     void register_apply_metrics(const raft_metrics_options& options);
 
 public:
-    enum class reporting { none, per_node, per_shard };
-
     table_metrics(const sstring& ks_name, const sstring& cf_name, reporting mode);
     // The collector of the gauges captures `this`.
     table_metrics(const table_metrics&) = delete;
     table_metrics& operator=(const table_metrics&) = delete;
+
+    // Re-registers the series; the counters carry over, as the stats are kept.
+    void set_reporting(reporting mode);
 
     // Shared with the raft servers, RPC modules and state machines of the tablets.
     lw_shared_ptr<raft::server_stats> server_stats() const { return _server_stats; }

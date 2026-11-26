@@ -2061,6 +2061,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 cluster_config_db_config_bridge.stop().get();
             });
 
+            static sharded<db::cluster_config_manager::config_callback_registration> aggregated_metrics_callbacks;
+            db::plug_aggregated_metrics(db, cluster_config_manager, aggregated_metrics_callbacks).get();
+            auto unplug_aggregated_metrics = defer_verbose_shutdown("aggregated_metrics", [&db] {
+                db::unplug_aggregated_metrics(db, aggregated_metrics_callbacks).get();
+            });
+
             static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> scrub_period_registrations;
             scrub_period_registrations.start(std::nullopt).get();
             auto stop_scrub_period_registrations = defer_verbose_shutdown("auto scrub config callbacks", [] {
@@ -2175,6 +2181,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto early_stop_sc_groups = defer_verbose_shutdown("strongly consistent groups", [&] {
                 groups_manager.local().stop_all_shards().get();
             });
+            groups_manager.invoke_on_all([] (service::strong_consistency::groups_manager& m) {
+                m.watch_aggregated_metrics(cluster_config_manager.local());
+            }).get();
 
             checkpoint(stop_signal, "initializing strongly consistent coordinator");
             sharded<service::strong_consistency::coordinator> sc_coordinator;
