@@ -755,7 +755,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
                     ops_id, filename, targets, total_size, get_bw(total_size, start_time));
         }
     }
-    co_await utils::get_local_injector().inject("tablet_stream_files_end_wait", utils::wait_for_message(std::chrono::seconds(60)));
+    co_await utils::get_local_injector().inject("tablet_stream_files_end_wait", utils::wait_for_message(std::chrono::minutes(5)));
     if (error) {
         blogger.warn("fstream[{}] Master failed sending files_nr={} files={} targets={} send_size={} bw={} error={}",
                 ops_id, sources.size(), sources, targets, ops_total_size, get_bw(ops_total_size, ops_start_time), error);
