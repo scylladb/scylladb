@@ -10,6 +10,7 @@ target_sources(sstables
     kl/reader.cc
     metadata_collector.cc
     m_format_read_helpers.cc
+    mx/partition_codec.cc
     mx/partition_reversing_data_source.cc
     mx/reader.cc
     mx/writer.cc
