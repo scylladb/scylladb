@@ -1481,6 +1481,29 @@ future<> snapshot_table_helper::delete_snapshot_schema_rows(std::string_view sna
     });
 }
 
+future<> snapshot_table_helper::delete_snapshot_table_schema_row(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        bool drop_keyspace_row, std::optional<std::pair<std::string_view, utils::UUID>> commit, int64_t write_timestamp, db::consistency_level cl) {
+    sstring query = format("BEGIN BATCH DELETE FROM {}.{} USING TIMESTAMP ? WHERE snapshot_name = ? AND keyspace_name = ? AND table_name = ?;",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLES);
+    query_data_vector values{ write_timestamp, sstring(snapshot_name), sstring(ks), sstring(table) };
+    if (drop_keyspace_row) {
+        query += format(" DELETE FROM {}.{} USING TIMESTAMP ? WHERE snapshot_name = ? AND keyspace_name = ?;",
+                system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_KEYSPACES);
+        values.emplace_back(write_timestamp);
+        values.emplace_back(sstring(snapshot_name));
+        values.emplace_back(sstring(ks));
+    }
+    if (commit) {
+        query += format(" INSERT INTO {}.{} (tag, attempt, committed) VALUES (?, ?, true);",
+                system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_ATTEMPTS);
+        values.emplace_back(sstring(commit->first));
+        values.emplace_back(commit->second);
+    }
+    query += " APPLY BATCH";
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(), values,
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
 future<> snapshot_table_helper::delete_snapshot_nodes_rows(std::string_view snapshot_name, int64_t write_timestamp, db::consistency_level cl) {
     static const sstring query = format("DELETE FROM {}.{} USING TIMESTAMP ? WHERE snapshot_name = ?",
             system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_NODES);
