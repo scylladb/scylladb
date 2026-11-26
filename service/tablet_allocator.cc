@@ -3688,7 +3688,11 @@ public:
     }
 
     // Changes the candidates of `nodes`, which no later plan looks at.
+    //
+    // The nodes take turns in random order, because a tablet scheduled on one node is
+    // no longer a candidate on the others, so the node planned first would get the pick.
     plan_generator make_intranode_plan(dc_rack_plan_state& state, migration_plan& plan, node_load_map& nodes, const std::unordered_set<host_id>& skip_nodes) {
+        std::vector<plan_generator> node_plans;
         for (auto&& [host, node_load] : nodes) {
             if (skip_nodes.contains(host)) {
                 lblogger.debug("Skipped balancing of node {}", host);
@@ -3698,10 +3702,12 @@ public:
             for (auto& shard : node_load.shards) {
                 drop_strongly_consistent_candidates(shard);
             }
-            auto node_plan = make_node_plan(state, plan, nodes, host, node_load);
-            while (co_await node_plan()) {
-                co_yield stop_iteration::no;
-            }
+            node_plans.push_back(make_node_plan(state, plan, nodes, host, node_load));
+        }
+        std::ranges::shuffle(node_plans, rand_engine());
+        auto turns = take_turns(std::move(node_plans));
+        while (co_await turns()) {
+            co_yield stop_iteration::no;
         }
     }
 
