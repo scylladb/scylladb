@@ -330,6 +330,26 @@ snapshot_ctl::get_snapshot_details() {
     }));
 }
 
+future<std::vector<snapshot_ctl::cluster_snapshot_info>> snapshot_ctl::list_cluster_snapshots() {
+    auto holder = _ops.hold();
+    db::snapshot_table_helper sth(_qp.local());
+    std::vector<cluster_snapshot_info> res;
+    for (auto& snapshot : co_await sth.get_snapshots()) {
+        // The table rows live under the committed attempt's name. A marker
+        // with no committed attempt belongs to a snapshot that is going away.
+        const auto name = co_await sth.find_committed_snapshot_name(snapshot.name);
+        if (!name) {
+            snap_log.debug("list_cluster_snapshots: skipping '{}', it has no committed attempt", snapshot.name);
+            continue;
+        }
+        auto& info = res.emplace_back(sstring(snapshot.name), snapshot.created_at);
+        for (auto& table : co_await sth.get_snapshot_tables(*name)) {
+            info.tables.emplace_back(std::move(table.keyspace_name), std::move(table.table_name));
+        }
+    }
+    co_return res;
+}
+
 future<int64_t> snapshot_ctl::true_snapshots_size() {
     co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<int64_t> {
         int64_t total = 0;

@@ -156,6 +156,17 @@ public:
     // rejected unless `force` is passed true, which deletes the backup along with the snapshot.
     future<tasks::task_id> clear_cluster_snapshot(sstring tag, bool force);
 
+    struct cluster_snapshot_info {
+        sstring tag;
+        db_clock::time_point created_at;
+        // (keyspace, table) pairs
+        std::vector<std::pair<sstring, sstring>> tables;
+    };
+
+    // Lists the committed cluster snapshots from the snapshot catalog, so any
+    // node gives the same answer. A snapshot taken per node is not listed.
+    future<std::vector<cluster_snapshot_info>> list_cluster_snapshots();
+
     future<> disable_all_operations();
 
     // Must be called on shard 0
