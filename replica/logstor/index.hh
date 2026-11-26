@@ -18,6 +18,7 @@
 #include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "utils/double-decker.hh"
+#include "utils/estimated_histogram.hh"
 #include "utils/logalloc.hh"
 #include "utils/on_internal_error.hh"
 #include "utils/phased_barrier.hh"
@@ -187,6 +188,42 @@ struct primary_index_usage {
     uint64_t live_record_bytes{0};
 };
 
+// Gives the number of bucket offsets in the histogram of the record sizes.
+// The number must be the same as in the histogram of the partition sizes of an sstable, because
+// the column_family API merges the two histograms, and merge() adds their buckets by position.
+// With a different number, the bucket of the values above the last offset of one histogram goes
+// into an ordinary bucket of the other.
+inline constexpr size_t record_size_bucket_count = 150;
+
+// Counts the live records of an index by frame size. The index adds the frame size of a record
+// when the record becomes live, and removes it when the record becomes dead.
+class record_size_histogram {
+    utils::estimated_histogram _histogram{record_size_bucket_count};
+    // Is true after remove() reported a mismatch, so that the mismatch, which nothing corrects,
+    // does not log an error at each later remove().
+    bool _mismatch_reported = false;
+
+public:
+    void add(uint32_t frame_size) noexcept {
+        _histogram.add(frame_size);
+    }
+
+    // Removes `frame_size` from the histogram.
+    // When the bucket of `frame_size` is empty, the function changes nothing, so that the bucket
+    // does not go below 0, and it reports an internal error for the first such remove only. The
+    // error stops the node only when the node is set to abort on an internal error, because the
+    // histogram gives statistics only.
+    void remove(uint32_t frame_size) noexcept {
+        if (!_histogram.remove(frame_size) && !std::exchange(_mismatch_reported, true)) {
+            on_internal_error_noexcept(logstor_logger, fmt::format("Removing a record of {} bytes from an empty record size bucket", frame_size));
+        }
+    }
+
+    const utils::estimated_histogram& histogram() const noexcept {
+        return _histogram;
+    }
+};
+
 // The primary_index class maps each key of one table on one shard to the location and the
 // timestamp of the newest record of the key, and it keeps the entries in a B+tree in index key
 // order. An entry can also link to the cached partition of its key in the logstor cache.
@@ -213,6 +250,7 @@ class primary_index final {
     tree_type _entries;
     size_t _key_count = 0;
     uint64_t _live_record_bytes = 0;
+    record_size_histogram _record_sizes;
 
     // Each read guard holds an operation of this phaser, so that await_read_guards() can wait
     // for the guards that exist.
@@ -683,6 +721,11 @@ public:
         return _region.occupancy();
     }
 
+    // Returns the live records of the index counted by frame size.
+    const utils::estimated_histogram& record_sizes() const noexcept {
+        return _record_sizes.histogram();
+    }
+
 private:
     void evict_cached_partition(const primary_index_entry& e) noexcept {
         if (e._cached_entry) {
@@ -693,6 +736,7 @@ private:
     void space_accounting_on_record_added(record_location location) noexcept {
         _space_accounting.on_add_record(location);
         _live_record_bytes += location.size;
+        _record_sizes.add(location.size);
     }
 
     void space_accounting_on_record_freed(record_location location) noexcept {
@@ -702,6 +746,7 @@ private:
         }
         _space_accounting.on_free_record(location);
         _live_record_bytes -= location.size;
+        _record_sizes.remove(location.size);
     }
 
     void space_accounting_on_record_moved(record_location from, record_location to) noexcept {
@@ -710,8 +755,12 @@ private:
                     from.size, _live_record_bytes));
         }
         _space_accounting.on_move_record(from, to);
-        _live_record_bytes += to.size;
-        _live_record_bytes -= from.size;
+        if (from.size != to.size) {
+            _live_record_bytes += to.size;
+            _live_record_bytes -= from.size;
+            _record_sizes.remove(from.size);
+            _record_sizes.add(to.size);
+        }
     }
 
     // Evicts the cached partition of an entry that the tree erases, and frees its record in the

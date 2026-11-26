@@ -240,6 +240,9 @@ future<json::json_return_type> get_cf_unleveled_sstables(sharded<replica::databa
 // no partition of the table, so that the shard does not change the minimum of the reduce.
 int64_t min_partition_size(replica::column_family& cf) {
     int64_t res = INT64_MAX;
+    if (auto logstor_sizes = cf.logstor_record_size_histogram(); logstor_sizes.count() > 0) {
+        res = logstor_sizes.min();
+    }
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::min(res, i->get_stats_metadata().estimated_partition_size.min());
     }
@@ -253,7 +256,7 @@ json::json_return_type min_partition_size_json(int64_t res) {
 }
 
 int64_t max_partition_size(replica::column_family& cf) {
-    int64_t res = 0;
+    int64_t res = cf.logstor_record_size_histogram().max();
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::max(i->get_stats_metadata().estimated_partition_size.max(), res);
     }
@@ -751,7 +754,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     // FIXME: this refers to partitions, not rows.
     cf::get_estimated_row_size_histogram.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(db, req->get_path_param("name"), utils::estimated_histogram(0), [](replica::column_family& cf) {
-            utils::estimated_histogram res(0);
+            // A table keeps its data either in logstor or in sstables, so only one of the two adds
+            // counts to `res`.
+            // The reduce step merges the histograms of the shards into estimated_histogram(0), and
+            // merge() gives the result the standard bucket offsets of utils::estimated_histogram, so
+            // the logstor histogram must use these offsets.
+            auto res = cf.logstor_record_size_histogram();
             for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res.merge(i->get_stats_metadata().estimated_partition_size);
             }

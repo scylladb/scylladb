@@ -140,8 +140,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_index_key_hashes_key_representation) {
     BOOST_REQUIRE(key1 != key0);
 }
 
-// Checks that primary_index accounting callbacks track live bytes across
-// inserts, overwrites, relocations, erases, range erases, and clear().
+// Checks that primary_index accounting callbacks track live bytes and the record size histogram
+// across inserts, overwrites, relocations, erases, range erases, and clear().
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     auto schema = make_logstor_schema();
     struct accounting_subscriber : space_accounting_subscriber {
@@ -161,6 +161,20 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
             return std::count_if(added_locations.begin(), added_locations.end(), [&] (record_location loc) {
                 return is_live(loc);
             });
+        }
+
+        // Returns the counts of the live records by size, in the buckets of the record size
+        // histogram.
+        std::vector<int64_t> live_size_buckets() const {
+            auto live = added_locations;
+            for (auto loc : freed_locations) {
+                live.erase(std::ranges::find(live, loc));
+            }
+            utils::estimated_histogram sizes(record_size_bucket_count);
+            for (auto loc : live) {
+                sizes.add(loc.size);
+            }
+            return sizes.get_buckets();
         }
 
         void on_add_record(record_location loc) noexcept override {
@@ -189,9 +203,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
 
     // The index counts the bytes of the records it points at for the table it belongs to, which is
     // the same number the subscriber accumulates, so the two must agree after every operation.
+    // The record size histogram of the index must also count the sizes of the live records that
+    // the subscriber has.
     auto check_live_bytes = [&] (ssize_t expected) {
         BOOST_REQUIRE_EQUAL(accounting.live_bytes, expected);
         BOOST_REQUIRE_EQUAL(index.get_usage().live_record_bytes, uint64_t(expected));
+        BOOST_REQUIRE(std::ranges::equal(index.record_sizes().get_buckets(), accounting.live_size_buckets()));
     };
 
     const auto pk0 = make_primary_index_key(*schema, "pk0");

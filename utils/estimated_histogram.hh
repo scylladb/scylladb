@@ -571,6 +571,22 @@ public:
     }
 
     /**
+     * Decrements the count of the bucket that add(n) increments, so that the histogram can count
+     * a set of values that changes.
+     * @return false, with no change to the histogram, if that bucket is empty
+     */
+    [[nodiscard]] bool remove(int64_t n) noexcept {
+        auto pos = std::ranges::lower_bound(bucket_offsets, n) - bucket_offsets.begin();
+        if (buckets[pos] == 0) {
+            return false;
+        }
+        buckets[pos]--;
+        _count--;
+        _sample_sum -= n;
+        return true;
+    }
+
+    /**
      * Increments the count of the bucket closest to n, rounding UP.
      * when using sampling, the number of items in the bucket will
      * be increase so that the overall number of items will be equal

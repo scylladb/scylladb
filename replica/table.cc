@@ -2649,6 +2649,10 @@ uint64_t table::logstor_key_count() const {
     return uses_logstor() ? logstor_index().get_usage().key_count : 0;
 }
 
+utils::estimated_histogram table::logstor_record_size_histogram() const {
+    return uses_logstor() ? logstor_index().record_sizes() : utils::estimated_histogram(0);
+}
+
 utils::file_size_stats table::live_disk_space_used() const {
     const int64_t logstor_size = logstor_disk_space_used();
     return _stats.sstables_live_disk_space_used.clamped_to_zero() + utils::file_size_stats{logstor_size, logstor_size};

@@ -160,10 +160,10 @@ def test_column_family_compaction_strategy(cql, this_dc, rest_api):
 # shows, is the minimum of the shards that hold partitions of the table.
 # The table has one partition, so only one shard holds a partition of the
 # table, and a shard that holds no partition must not make the minimum 0.
-def test_column_family_min_row_size(cql, this_dc, rest_api):
+def test_column_family_min_row_size(cql, this_dc, rest_api, storage_engine):
     ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
     with new_test_keyspace(cql, ksdef) as test_keyspace:
-        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as t:
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int", storage_engine.table_options) as t:
             test_table = t.split('.')[1]
             cql.execute(f"INSERT INTO {t} (pk, v) VALUES (1, 1)")
             resp = rest_api.send("POST", f"storage_service/keyspace_flush/{test_keyspace}")
@@ -178,8 +178,9 @@ def test_column_family_min_row_size(cql, this_dc, rest_api):
             assert resp.json() > 0
 
 
-# Test that the column_family API reports the partition count and the mean
-# partition size of a table. nodetool cfstats reads this API.
+# Test that the column_family API reports the partition count and the
+# partition sizes of a table. nodetool cfstats and nodetool tablehistograms
+# read this API.
 def test_column_family_partition_estimates(cql, this_dc, rest_api, storage_engine):
     key_count = 100
     value_size = 1000
@@ -207,7 +208,15 @@ def test_column_family_partition_estimates(cql, this_dc, rest_api, storage_engin
                 resp.raise_for_status()
                 return (get_metric('estimated_row_count'), get_metric('mean_row_size'))
 
+            # Returns the minimum and the maximum partition size of the table,
+            # and the count of its partition size histogram. The caller must
+            # call get_estimates() first, which compacts the table.
+            def get_size_range():
+                histogram = get_metric('estimated_row_size_histogram')
+                return (get_metric('min_row_size'), get_metric('max_row_size'), sum(histogram['buckets']))
+
             assert get_estimates() == (0, 0)
+            assert get_size_range() == (0, 0, 0)
 
             insert = cql.prepare(f"INSERT INTO {t} (pk, v) VALUES (?, ?)")
             value = 'x' * value_size
@@ -219,6 +228,11 @@ def test_column_family_partition_estimates(cql, this_dc, rest_api, storage_engin
             # The size of a partition adds the size of its key and of its
             # metadata to the size of its value.
             assert value_size < mean_size < 2 * value_size
+            # The histogram counts the sizes in buckets, so the minimum and the
+            # maximum are the bounds of buckets, and the mean is between them.
+            min_size, max_size, histogram_count = get_size_range()
+            assert 0 < min_size <= mean_size <= max_size
+            assert histogram_count == key_count
 
             # An overwrite does not add a partition, and a delete leaves a
             # tombstone that both engines count as a partition. So neither
@@ -233,9 +247,17 @@ def test_column_family_partition_estimates(cql, this_dc, rest_api, storage_engin
             count, mean_size_after_deletes = get_estimates()
             assert count == key_count
             assert mean_size_after_deletes < mean_size
+            # A tombstone is much smaller than a partition with a value, so it
+            # is in a smaller bucket than the partitions that the deletes
+            # replaced.
+            min_size_after_deletes, max_size_after_deletes, histogram_count = get_size_range()
+            assert min_size_after_deletes < min_size
+            assert min_size_after_deletes <= mean_size_after_deletes <= max_size_after_deletes
+            assert histogram_count == key_count
 
             cql.execute(f"TRUNCATE {t}")
             assert get_estimates() == (0, 0)
+            assert get_size_range() == (0, 0, 0)
 
 
 # Test that get_live|total_disk_space_used returns sane values

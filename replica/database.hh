@@ -1324,6 +1324,10 @@ public:
     // Returns the number of keys in the logstor index of this table, and returns 0 for a table that
     // does not use logstor.
     uint64_t logstor_key_count() const;
+    // Returns the live records of the logstor index of this table counted by frame size, in the
+    // buckets of the partition size histogram of an sstable. Returns an empty histogram for a table
+    // that does not use logstor.
+    utils::estimated_histogram logstor_record_size_histogram() const;
 
     locator::combined_load_stats table_load_stats() const;
 
