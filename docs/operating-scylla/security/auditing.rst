@@ -394,6 +394,18 @@ Storing Audit Messages in a Table and Syslog Simultaneously
 
 
 
+.. _auditing-metrics:
+
+Audit Metrics
+---------------
+
+While audit is enabled, each node exports the following metrics. When audit is disabled, it exports none of them.
+
+* ``scylla_audit_entries`` - the number of audit messages the node generated. A message stored in both backends counts once, except for an Alternator batch request, which generates a separate message for each backend.
+* ``scylla_audit_write_failures`` - the number of audit messages that failed to be stored in one or more of the configured backends.
+* ``scylla_audit_sink_enabled`` - 1 for each backend (``sink="table"`` or ``sink="syslog"``) enabled by the ``audit`` parameter, 0 otherwise.
+* ``scylla_audit_category_enabled`` - 1 for each category (for example, ``category="DML"``) enabled in ``audit_categories`` or in an audit rule that names an enabled backend, 0 otherwise.
+
 Handling Audit Failures
 ---------------------------
 
@@ -401,6 +413,8 @@ In some cases, auditing may not be possible, for example, when:
 
 * A table is used as the audit’s backend, and the partitions where the audit rows are saved are unavailable because the nodes holding those partitions are down or unreachable due to network issues.
 * Syslog is used as the audit’s backend, and the Syslog sink (a regular Unix socket) is unresponsive or unavailable.
+
+To detect such failures, monitor the ``scylla_audit_write_failures`` metric (see :ref:`auditing-metrics`). An unresponsive Syslog sink may not show up there: audit writes to it, and the requests they audit, wait instead of failing.
 
 If the audit fails and audit messages are not stored in the configured audit’s backend, you can still review the audit log in the regular ScyllaDB logs.
 
