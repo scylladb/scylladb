@@ -310,6 +310,216 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_apply_group0_leader_shard_ratio) {
+    // ratio=100 (default) and single-shard nodes are no-ops.
+    for (unsigned shard = 0; shard < 4; ++shard) {
+        BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, shard, 4, 100, 0), 100u);
+    }
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 0, 1, 0, 0), 100u);
+
+    // Unknown node capacity (0) is left alone rather than divided.
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(0, 0, 4, 0, 0), 0u);
+
+    // ratio=50, floor below the resulting share: shard 0 gets half the uniform share;
+    // the other shards stay uniform, so the node's capacity shrinks by 50.
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 0, 4, 50, 0), 50u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 1, 4, 50, 0), 100u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 2, 4, 50, 0), 100u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 3, 4, 50, 0), 100u);
+
+    // ratio=0, floor (one tablet) below the uniform share: shard 0 is floored rather than
+    // going to 0; the other shards stay uniform.
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 0, 4, 0, 10), 10u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 1, 4, 0, 10), 100u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 2, 4, 0, 10), 100u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 3, 4, 0, 10), 100u);
+
+    // Floor exceeds the uniform share: skew would be a no-op, so capacity stays uniform
+    // for every shard (this is the one-tablet-size floor kicking in at low ratios).
+    for (unsigned shard = 0; shard < 4; ++shard) {
+        BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, shard, 4, 0, 150), 100u);
+    }
+}
+
+// Token metadata with `hosts` (the first is local) on default dc/rack; `extra` can add more state.
+struct test_stm {
+    semaphore sem{1};
+    shared_token_metadata stm;
+    deferred_stop<shared_token_metadata> stop_stm;
+
+    test_stm(const std::vector<host_id>& hosts, unsigned shard_count, std::function<void(token_metadata&)> extra = {})
+        : stm([this] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+            topology::config{
+                .this_endpoint = inet_address("192.168.0.1"),
+                .this_host_id = hosts.front(),
+                .local_dc_rack = locator::endpoint_dc_rack::default_location
+            }
+        })
+        , stop_stm(stm) {
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            for (auto h : hosts) {
+                tm.update_topology(h, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
+            }
+            if (extra) {
+                extra(tm);
+            }
+            return make_ready_future<>();
+        }).get();
+    }
+};
+
+SEASTAR_THREAD_TEST_CASE(test_load_sketch_group0_leader_shard_ratio) {
+    // host1 is the simulated group0 leader.
+    auto host1 = host_id(utils::make_random_uuid());
+    auto host2 = host_id(utils::make_random_uuid());
+
+    unsigned shard_count = 4;
+    test_stm t({host1, host2}, shard_count);
+    auto& stm = t.stm;
+
+    // Node capacity must be much larger than the target tablet size, or the
+    // one-tablet-size floor makes the ratio skew a no-op.
+    auto load_stats = make_lw_shared<locator::load_stats>();
+    uint64_t node_capacity = service::default_target_tablet_size * 100;
+    load_stats->capacity[host1] = node_capacity;
+    load_stats->capacity[host2] = node_capacity;
+
+    auto tm = stm.get();
+    load_sketch load(tm, load_stats);
+    load.set_group0_leader_shard_skew({host1, 0});
+    load.populate().get();
+
+    std::vector<unsigned> host1_shards(shard_count, 0);
+    std::vector<unsigned> host2_shards(shard_count, 0);
+
+    for (unsigned i = 0; i < shard_count * 3; ++i) {
+        host1_shards[load.next_shard(host1, 1, service::default_target_tablet_size)] += 1;
+    }
+    for (unsigned i = 0; i < shard_count * 3; ++i) {
+        host2_shards[load.next_shard(host2, 1, service::default_target_tablet_size)] += 1;
+    }
+
+    // The leader's capacity shrinks by exactly shard 0's deficit (uniform share - one-tablet floor).
+    uint64_t uniform_shard_capacity = node_capacity / shard_count;
+    BOOST_REQUIRE_EQUAL(load.get_capacity(host1), node_capacity - (uniform_shard_capacity - service::default_target_tablet_size));
+    BOOST_REQUIRE_EQUAL(load.get_capacity(host2), node_capacity);
+
+    // host1 (the leader) has shard 0 at ratio 0, floored at about one tablet: it gets far fewer
+    // tablets than the other shards, but is not excluded.
+    BOOST_REQUIRE_LT(host1_shards[0], host1_shards[1]);
+    for (unsigned i = 2; i < shard_count; ++i) {
+        BOOST_REQUIRE_LE(std::abs(int(host1_shards[i]) - int(host1_shards[1])), 1);
+    }
+
+    // host2 is not the group0 leader, so the ratio has no effect on it: allocation stays uniform.
+    for (unsigned i = 1; i < shard_count; ++i) {
+        BOOST_REQUIRE_EQUAL(host2_shards[i], host2_shards[0]);
+    }
+}
+
+// A deweighted shard 0 holding a tablet must not zero out the normalized load of every node,
+// as NetworkTopologyStrategy relies on it to account for existing load.
+SEASTAR_THREAD_TEST_CASE(test_load_sketch_normalized_load_with_skewed_shard0) {
+    auto host1 = host_id(utils::make_random_uuid());
+    auto host2 = host_id(utils::make_random_uuid());
+    unsigned shard_count = 4;
+
+    test_stm t({host1, host2}, shard_count, [&] (token_metadata& tm) {
+        tablet_metadata tab_meta;
+        // One tablet per shard on host1; host2 holds those plus one more per shard.
+        tablet_map tmap(8);
+        auto tid = tmap.first_tablet();
+        for (unsigned shard = 0; shard < shard_count; ++shard) {
+            tmap.set_tablet(tid, tablet_info{{tablet_replica{host1, shard}, tablet_replica{host2, shard}}});
+            tid = *tmap.next_tablet(tid);
+        }
+        for (unsigned shard = 0; shard < shard_count; ++shard) {
+            tmap.set_tablet(tid, tablet_info{{tablet_replica{host2, shard}}});
+            if (shard + 1 < shard_count) {
+                tid = *tmap.next_tablet(tid);
+            }
+        }
+        tab_meta.set_tablet_map(table_id(utils::make_random_uuid()), std::move(tmap));
+        tm.set_tablets(std::move(tab_meta));
+    });
+    auto& stm = t.stm;
+
+    load_sketch load(stm.get());
+    load.set_group0_leader_shard_skew({host1, 0});
+    load.set_min_shard0_capacity(0);
+    load.populate_with_normalized_load().get();
+
+    // Equal tablets per shard on host1: only a deweighted shard 0 makes the shard loads differ.
+    auto minmax = load.get_shard_minmax(host1);
+    BOOST_REQUIRE_LT(minmax.min(), minmax.max());
+    BOOST_REQUIRE_EQUAL(load.get_shard_minmax(host2).min(), load.get_shard_minmax(host2).max());
+
+    // host2 holds 2x the tablets of host1; the skewed shard 0 doesn't flatten that to 0.
+    // host1's node capacity is reduced by shard 0's deficit, so its load is scaled accordingly.
+    BOOST_REQUIRE_GT(load.get_load(host1), 0);
+    BOOST_REQUIRE_LT(load.get_capacity(host1), load.get_capacity(host2));
+    BOOST_REQUIRE_CLOSE(load.get_capacity(host1), 0.75 * load.get_capacity(host2), 1);
+    // The divisor is the most loaded uniform shard (host2's, 2 tablets), not host1's deweighted shard 0:
+    // host2 normalizes to 1, host1 (1 tablet per uniform shard, 3 shards' capacity) to 4/3 / 2.
+    BOOST_REQUIRE_CLOSE(load.get_shard_minmax(host2).max(), 1.0, 1);
+    BOOST_REQUIRE_CLOSE(load.get_load(host2), 1.0, 1);
+    BOOST_REQUIRE_CLOSE(load.get_load(host1), 2.0 / 3, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_sketch_best_shard_for_matches_least_loaded_with_uniform_capacity) {
+    auto host1 = host_id(utils::make_random_uuid());
+    unsigned shard_count = 4;
+
+    test_stm t({host1}, shard_count);
+    auto& stm = t.stm;
+
+    load_sketch load(stm.get());
+    load.populate().get();
+
+    // Uneven sizes, so that ties and non-ties both occur.
+    for (unsigned i = 0; i < shard_count * 5; ++i) {
+        auto size = service::default_target_tablet_size * (1 + i % 3);
+        auto best = load.get_best_shard_for(host1, size);
+        BOOST_REQUIRE_EQUAL(best, *load.get_least_loaded_shard(host1, [] (shard_id) { return false; }));
+        load.pick(host1, best, 1, size);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_sketch_best_shard_for_skips_deweighted_shard) {
+    auto host1 = host_id(utils::make_random_uuid());
+    auto host2 = host_id(utils::make_random_uuid());
+    unsigned shard_count = 4;
+
+    test_stm t({host1, host2}, shard_count);
+    auto& stm = t.stm;
+
+    auto load_stats = make_lw_shared<locator::load_stats>();
+    uint64_t node_capacity = service::default_target_tablet_size * 100;
+    load_stats->capacity[host1] = node_capacity;
+    load_stats->capacity[host2] = node_capacity;
+
+    const auto tablet_size = service::default_target_tablet_size;
+    load_sketch load(stm.get(), load_stats);
+    load.set_group0_leader_shard_skew({host1, 0});
+    load.populate().get();
+
+    // The empty, floored shard 0 has the lowest load before placement, but a tablet would fill it.
+    BOOST_REQUIRE_EQUAL(*load.get_least_loaded_shard(host1, [] (shard_id) { return false; }), 0u);
+    BOOST_REQUIRE_NE(load.get_best_shard_for(host1, tablet_size), 0u);
+
+    // Once shard 0 holds its floor, no further tablet goes there.
+    load.pick(host1, 0, 1, tablet_size);
+    for (unsigned i = 0; i < shard_count * 5; ++i) {
+        BOOST_REQUIRE_NE(load.next_shard(host1, 1, tablet_size), 0u);
+    }
+
+    // host2 is not the leader: its shards stay uniform, ties go to the lowest shard.
+    BOOST_REQUIRE_EQUAL(load.get_best_shard_for(host2, tablet_size), 0u);
+    for (unsigned i = 0; i < shard_count; ++i) {
+        BOOST_REQUIRE_EQUAL(load.next_shard(host2, 1, tablet_size), i);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
     auto id1 = host_id::create_random_id();
     auto ep1 = gms::inet_address("127.0.0.1");

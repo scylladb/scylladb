@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <limits>
+#include <map>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -117,6 +119,13 @@ constexpr std::array registry_options = {
         // The replica adds it to a clock. Ten years is as good as never and far from the
         // overflow.
         .valid_range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
+    },
+    option{
+        .name = option_name::tablets_group0_leader_shard_ratio,
+        .description = "Percentage (0-100) of the normal per-shard tablet capacity given to shard 0 of the group0 leader node (follows the current leader), freeing it up for raft/topology work. 100 (default) is no skew; 0 shrinks shard 0 to a floor of one target-size tablet or 0.1% of its normal capacity, whichever is larger, during load balancing; allocating a new table applies only the 0.1% relative floor",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(100),
+        .valid_range = integer_range{.min = 0, .max = 100},
     },
 };
 
@@ -389,6 +398,22 @@ std::optional<seastar::sstring> validate_value(const option& opt, std::string_vi
     }
 
     __builtin_unreachable();
+}
+
+bool is_usable_stored_value(std::string_view scope, std::string_view name, std::string_view value) {
+    const auto* opt = find(name);
+    if (!opt) {
+        return true;
+    }
+    auto error = validate_value(*opt, value);
+    if (error) {
+        // One limiter per (scope, option), so one bad option does not hide the others.
+        static thread_local std::map<std::pair<std::string, std::string>, logger::rate_limit> rate_limits;
+        auto& rate_limit = rate_limits.try_emplace({std::string(scope), std::string(name)}, std::chrono::seconds(60)).first->second;
+        cluster_config_registry_logger.log(logging::log_level::warn, rate_limit,
+                "Ignoring invalid stored value for config '{}' at {} scope", name, scope);
+    }
+    return !error;
 }
 
 bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value) {

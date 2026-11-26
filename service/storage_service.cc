@@ -752,6 +752,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             tablets = co_await replica::read_tablet_metadata(_qp);
         }
         tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
+        tablets->set_shard0_skew_host(topology.shard0_skew_host_id());
         tmptr->set_tablets(std::move(*tablets));
 
         // left_nodes_rs must be narrowed before sync_raft_topology_nodes() reads it.
@@ -4108,6 +4109,7 @@ future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_meta
         pending_token_metadata->set_tablets(co_await replica::read_tablet_metadata(_qp));
     }
     pending_token_metadata->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+    pending_token_metadata->tablets().set_shard0_skew_host(_topology_state_machine._topology.shard0_skew_host_id());
     co_return pending_token_metadata;
 }
 
