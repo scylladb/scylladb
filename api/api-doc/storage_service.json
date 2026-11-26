@@ -1011,6 +1011,15 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"repair",
+                     "description":"How to repair each tablet after restoring it: full (the default) runs a full repair of the tablet, disabled does not repair it. The repair needs the TABLET_RESTORE_REPAIR cluster feature; until every node supports it, the restore does not repair and fails once the data is restored. A tablet whose repair fails, for example because its replicas are down, stays restored, and the restore fails naming it",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "enum":["full", "disabled"],
+                     "paramType":"query"
+                  },
+                  {
                      "name":"backup_source_location",
                      "description":"Array of backup location objects, exactly one entry per datacenter the keyspace replicates to.",
                      "required":true,

@@ -914,6 +914,7 @@ static raft::config_member_set expected_raft_config(
         case tablet_transition_stage::repair:
         case tablet_transition_stage::end_repair:
         case tablet_transition_stage::restore:
+        case tablet_transition_stage::restore_repair:
             break;
     }
     on_internal_error(logger, format("expected_raft_config: unexpected transition stage {} of a strongly "
@@ -967,6 +968,7 @@ bool hosts_raft_group(const locator::tablet_info& tinfo,
         case tablet_transition_stage::repair:
         case tablet_transition_stage::end_repair:
         case tablet_transition_stage::restore:
+        case tablet_transition_stage::restore_repair:
             return locator::contains(tinfo.replicas, replica);
     }
     on_internal_error(logger, format("hosts_raft_group: unknown tablet transition stage {}",
