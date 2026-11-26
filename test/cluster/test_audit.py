@@ -2769,6 +2769,48 @@ async def test_audit_entry_metrics(manager: ScyllaClusterManager):
     assert await audit_metrics() == (entries + logins, failures + logins)
 
 
+async def test_audit_sink_and_category_metrics(manager: ScyllaClusterManager):
+    """The audit metrics show the enabled sinks and categories, and follow live changes of the configuration."""
+    ddl_rule = {"sinks": ["table"], "categories": ["DDL"], "qualified_table_names": ["ks.*"], "roles": ["*"]}
+    disabled_sink_rule = {"sinks": ["syslog"], "categories": ["QUERY"], "qualified_table_names": ["ks.*"], "roles": ["*"]}
+    server = await manager.server_add(config={
+        "audit": "table",
+        "audit_categories": "DML",
+        "audit_keyspaces": "ks",
+        "audit_rules": [ddl_rule, disabled_sink_rule],
+    })
+    cql, _ = await manager.get_ready_cql([server])
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    cql.execute("CREATE TABLE ks.t (pk int PRIMARY KEY)")
+    categories = ["QUERY", "DML", "DDL", "DCL", "AUTH", "ADMIN"]
+
+    async def enabled(metric: str, label: str, values: list[str]) -> set[str]:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return {v for v in values if metrics.get(metric, {label: v})}
+
+    async def wait_for_categories(expected: set[str]) -> None:
+        async def reached():
+            return await enabled("scylla_audit_category_enabled", "category", categories) == expected or None
+        await wait_for_async(reached, time.time() + 60)
+
+    assert await enabled("scylla_audit_sink_enabled", "sink", ["table", "syslog"]) == {"table"}
+    assert await enabled("scylla_audit_category_enabled", "category", categories) == {"DML", "DDL"}
+
+    logger.info("Running a SELECT that only the audit rule with the disabled sink matches")
+    metrics = await manager.metrics.query(server.ip_addr)
+    entries = metrics.get("scylla_audit_entries")
+    cql.execute("SELECT * FROM ks.t")
+    metrics = await manager.metrics.query(server.ip_addr)
+    assert metrics.get("scylla_audit_entries") == entries
+
+    logger.info("Dropping the DDL audit rule, which leaves only the rule with the disabled sink")
+    await manager.server_update_config(server.server_id, "audit_rules", [disabled_sink_rule])
+    await wait_for_categories({"DML"})
+
+    logger.info("Adding QUERY to audit_categories")
+    await manager.server_update_config(server.server_id, "audit_categories", "DML,QUERY")
+    await wait_for_categories({"DML", "QUERY"})
+
 
 @verify_legacy_and_rules
 async def test_service_level_statements_standalone(manager: ScyllaClusterManager, rules_mode: bool):
