@@ -113,6 +113,15 @@ public:
 private:
     top_k _top_k_read;
     top_k _top_k_write;
+    // Set by the first failed sample; gather() then reports the failure instead of partial counts.
+    std::exception_ptr _sampling_error;
+
+    // Sampling runs in the client's read/write path, so it must never throw there.
+    template <typename MakeKey>
+    void sample(top_k& top, MakeKey&& make_key) noexcept;
+    void set_sampling_error(std::exception_ptr ex) noexcept;
+    // Whether to sample this table: false once sampling failed, so reads skip the filtering wrapper.
+    bool should_sample(const schema& s) noexcept;
 
 public:
     toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);

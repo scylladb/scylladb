@@ -372,6 +372,33 @@ def test_toppartitions_pk_needs_escaping(cql, this_dc, rest_api):
         # If we're here, we didn't "return" above so the test failed
         pytest.fail(f'Test failed, even {period_sec/2}s was not enough.')
 
+# A failure to sample (e.g. bad_alloc) must not fail the client's own writes
+# and reads; the toppartitions query reports it instead.
+def test_toppartitions_sampling_failure(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, "p int PRIMARY KEY") as table:
+            ks, cf = table.split('.')
+            insert = cql.prepare(f"INSERT INTO {table} (p) VALUES (?)")
+            select = cql.prepare(f"SELECT * FROM {table} WHERE p = ?")
+            cql.execute(insert, [1])
+            def check(op):
+                def toppartitions():
+                    return rest_api.send('GET', 'storage_service/toppartitions', {'table_filters': f'{ks}:{cf}', 'duration': '1000'})
+                t = ThreadWrapper(target=toppartitions)
+                t.start()
+                # Keep going until the query returns, so some requests land in its window.
+                while t.is_alive():
+                    op()
+                resp = t.join()
+                assert not resp.ok
+                assert 'toppartitions sampling failed' in resp.text
+            def read():
+                assert list(cql.execute(select, [1]))
+            with scylla_inject_error(rest_api, "toppartitions_sample_fail"):
+                # A shard stops sampling after its first failure, so check writes and reads in separate queries.
+                check(lambda: cql.execute(insert, [1]))
+                check(read)
+
 
 # TODO: check that keyspace_flush actually does anything, like create new sstables.
 def test_storage_service_flush(cql, this_dc, rest_api):

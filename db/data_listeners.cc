@@ -9,6 +9,7 @@
 #include "db/data_listeners.hh"
 #include "replica/database.hh"
 #include "readers/filtering.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/coroutine/exception.hh>
 
@@ -66,16 +67,48 @@ future<> toppartitions_data_listener::stop() {
     return make_ready_future<>();
 }
 
+template <typename MakeKey>
+void toppartitions_data_listener::sample(top_k& top, MakeKey&& make_key) noexcept {
+    if (_sampling_error) {
+        return;
+    }
+    try {
+        utils::get_local_injector().inject("toppartitions_sample_fail", [] { throw std::bad_alloc(); });
+        top.append(make_key());
+    } catch (...) {
+        set_sampling_error(std::current_exception());
+    }
+}
+
+void toppartitions_data_listener::set_sampling_error(std::exception_ptr ex) noexcept {
+    _sampling_error = std::move(ex);
+    dblog.warn("toppartitions_data_listener: sampling failed, the query will report an error: {}", _sampling_error);
+}
+
+bool toppartitions_data_listener::should_sample(const schema& s) noexcept {
+    if (_sampling_error) {
+        return false;
+    }
+    if (_table_filters.empty() && _keyspace_filters.empty()) {
+        return true;
+    }
+    try {
+        // Building the (ks, cf) key allocates for long names.
+        return _keyspace_filters.contains(s.ks_name()) || _table_filters.contains({s.ks_name(), s.cf_name()});
+    } catch (...) {
+        set_sampling_error(std::current_exception());
+        return false;
+    }
+}
+
 mutation_reader toppartitions_data_listener::on_read(const schema_ptr& s, const dht::partition_range& range,
         const query::partition_slice& slice, mutation_reader&& rd) {
-    bool include_all = _table_filters.empty() && _keyspace_filters.empty();
-
-    if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
+    if (should_sample(*s)) {
         dblog.trace("toppartitions_data_listener::on_read: {}.{}", s->ks_name(), s->cf_name());
         return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), s = std::move(s)] (const dht::decorated_key& dk) {
             // The data query may be executing after the toppartitions_data_listener object has been removed, so check
             if (zis) {
-                zis->_top_k_read.append(toppartitions_item_key{s, dk});
+                zis->sample(zis->_top_k_read, [&] { return toppartitions_item_key{s, dk}; });
             }
             return true;
         });
@@ -85,11 +118,9 @@ mutation_reader toppartitions_data_listener::on_read(const schema_ptr& s, const 
 }
 
 void toppartitions_data_listener::on_write(const schema_ptr& s, const frozen_mutation& m) {
-    bool include_all = _table_filters.empty() && _keyspace_filters.empty();
-    
-    if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
+    if (should_sample(*s)) {
         dblog.trace("toppartitions_data_listener::on_write: {}.{}", s->ks_name(), s->cf_name());
-        _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s)});
+        sample(_top_k_write, [&] { return toppartitions_item_key{s, m.decorated_key(*s)}; });
     }
 }
 
@@ -133,6 +164,9 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
 
     auto map = [res_size] (toppartitions_data_listener& listener) {
         dblog.trace("toppartitions_query::map_reduce with listener {}", fmt::ptr(&listener));
+        if (listener._sampling_error) {
+            throw std::runtime_error(fmt::format("toppartitions sampling failed on shard {}: {}", this_shard_id(), listener._sampling_error));
+        }
         top_t rd = toppartitions_data_listener::globalize(listener._top_k_read.top(res_size));
         top_t wr = toppartitions_data_listener::globalize(listener._top_k_write.top(res_size));
         return make_foreign(std::make_unique<std::tuple<top_t, top_t>>(std::move(rd), std::move(wr)));
