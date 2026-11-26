@@ -75,8 +75,9 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
 // fake-gcs-server accepts any Content-Range at all -- it stores the body and
 // derives the object size from it -- so protocol level upload bugs are invisible
 // when testing against it (SCYLLADB-3889). Put a validator in front of it that
-// tracks each upload session and rejects ranges real GCS would reject.
-static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int upstream_port) {
+// tracks each upload session and rejects ranges real GCS would reject. Its control
+// path also lets tests inject upload faults, whatever server is behind it.
+static future<std::tuple<tp::process_fixture, int>> start_upload_validator(const std::string& upstream_host, int upstream_port) {
     auto pyexec = tp::find_file_in_path("python3");
     if (pyexec.empty()) {
         pyexec = tp::find_file_in_path("python");
@@ -106,6 +107,7 @@ static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int u
         , { // args
             pyexec.string(),
             script,
+            "--upstream-host", upstream_host,
             "--upstream-port", std::to_string(upstream_port),
         }
         , {} // env
@@ -236,7 +238,7 @@ seastar::future<> gcs_fixture::impl::setup() {
         if (getenv_or_default("GCP_STORAGE_SKIP_UPLOAD_VALIDATOR").empty()) {
             std::exception_ptr p;
             try {
-                auto [vproc, vport] = co_await start_upload_validator(port);
+                auto [vproc, vport] = co_await start_upload_validator("127.0.0.1", port);
                 upload_validator.emplace(std::move(vproc));
                 endpoint = "http://127.0.0.1:" + std::to_string(vport);
                 BOOST_TEST_MESSAGE(fmt::format("Validating uploads to fake gcs server on port {}", port));
@@ -258,6 +260,31 @@ seastar::future<> gcs_fixture::impl::setup() {
         user_1_creds = "none";
     } else {
         creds = co_await credentials(user_1_creds);
+        // Unless explicitly disabled, talk to the test environment's server, unlike
+        // a real GCS, through a validator, so that the tests can inject upload faults.
+        if (getenv_or_default("GCP_STORAGE_ENDPOINT").empty() && getenv_or_default("GCP_STORAGE_SKIP_UPLOAD_VALIDATOR").empty()) {
+            auto url = utils::http::parse_simple_url(endpoint);
+            if (!url.is_https()) {
+                std::exception_ptr p;
+                try {
+                    auto [vproc, vport] = co_await start_upload_validator(url.host, url.port);
+                    upload_validator.emplace(std::move(vproc));
+                    endpoint = "http://127.0.0.1:" + std::to_string(vport);
+                    BOOST_TEST_MESSAGE(fmt::format("Validating uploads to gcs server on {}:{}", url.host, url.port));
+                } catch (...) {
+                    p = std::current_exception();
+                }
+                if (p) {
+                    // The validator may be up by now and nothing else would stop
+                    // it, the same reason create_bucket below tears down on failure.
+                    try {
+                        co_await teardown();
+                    } catch (...) {
+                    }
+                    std::rethrow_exception(p);
+                }
+            }
+        }
     }
 
     if (project.empty() && getenv_or_default("GCP_STORAGE_ENDPOINT").empty()) {
