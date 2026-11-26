@@ -226,6 +226,13 @@ void alter_table_statement::add_column(const query_options&, const schema& schem
     if (type->is_counter() && !schema.is_counter()) {
         throw exceptions::configuration_exception(format("Cannot add a counter column ({}) in a non counter column family", column_name));
     }
+    // The same check as in create_table_statement: A non-frozen collection or
+    // UDT is stored as separate cells, which can be modified individually, but
+    // logstor stores each row as a single value that every write replaces
+    // entirely.
+    if (schema.logstor_enabled() && type->is_multi_cell()) {
+        throw exceptions::configuration_exception("The 'logstor' storage engine cannot be used with non-frozen collections or user-defined types");
+    }
 
     cfm.with_column(column_name.name(), type, is_static ? column_kind::static_column : column_kind::regular_column);
 

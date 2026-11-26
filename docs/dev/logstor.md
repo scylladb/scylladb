@@ -95,7 +95,9 @@ experimental_features:
 
 ### Creating Tables
 
-Tables using logstor must have no clustering columns, and created with the `storage_engine` property equals to 'logstor':
+Tables using logstor must have no clustering columns, no counter columns, and no
+non-frozen collections or user-defined types (frozen ones are allowed), and created
+with the `storage_engine` property equals to 'logstor':
 
 ```cql
 CREATE TABLE keyspace.user_profiles (
@@ -120,7 +122,13 @@ INSERT INTO keyspace.table_name (pk, v) VALUES (2, 'value2');
 INSERT INTO keyspace.table_name (pk, v) VALUES (1, 'updated_value');
 ```
 
-Currently, updates must write the full row. Updating individual columns is not yet supported. Each write replaces the entire partition.
+Each write replaces the entire row, so a write must write all its columns:
+an `INSERT` must set every column of the table, and one that leaves out a
+column - including by binding it to an unset value, or with
+`INSERT JSON ... DEFAULT UNSET` - is rejected. To leave a column without
+a value, set it to null. `UPDATE`, which modifies only some of the columns,
+is not supported. Neither is deleting individual columns with `DELETE`;
+delete the entire row instead.
 
 **Select:**
 

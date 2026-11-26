@@ -248,6 +248,12 @@ public:
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 
+    // Checks the values the statement writes, once they are known. It is
+    // called on every execution, before any condition of the statement is
+    // evaluated, so an invalid statement is rejected whether or not its
+    // condition holds.
+    virtual void validate_values(const query_options& options, const json_cache_opt& json_cache) const;
+
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
