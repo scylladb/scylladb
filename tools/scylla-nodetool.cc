@@ -2491,6 +2491,38 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
 }
 
+// Values are <keyspace>[:<table>[,<table>...]]. Not '.': Alternator table names, and so
+// their keyspace names, may contain dots.
+rjson::value parse_cluster_tables_option(const std::vector<sstring>& values) {
+    auto tables = rjson::empty_array();
+    for (const auto& value : values) {
+        const auto colon = value.find(':');
+        const auto keyspace = value.substr(0, colon);
+        if (keyspace.empty()) {
+            throw std::invalid_argument(fmt::format("Invalid 'tables' argument: {}: the keyspace is empty", value));
+        }
+        if (colon + 1 == value.size()) {
+            throw std::invalid_argument(fmt::format("Invalid 'tables' argument: {}: no table after ':'", value));
+        }
+        if (colon == sstring::npos) {
+            auto entry = rjson::empty_object();
+            rjson::add(entry, "keyspace", rjson::from_string(keyspace));
+            rjson::push_back(tables, std::move(entry));
+            continue;
+        }
+        for (const auto& table : std::views::split(value.substr(colon + 1), std::string_view(",")) | std::ranges::to<std::vector<sstring>>()) {
+            if (table.empty()) {
+                throw std::invalid_argument(fmt::format("Invalid 'tables' argument: {}: a table name is empty", value));
+            }
+            auto entry = rjson::empty_object();
+            rjson::add(entry, "keyspace", rjson::from_string(keyspace));
+            rjson::add(entry, "table", rjson::from_string(table));
+            rjson::push_back(tables, std::move(entry));
+        }
+    }
+    return tables;
+}
+
 void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
 
@@ -2501,11 +2533,21 @@ void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables
     if (vm.contains("keyspaces")) {
         kt_list = vm["keyspaces"].as<std::vector<sstring>>();
     }
+    if (vm.contains("tables") && (!kt_list.empty() || vm.contains("table"))) {
+        throw std::invalid_argument("--tables cannot be combined with --table or a list of keyspaces");
+    }
     if (kt_list.size() != 1 && vm.contains("table")) {
         throw std::invalid_argument("when specifying the table for the snapshot, you must specify one and only one keyspace");
     }
 
-    if (kt_list.empty()) {
+    std::optional<request_body> body;
+    if (vm.contains("tables")) {
+        const auto& values = vm["tables"].as<std::vector<sstring>>();
+        auto req = rjson::empty_object();
+        rjson::add(req, "tables", parse_cluster_tables_option(values));
+        body = request_body{"application/json", rjson::print(req)};
+        kn_msg = fmt::to_string(fmt::join(values, ", "));
+    } else if (kt_list.empty()) {
         kn_msg = "all keyspaces";
     } else {
         params["keyspace"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
@@ -2520,7 +2562,7 @@ void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables
         params["tag"] = fmt::to_string(db_clock::now().time_since_epoch().count());
     }
 
-    client.post("/storage_service/tablets/snapshots", params);
+    client.post("/storage_service/tablets/snapshots", params, std::move(body));
 
     if (kn_msg.empty()) {
         kn_msg = params["keyspace"];
@@ -2551,11 +2593,19 @@ void cluster_backup_operation(scylla_rest_client& client, const bpo::variables_m
         kt_list = vm["keyspaces"].as<std::vector<sstring>>();
     }
 
+    if (vm.contains("tables") && (!kt_list.empty() || vm.contains("table"))) {
+        throw std::invalid_argument("--tables cannot be combined with --table or a list of keyspaces");
+    }
     if (kt_list.size() != 1 && vm.contains("table")) {
         throw std::invalid_argument("when specifying the table for the backup, you must specify one and only one keyspace");
     }
 
-    if (kt_list.empty()) {
+    std::optional<rjson::value> tables;
+    if (vm.contains("tables")) {
+        const auto& values = vm["tables"].as<std::vector<sstring>>();
+        tables = parse_cluster_tables_option(values);
+        kn_msg = fmt::to_string(fmt::join(values, ", "));
+    } else if (kt_list.empty()) {
         kn_msg = "all keyspaces";
     } else {
         params["keyspace"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
@@ -2589,8 +2639,12 @@ void cluster_backup_operation(scylla_rest_client& client, const bpo::variables_m
     }
     ss << "]";
     auto body = ss.str();
+    auto request = body;
+    if (tables) {
+        request = fmt::format("{{\"locations\": {}, \"tables\": {}}}", body, rjson::print(*tables));
+    }
 
-    const auto backup_res = client.post("/storage_service/tablets/backup", params, request_body{ "application/json", body });
+    const auto backup_res = client.post("/storage_service/tablets/backup", params, request_body{ "application/json", request });
     const auto task_id = rjson::to_string_view(backup_res);
 
     if (kn_msg.empty()) {
@@ -4267,6 +4321,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/snapshot.html")),
                         {
                             typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
+                            typed_option<std::vector<sstring>>("tables", "Tables to snapshot, from any number of keyspaces, as <keyspace>[:<table>[,<table>...]]. Repeat for each keyspace. A keyspace without tables selects all of its tables. Cannot be combined with --table or a list of keyspaces"),
                             typed_option<sstring>("tag,t", "The name of the snapshot"),
                         },
                         {
@@ -4281,6 +4336,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/backup.html")),
                         {
                             typed_option<sstring>("table", "The table(s) to backup, multiple ones can be joined with ','"),
+                            typed_option<std::vector<sstring>>("tables", "Tables to backup, from any number of keyspaces, as <keyspace>[:<table>[,<table>...]]. Repeat for each keyspace. A keyspace without tables selects all of its tables. Cannot be combined with --table or a list of keyspaces"),
                             typed_option<sstring>("snapshot,s", "The name of the snapshot to backup. It will be created if it does not exist"),
                             typed_option<std::vector<sstring>>("location,l", "Tuples of <dc>,<endpoint>,<bucket>[,<prefix>] locations to write backup to. Repeat for each desired dc."),
                             typed_option<>("nowait", "Don't wait on the backup process"),

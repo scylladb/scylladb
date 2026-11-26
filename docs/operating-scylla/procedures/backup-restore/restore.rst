@@ -66,7 +66,8 @@ Restore a cluster backup
 Use this method to restore a backup made with :ref:`nodetool cluster backup <backup-native-backup>` into a tablet-based table.
 The restore runs as a topology operation: the replicas of each tablet download the SSTables that belong to the tablet
 directly from object storage and attach them, so no data is streamed between nodes. Repaired data that the backup
-stored as a single copy is restored to every replica it was taken from.
+stored as a single copy is restored to every replica it was taken from. After the restore, nothing in the table counts as
+repaired for incremental repair, so the next incremental repair compares all of its data.
 
 The object storage endpoint must be configured on the nodes, as described in :ref:`Configuring Object Storage <object-storage-configuration>`.
 
@@ -78,8 +79,18 @@ There is no nodetool command for this restore yet. It is started through the RES
 (see the :doc:`storage_service API reference </reference/api/storage-service>`), with
 ``POST /storage_service/tablets/restore``. The query parameters are the destination ``keyspace`` and ``table``
 and the ``snapshot`` name. The request body is a JSON array with one entry per datacenter the keyspace replicates to,
-each giving the ``datacenter``, the ``endpoint``, ``bucket`` and ``prefix`` of the backup location, and ``manifests``,
-the paths of the table's backup manifests relative to that prefix.
+each giving the ``datacenter`` and the ``endpoint``, ``bucket`` and ``prefix`` of the backup location. ScyllaDB finds
+the backup in the location by the snapshot name.
+
+If the backup was taken from a keyspace or a table with a different name than the destination, also pass
+``source_keyspace`` with the original keyspace name, ``source_table`` with the original table name, or both.
+
+The optional ``repair`` query parameter says whether to repair each tablet once it is restored: ``full``, the default,
+runs a full repair of the tablet, and ``disabled`` leaves it unrepaired. The repair needs every node to support the
+``TABLET_RESTORE_REPAIR`` cluster feature. Until then the restore does not repair, and its task fails once the data is
+restored. A tablet whose repair fails, for example because one of its replicas is down, stays restored, and the restore
+task fails with an error naming it. In both cases the data is in place: repair the table, or run the restore again,
+which skips the SSTables it already downloaded and repairs the tablets.
 
 **Procedure**
 
@@ -94,8 +105,7 @@ the paths of the table's backup manifests relative to that prefix.
         -d '[{"datacenter": "mydc",
               "endpoint": "s3.us-east-2.amazonaws.com",
               "bucket": "bucket-foo",
-              "prefix": "backups/mysnapshot",
-              "manifests": ["snapshots/mykeyspace/team_roster/mysnapshot/manifest.json"]}]'
+              "prefix": "backups/mysnapshot"}]'
 
    The call returns the ID of the restore task.
 
