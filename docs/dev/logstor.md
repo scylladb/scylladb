@@ -95,7 +95,9 @@ experimental_features:
 
 ### Creating Tables
 
-Tables using logstor must have no clustering columns, and created with the `storage_engine` property equals to 'logstor':
+Tables using logstor must have no clustering columns, no counter columns, and no
+non-frozen collections or user-defined types (frozen ones are allowed), and created
+with the `storage_engine` property equals to 'logstor':
 
 ```cql
 CREATE TABLE keyspace.user_profiles (

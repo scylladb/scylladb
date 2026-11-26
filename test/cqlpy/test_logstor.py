@@ -12,7 +12,7 @@ import json
 import pytest
 from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement, UNSET_VALUE
-from .util import new_test_table, unique_key_int
+from .util import new_test_table, new_type, unique_key_int
 from . import nodetool
 
 # All tests in this file are Scylla-only (logstor is not available on Cassandra).
@@ -310,6 +310,63 @@ def test_logstor_frozen_map(cql, test_keyspace):
         # Delete
         cql.execute(f"DELETE FROM {table} WHERE pk = 1")
         assert cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1").one() is None
+
+# Test that logstor tables can't be created with non-frozen collection
+# columns. A non-frozen collection is stored as separate cells which can be
+# modified individually, but logstor stores the entire row as one value, and
+# only supports writes that replace it entirely. Frozen collections are
+# allowed (see test_logstor_frozen_map and
+# test_logstor_frozen_collections_and_udt).
+def test_logstor_non_frozen_collection_disabled(cql, test_keyspace):
+    for coll in ['map<text, text>', 'set<int>', 'list<int>']:
+        # Check that a column of each non-frozen collection type is rejected.
+        with pytest.raises(ConfigurationException, match="The 'logstor' storage engine cannot be used with non-frozen"):
+            with new_test_table(cql, test_keyspace, f'pk int PRIMARY KEY, v {coll}',
+                                " WITH storage_engine = 'logstor'") as table:
+                pass
+
+# Like non-frozen collections, non-frozen user-defined types are stored as
+# separate cells, so they are rejected in logstor tables. Frozen ones are
+# allowed (see test_logstor_frozen_collections_and_udt).
+def test_logstor_non_frozen_udt_disabled(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int, b text)') as typ:
+        # Check that a non-frozen UDT column is rejected.
+        with pytest.raises(ConfigurationException, match="The 'logstor' storage engine cannot be used with non-frozen"):
+            with new_test_table(cql, test_keyspace, f'pk int PRIMARY KEY, v {typ}',
+                                " WITH storage_engine = 'logstor'") as table:
+                pass
+
+# While non-frozen collections and UDTs are rejected in logstor tables,
+# frozen ones are stored as a single value, so they are allowed. This test
+# checks frozen sets, lists and UDTs (test_logstor_frozen_map checks frozen
+# maps).
+def test_logstor_frozen_collections_and_udt(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int, b text)') as typ:
+        with new_test_table(cql, test_keyspace, f'pk int PRIMARY KEY, s frozen<set<int>>, l frozen<list<int>>, u frozen<{typ}>',
+                            " WITH storage_engine = 'logstor'") as table:
+            # Check that a row with frozen set, list and UDT values can be
+            # written and read back.
+            cql.execute(f"INSERT INTO {table} (pk, s, l, u) VALUES (1, {{1, 2}}, [3, 3, 4], {{a: 5, b: 'five'}})")
+            assert list(cql.execute(f'SELECT pk, s, l, u FROM {table} WHERE pk = 1')) == [(1, {1, 2}, [3, 3, 4], (5, 'five'))]
+            # Check that overwriting the row replaces each value entirely.
+            cql.execute(f"INSERT INTO {table} (pk, s, l, u) VALUES (1, {{6}}, [7], {{a: 8, b: 'eight'}})")
+            assert list(cql.execute(f'SELECT pk, s, l, u FROM {table} WHERE pk = 1')) == [(1, {6}, [7], (8, 'eight'))]
+
+# Test that a non-frozen collection or UDT can't be added to an existing
+# logstor table with ALTER TABLE ADD either, but a frozen one can.
+def test_logstor_alter_add_non_frozen(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int, b text)') as typ:
+        with new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int',
+                            " WITH storage_engine = 'logstor'") as table:
+            # Check that adding a non-frozen collection or UDT is rejected.
+            for t in ['map<text, text>', 'set<int>', 'list<int>', typ]:
+                with pytest.raises(ConfigurationException, match="The 'logstor' storage engine cannot be used with non-frozen"):
+                    cql.execute(f'ALTER TABLE {table} ADD c {t}')
+            # Check that adding a frozen collection works, and the new
+            # column can be written and read.
+            cql.execute(f'ALTER TABLE {table} ADD c frozen<set<int>>')
+            cql.execute(f'INSERT INTO {table} (pk, v, c) VALUES (1, 2, {{3, 4}})')
+            assert list(cql.execute(f'SELECT pk, v, c FROM {table} WHERE pk = 1')) == [(1, 2, {3, 4})]
 
 # Test timestamp-based conflict resolution in logstor.
 def test_logstor_timestamp_conflict_resolution(cql, test_keyspace):

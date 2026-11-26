@@ -321,6 +321,12 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                 if (type->is_counter()) {
                     throw exceptions::configuration_exception("The 'logstor' storage engine cannot be used with counter columns");
                 }
+                // A non-frozen collection or UDT is stored as separate cells,
+                // which can be modified individually, but logstor stores each
+                // row as a single value that every write replaces entirely.
+                if (type->is_multi_cell()) {
+                    throw exceptions::configuration_exception("The 'logstor' storage engine cannot be used with non-frozen collections or user-defined types");
+                }
             }
         }
     }
