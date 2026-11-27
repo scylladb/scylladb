@@ -2,7 +2,9 @@
  * Copyright (C) 2016-present ScyllaDB
  */
 
-
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
 
 #include <boost/test/unit_test.hpp>
 #include <boost/lexical_cast.hpp>
