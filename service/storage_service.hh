@@ -254,7 +254,23 @@ public:
     future<> uninit_messaging_service();
 
     // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
+<<<<<<< HEAD
     future<> load_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+||||||| parent of 5ae1a961ad (storage_service: re-clone tablets in intra-node migration on startup)
+    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata);
+    void wake_up_topology_state_machine() noexcept;
+    future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+
+=======
+    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata);
+    void wake_up_topology_state_machine() noexcept;
+    future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+    // Clones the storage of local tablets in the streaming stage of an intra-node migration
+    // from the leaving shard into the pending one.
+    // Must be called on startup, after the sstables were loaded and the commitlog was replayed.
+    future<> clone_tablets_in_intranode_migration();
+
+>>>>>>> 5ae1a961ad (storage_service: re-clone tablets in intra-node migration on startup)
     void start_tablet_split_monitor();
 private:
     using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;
