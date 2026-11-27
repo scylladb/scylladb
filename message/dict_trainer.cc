@@ -181,7 +181,12 @@ shared_dict::shared_dict(std::span<const std::byte> d, uint64_t timestamp, utils
 {
     size_t lz4_dict_size = std::min<size_t>(data.size(), max_lz4_dict_size);
     lz4_ddict = std::span(data).last(lz4_dict_size);
-    LZ4_loadDict(lz4_cdict.get(), reinterpret_cast<const char*>(lz4_ddict.data()), lz4_ddict.size());
+    // LZ4_loadDict() indexes only every third position of the dict, into a hash table
+    // with fewer slots than that, so later positions overwrite most earlier ones, and
+    // input matching the front of the dict may not be found to match it.
+    // LZ4_loadDictSlow() indexes the dict more thoroughly. A dict is loaded only rarely,
+    // so its slower loading doesn't matter.
+    LZ4_loadDictSlow(lz4_cdict.get(), reinterpret_cast<const char*>(lz4_ddict.data()), lz4_ddict.size());
     // Note: zstd dictionary builder puts the most valuable (frequent) samples
     // at the end of the buffer (to minimize the size of backreference offsets),
     // and it puts entropy tables (useless for lz4) at the front.
