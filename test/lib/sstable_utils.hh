@@ -28,8 +28,10 @@ using namespace std::chrono_literals;
 using validate = bool_class<struct validate_tag>;
 future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt);
 future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt);
-future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate = validate::yes);
-future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate = validate::yes);
+// A set `shard` skips the single-shard check: only for tests that deliberately
+// build sstables spanning several (possibly simulated) shards.
+future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate = validate::yes, std::optional<shard_id> shard = std::nullopt);
+future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate = validate::yes, std::optional<shard_id> shard = std::nullopt);
 
 namespace sstables {
 
