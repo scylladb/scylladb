@@ -5891,6 +5891,34 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        // These checks run under the guard, on every retry, so that they and the
+        // update below see the same group0 state. The table can be dropped
+        // concurrently, and vnodes-to-tablets migration creates tablet maps when
+        // it's prepared and removes them when it's rolled back.
+        //
+        // A table under migration already has a tablet map, but its keyspace
+        // keeps using vnodes until the migration is finalized, and repair isn't
+        // allowed during the migration. So the test is whether the keyspace uses
+        // tablets, not whether the table has a tablet map.
+        {
+            auto t = _db.local().get_tables_metadata().get_table_if_exists(table);
+            if (!t) {
+                throw std::invalid_argument(::format(
+                    "Cannot repair table {} with tablet repair because it doesn't exist.", table));
+            }
+            const auto& s = *t->schema();
+            if (!_db.local().find_keyspace(s.ks_name()).uses_tablets()) {
+                if (get_token_metadata().tablets().has_tablet_map(table)) {
+                    throw std::invalid_argument(::format(
+                        "Cannot repair table '{}'.'{}' with tablet repair because it is being migrated from vnodes to tablets.",
+                        s.ks_name(), s.cf_name()));
+                }
+                throw std::invalid_argument(::format(
+                    "Cannot repair table '{}'.'{}' with tablet repair because it doesn't use tablets.",
+                    s.ks_name(), s.cf_name()));
+            }
+        }
+
         // we don't allow requesting repair on tablets of colocated tables, because the repair task info
         // is stored on the base table's tablet map which is shared by all the tables that are colocated with it.
         // we don't have a way currently to store the repair task info for a specific colocated table.

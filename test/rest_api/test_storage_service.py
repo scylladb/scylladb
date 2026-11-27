@@ -878,6 +878,15 @@ def test_storage_service_repair_int_option_invalid(rest_api, option, value):
     resp = rest_api.send("POST", "storage_service/repair_async/system", {option: value})
     assert resp.status_code == requests.codes.bad_request
 
+# A tablet repair request for a table that doesn't use tablets is refused
+# with 400, not a 500 from the missing tablet map. Reproduces SCYLLADB-6707.
+def test_storage_service_tablet_repair_vnode_table(cql, test_keyspace_vnodes, rest_api, skip_without_tablets):
+    with new_test_table(cql, test_keyspace_vnodes, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        resp = rest_api.send("POST", "storage_service/tablets/repair", {"ks": test_keyspace_vnodes, "table": table, "tokens": "all"})
+        assert resp.status_code == requests.codes.bad_request
+        assert "doesn't use tablets" in resp.text
+
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
