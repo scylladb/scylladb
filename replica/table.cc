@@ -1626,7 +1626,8 @@ table::perform_component_rewrite(
         std::function<bool(const sstables::shared_sstable&)> filter,
         sstables::component_type component,
         std::function<void(sstables::sstable&)> modifier,
-        sstables::update_sstable_id update_id) {
+        sstables::update_sstable_id update_id,
+        std::function<future<>(sstables::sstable&)> in_place_modifier) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten;
     auto cgs = sg.compaction_groups_immediate();
     auto& cm = get_compaction_manager();
@@ -1637,7 +1638,7 @@ table::perform_component_rewrite(
         }
         for (auto* view : cg->all_views()) {
             auto per_view = co_await cm.perform_component_rewrite(
-                    *view, info, filter, component, modifier, update_id);
+                    *view, info, filter, component, modifier, update_id, in_place_modifier);
             rewritten.insert(per_view.begin(), per_view.end());
         }
     }
@@ -1651,7 +1652,8 @@ table::perform_component_rewrite(
         std::function<bool(const sstables::shared_sstable&)> filter,
         sstables::component_type component,
         std::function<void(sstables::sstable&)> modifier,
-        sstables::update_sstable_id update_id) {
+        sstables::update_sstable_id update_id,
+        std::function<future<>(sstables::sstable&)> in_place_modifier) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten;
     auto sgs = storage_groups_for_token_range(range);
     for (auto& sg : sgs) {
@@ -1660,10 +1662,16 @@ table::perform_component_rewrite(
             continue;
         }
         auto per_sg = co_await perform_component_rewrite(
-                *sg, info, filter, component, modifier, update_id);
+                *sg, info, filter, component, modifier, update_id, in_place_modifier);
         rewritten.insert(per_sg.begin(), per_sg.end());
     }
     co_return rewritten;
+}
+
+bool table::can_persist_repaired_at_in_place() const {
+    auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&_storage_opts->value);
+    return os && os->layout == data_dictionary::storage_options::object_storage_layout::unified
+            && _sstables_manager.get_features().object_storage_repaired_at_in_ref;
 }
 
 static sstring sstable_desc(const sstables::shared_sstable& sst) {
@@ -1872,7 +1880,8 @@ table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
     auto deletion_guard = co_await get_sstable_list_permit();
     const bool may_use_reference_sharing = _sstables_manager.get_features().sstable_reference_sharing;
     co_await sg.make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
-        ret.push_back(co_await sst->clone(calculate_generation_for_new_table(), leave_unsealed, may_use_reference_sharing));
+        ret.push_back(co_await sst->clone(calculate_generation_for_new_table(), leave_unsealed, may_use_reference_sharing,
+                sst->get_stats_metadata().repaired_at));
     });
     co_return ret;
 }
@@ -4245,13 +4254,23 @@ future<> table::update_repaired_at_for_merge() {
         auto filter = [&] (const sstables::shared_sstable& sst) {
             return sst->get_stats_metadata().repaired_at > sstables_repaired_at;
         };
-        auto modifier = [&] (sstables::sstable& new_sst) {
+        auto log_update = [&] (const sstables::sstable& sst) {
             tlogger.info("Updating repaired_at for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
-                         new_sst.get_filename(), new_sst.get_stats_metadata().repaired_at, new_repaired_at, sstables_repaired_at, id, sg->token_range());
+                         sst.get_filename(), sst.get_stats_metadata().repaired_at, new_repaired_at, sstables_repaired_at, id, sg->token_range());
+        };
+        auto modifier = [&] (sstables::sstable& new_sst) {
+            log_update(new_sst);
             new_sst.update_repaired_at(new_repaired_at);
         };
+        std::function<future<>(sstables::sstable&)> in_place_modifier;
+        if (can_persist_repaired_at_in_place()) {
+            in_place_modifier = [&] (sstables::sstable& sst) {
+                log_update(sst);
+                return sst.persist_repaired_at(new_repaired_at);
+            };
+        }
         co_await perform_component_rewrite(*sg, tasks::make_empty_task_info(), std::move(filter),
-                sstables::component_type::Statistics, std::move(modifier));
+                sstables::component_type::Statistics, std::move(modifier), sstables::update_sstable_id::yes, std::move(in_place_modifier));
         tlogger.info("Completed updating repaired_at={} for tablet merge in compaction group_id={} range {}",
                      new_repaired_at, id, sg->token_range());
     }

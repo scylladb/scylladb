@@ -150,6 +150,9 @@ public:
         std::function<void(sstables::sstable&)> modifier;
 
         sstables::update_sstable_id update_id = sstables::update_sstable_id::yes;
+        // If set, applied instead of the rewrite: the sstable is updated in place
+        // and maps to itself in the result.
+        std::function<future<>(sstables::sstable&)> in_place_modifier;
     };
 private:
     using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split, major, component_rewrite>;
@@ -190,8 +193,10 @@ public:
         return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables, .update_timestamp = update_timestamp, .is_automatic = is_automatic});
     }
 
-    static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, sstables::update_sstable_id update_id = sstables::update_sstable_id::yes) {
-        return compaction_type_options(component_rewrite{.component_to_rewrite = component, .modifier = std::move(modifier), .update_id = update_id});
+    static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, sstables::update_sstable_id update_id = sstables::update_sstable_id::yes,
+            std::function<future<>(sstables::sstable&)> in_place_modifier = {}) {
+        return compaction_type_options(component_rewrite{.component_to_rewrite = component, .modifier = std::move(modifier), .update_id = update_id,
+                .in_place_modifier = std::move(in_place_modifier)});
     }
 
     static compaction_type_options make_split(mutation_writer::classify_by_token_group classifier) {

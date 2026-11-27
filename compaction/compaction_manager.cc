@@ -22,6 +22,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -2510,14 +2511,53 @@ public:
                                        std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables)
             : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, options, {},
                 std::move(sstables), std::move(compacting), compaction_manager::can_purge_tombstones::no),
-            _rewritten_sstables(rewritten_sstables)
+            _rewritten_sstables(rewritten_sstables),
+            _in_place_modifier(options.as<compaction_type_options::component_rewrite>().in_place_modifier)
     {}
+private:
+    std::function<future<>(sstables::sstable&)> _in_place_modifier;
+
+    future<> modify_in_place() {
+        std::vector<sstables::shared_sstable> sstables;
+        while (!_sstables.empty()) {
+            sstables.push_back(consume_sstable());
+        }
+        co_await coroutine::switch_to(_cm.maintenance_sg());
+        setup_new_compaction();
+        std::exception_ptr ex;
+        try {
+            // Each modification is a small object-storage request. An updated sstable may move
+            // to another view, but stays registered as compacting, which every view honors.
+            co_await max_concurrent_for_each(sstables, 16, [this] (const sstables::shared_sstable& sst) -> future<> {
+                if (_compaction_data.is_stop_requested()) {
+                    throw make_compaction_stopped_exception();
+                }
+                co_await _in_place_modifier(*sst);
+                _rewritten_sstables.emplace(sst, sst);
+            });
+        } catch (const storage_io_error& e) {
+            // A failed small object-storage request must fail this task, not stop the compaction manager.
+            ex = std::make_exception_ptr(std::runtime_error(fmt::format("In-place component update failed: {}", e.what())));
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        finish_compaction(ex ? state::failed : state::done);
+        if (ex) {
+            std::rethrow_exception(std::move(ex));
+        }
+        _cm.reevaluate_postponed_compactions();
+    }
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         compaction_stats stats{};
 
         switch_state(state::pending);
         auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+
+        if (_in_place_modifier) {
+            co_await modify_in_place();
+            co_return stats;
+        }
 
         while (!_sstables.empty()) {
             auto sst = consume_sstable();
@@ -3152,10 +3192,11 @@ future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> c
             std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
-            sstables::update_sstable_id update_id) {
+            sstables::update_sstable_id update_id,
+            std::function<future<>(sstables::sstable&)> in_place_modifier) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten_sstables;
     co_await rewrite_sstables_component(t, std::move(filter),
-            compaction_type_options::make_component_rewrite(component, std::move(modifier), update_id),
+            compaction_type_options::make_component_rewrite(component, std::move(modifier), update_id, std::move(in_place_modifier)),
             rewritten_sstables, info);
     co_return rewritten_sstables;
 }

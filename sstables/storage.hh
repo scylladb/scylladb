@@ -132,7 +132,9 @@ public:
     virtual future<> finalize_snapshot(const sstable& sst, sstring tag) const = 0;
     // `may_use_reference_sharing` is a hint: storage backends may ignore it
     // and use their natural clone method.
-    virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
+    // `repaired_at`, if engaged, is stored with the clone where set_repaired_at() would.
+    virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false,
+            std::optional<int64_t> repaired_at = std::nullopt) const = 0;
     // Clones the backup sstable `src` into this storage. clone_from() creates the
     // registry entry and the node reference, and puts the components under the object
     // names of this storage. clone() works inside one storage. clone_from() takes the
@@ -167,6 +169,11 @@ public:
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
     virtual future<size_t> num_references(const sstable& sst) const = 0;
+    // Persists repaired_at without rewriting Statistics; it then overrides the
+    // Statistics value on load. Object storage only.
+    virtual future<> set_repaired_at(const sstable& sst, int64_t repaired_at) const = 0;
+    // The value persisted by set_repaired_at() or a clone, if any.
+    virtual future<std::optional<int64_t>> load_repaired_at(const sstable& sst) const = 0;
 
     virtual std::string_view prefix() const  = 0;
     virtual sstring component_fqn(const sstable& sst, component_type type) const  = 0;
