@@ -19,3 +19,6 @@
 // for backing up.   
 verb [[]] backup_snapshot_sstables(table_id table_id, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move);
 
+// RPC verb for cluster level clearsnapshot. Sent by the node running the clear to the
+// nodes which hold the snapshot. Removes the snapshot directory of the table.
+verb [[cancellable]] clear_snapshot_directory(sstring ks_name, sstring cf_name, sstring tag);
