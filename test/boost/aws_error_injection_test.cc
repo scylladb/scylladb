@@ -27,6 +27,7 @@ enum class failure_policy : uint8_t {
     RETRYABLE_FAILURE = 1,
     NONRETRYABLE_FAILURE = 2,
     NEVERENDING_RETRYABLE_FAILURE = 3,
+    INITIATE_FAILURE = 4,
 };
 
 static uint16_t get_port() {
@@ -204,4 +205,19 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_2) {
     BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::NONRETRYABLE_FAILURE, true), storage_io_error, [](const storage_io_error& e) {
         return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
     });
+}
+
+// When the upload cannot be started, the part that triggered it is lost, so the sink has to stay
+// failed: a flush that wrote the rest would leave a wrong object under the target name.
+SEASTAR_THREAD_TEST_CASE(test_upload_sink_stays_failed_after_initiate_failure) {
+    const sstring name(fmt::format("/test/initiate-failure-plain-{}", ::getpid()));
+    register_policy(name, failure_policy::INITIATE_FAILURE);
+    auto cln = s3::client::make(get_address(), make_mock_config());
+    auto close_client = deferred_close(*cln);
+
+    auto sink = cln->make_upload_sink(name);
+    auto close_sink = deferred_close(sink);
+    BOOST_REQUIRE_THROW(sink.put(temporary_buffer<char>(6_MiB)).get(), std::exception);
+    sink.put(temporary_buffer<char>(1000)).get();
+    BOOST_REQUIRE_THROW(sink.flush().get(), std::exception);
 }
