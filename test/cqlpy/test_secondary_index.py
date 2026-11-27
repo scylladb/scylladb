@@ -2648,7 +2648,6 @@ def test_limit_partition_slice(cql, test_keyspace):
 # assumes that the last partition of the previous page was fully read, so it
 # completely ignores it when preparing the second page. This logic is
 # implemented in `find_index_partition_ranges()`.
-@pytest.mark.xfail(reason="issue #25839")
 def test_short_read(cql, test_keyspace):
     page_memory_limit = 1024 if is_scylla(cql) else 1024 * 1024  # 1MiB in Cassandra, 1KiB in Scylla (for faster execution)
     row_size = page_memory_limit // 2  # will cause short read after 2 rows
@@ -2669,7 +2668,6 @@ def test_short_read(cql, test_keyspace):
 # Another reproducer for issue #25839, this time asking for a count() as
 # a user tried in #28026 and noticing that adding an additional column
 # to the selection causes the count to become smaller.
-@pytest.mark.xfail(reason="issue #25839")
 def test_short_count(cql, test_keyspace):
     # Newer Scylla have configurable query_page_size_in_bytes so we can set
     # it low to have a faster test. Older Scylla and Cassandra have hard-coded
