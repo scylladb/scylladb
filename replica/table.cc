@@ -2042,6 +2042,16 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
                 update_stats_for_new_sstable(sst);
                 _large_data_guardrail->register_sstable(sst);
             }
+            // A compaction of this group that is running now took its snapshot of the
+            // sstables before these ones existed, and looks for data that its tombstones
+            // delete in the memtable, which is about to lose this data. Have it look in
+            // these sstables instead, so it doesn't purge such tombstones (SCYLLADB-4747).
+            // This must happen here, with add_sstable() and before the memtable loses the
+            // data: a compaction that starts later already has these sstables in its
+            // snapshot, and one that started earlier gets them only from here.
+            for (auto* view : cg.all_views()) {
+                _compaction_manager.on_memtable_flush(*view, ssts);
+            }
             m->mark_flushed(std::move(*ms_opt));
             try_trigger_compaction(cg);
         });

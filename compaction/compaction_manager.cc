@@ -487,6 +487,16 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         if (descriptor.gc_scope >= tombstone_gc_scope::skip_memtable) {
             co_await utils::get_local_injector().inject("compaction_repaired_view_wait_after_gc_snapshots", utils::wait_for_message(5min));
         }
+        // Pauses a compaction that may purge tombstones after it started, before
+        // it reads its sstables, so a test can flush or write while it runs.
+        co_await utils::get_local_injector().inject("compaction_wait_before_reading", [&t] (auto& handler) -> future<> {
+            auto table_name = fmt::format("{}.{}", t.schema()->ks_name(), t.schema()->cf_name());
+            if (handler.get("table_name") == table_name) {
+                cmlog.info("compaction_wait_before_reading: waiting, table {}", table_name);
+                handler.set("suspended", true);
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + 5min);
+            }
+        });
     }
     descriptor.creator = [&t] (shard_id) {
         // All compaction types going through this path will work on normal input sstables only.
@@ -3323,6 +3333,11 @@ void compaction_manager::propagate_replacement(compaction_group_view& t,
             task.compaction_data().pending_replacements.push_back({ removed, added });
         }
     }
+}
+
+void compaction_manager::on_memtable_flush(compaction_group_view& t, const std::vector<sstables::shared_sstable>& flushed) {
+    // A flush replaces no sstable: the new sstables hold data of the memtables.
+    propagate_replacement(t, {}, flushed);
 }
 
 strategy_control& compaction_manager::get_strategy_control() const noexcept {
