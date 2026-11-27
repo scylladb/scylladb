@@ -680,7 +680,8 @@ future<std::unordered_map<raft::group_id, api::timestamp_type>> groups_manager::
     std::unordered_map<host_id, tablet_per_group> host_groups;
     for (const auto& [gid, state] : _raft_groups) {
         const auto& tablet = state.tablet;
-        if (!state.has_tablet || !state.leader_info || !tm->tablets().has_tablet_map(tablet.table)) {
+        if (!state.has_tablet || !state.leader_info || !state.storage || state.storage->seals().empty()
+                || !tm->tablets().has_tablet_map(tablet.table)) {
             continue;
         }
         const auto& tmap = tm->tablets().get_tablet_map(tablet.table);
@@ -1094,6 +1095,13 @@ future<> groups_manager::seal_proposer::run() {
 }
 
 future<> groups_manager::seal_proposer::round() {
+    const auto applied_seals = co_await _gm.min_applied_seals();
+    for (const auto& [gid, ts] : applied_seals) {
+        if (const auto it = _gm._raft_groups.find(gid); it != _gm._raft_groups.end()) {
+            co_await maybe_promote(gid, it->second, ts);
+        }
+    }
+
     std::vector<raft::group_id> led;
     for (const auto& [gid, state] : _gm._raft_groups) {
         if (state.leader_info) {
@@ -1146,6 +1154,22 @@ future<> groups_manager::seal_proposer::append(raft_server& srv, raft::group_id 
         }
         logger.debug("seal_proposer: group {}: the command was not committed: {}", gid, std::current_exception());
     }
+}
+
+future<> groups_manager::seal_proposer::maybe_promote(raft::group_id gid, raft_group_state& state, api::timestamp_type applied_seal) {
+    auto srv = try_acquire_server(state);
+    if (!srv || !state.storage) {
+        co_return;
+    }
+    const auto& seals = state.storage->seals();
+    const auto seal = std::ranges::find_if(seals | std::views::reverse, [&] (const raft_seal& s) { return s.ts <= applied_seal; });
+    if (seal == seals.rend()) {
+        co_return;
+    }
+    co_await append(*srv, gid, [gid, idx = seal->idx] (api::timestamp_type, raft::term_t term) {
+        logger.debug("seal_proposer: group {}: promoting the seal at {}, term {}", gid, idx, term);
+        return raft_command{.change = promote_command{.seal_idx = idx}};
+    });
 }
 
 // The raft group configuration implied by a tablet's replica set and the stage its
