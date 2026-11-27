@@ -9,7 +9,7 @@
  */
 
 #include <algorithm>
-#include <regex>
+#include <cctype>
 
 #include <seastar/core/when_all.hh>
 
@@ -134,70 +134,150 @@ create_role_statement::execute(query_processor&,
     co_return nullptr;
 }
 
-/// Prepends '\' to special characters in ECMAScript regex syntax.
-static sstring escape_for_regex(const sstring& text) {
-    static const std::regex escape_re(R"([.^$|()\[\]{}*+?\\])", std::regex_constants::ECMAScript);
-    return std::regex_replace(text.c_str(), escape_re, R"(\$&)");
-}
-
-static bool is_password_empty(const sstring& password) {
-    // Empty passwords are stored as single char(-1) (&nbsp), NOT as empty strings.
-    //
-    // see cql3/cql.g, and search "ugly hack". we use an ugly hack to return
-    // empty string literals using string with a single char(-1)
-    //
-    // please note, we can NOT compare password[0] with -1, as on aarch64
-    // platforms, `char` is unsigned by default. so, if password is "empty",
-    // the value of password[0] would be 255.
-    return password.size() == 1 && password[0] == static_cast<char>(-1);
-}
-
-/// Removes single-quoted passwords - plaintext, or hashed (HASHED PASSWORD).
-static void sanitize_audit_info_password(audit::audit_info* ai, const sstring& raw_password) {
-    sstring password;
-    if (!is_password_empty(raw_password)) {
-        // Password needs escaping to be searchable literally:
-        password = escape_for_regex(raw_password);
-    }
-    const std::regex re(R"(((WITH|AND)\s*(HASHED\s+)?PASSWORD\s*=?\s*)')" + std::string(password) + "'",
-            std::regex_constants::ECMAScript | std::regex_constants::icase);
-    const auto replace_result = std::regex_replace(ai->query().c_str(), re, "$1'***'");
-    ai->set_query_string(static_cast<std::string_view>(replace_result));
-}
-
-/// A heuristic to mask the values of `OPTIONS' map when key is like "PASSWORD".
-static void sanitize_audit_info_options(audit::audit_info* ai, const std::map<sstring,sstring>& options) {
-    for (const auto& [k, v] : options) {
-        const auto key_trimmed = boost::trim_copy(k);
-        if (!boost::iequals(key_trimmed, "PASSWORD")) { // Case-insensitive comp.
+/// Returns `text`, the CQL text of a role statement, with the literal in each
+/// password's position replaced by '***': the string literal after `PASSWORD`
+/// or `HASHED PASSWORD`, with or without `=`, and the value of an `OPTIONS`
+/// entry whose key is like "PASSWORD", in either quoting form or bare, up to
+/// the `,` or `}` which ends it, so that a signed constant such as
+/// `- Infinity` is masked as a whole. The text is read as the lexer reads it,
+/// so comments are skipped, and a quote in a comment or in a quoted
+/// identifier does not start a literal. No other token is replaced, whatever
+/// its value.
+static sstring mask_role_credentials(const sstring& text) {
+    const std::string_view in(text);
+    std::string out;
+    out.reserve(in.size());
+    size_t i = 0;
+    // Returns the position after the `delim` which follows `from`, or the end of the text.
+    auto after = [&in] (std::string_view delim, size_t from) {
+        const auto pos = in.find(delim, from);
+        return pos == std::string_view::npos ? in.size() : pos + delim.size();
+    };
+    // Returns the position after the end of the line which starts at `from`,
+    // which the lexer ends at either a line feed or a carriage return.
+    auto after_line = [&in] (size_t from) {
+        const auto pos = in.find_first_of("\r\n", from);
+        return pos == std::string_view::npos ? in.size() : pos + 1;
+    };
+    // Returns the position after the quoted token which starts at `i`, where
+    // a doubled quote inside the token stands for a quote.
+    auto after_quoted = [&in, &i] (char quote) {
+        size_t j = i + 1;
+        while (j < in.size()) {
+            if (in[j] != quote) {
+                ++j;
+            } else if (j + 1 < in.size() && in[j + 1] == quote) {
+                j += 2;
+            } else {
+                return j + 1;
+            }
+        }
+        return in.size();
+    };
+    // Returns the text between the delimiters of the token at [i, end), which
+    // are `delim_size` characters long at each end.
+    auto inside = [&in, &i] (size_t end, size_t delim_size) {
+        return end - i >= 2 * delim_size ? in.substr(i + delim_size, end - i - 2 * delim_size) : std::string_view();
+    };
+    // Whether `c` can be part of a bare token: an identifier, a keyword or a
+    // constant such as a number or a duration, which may hold UTF-8 (`µs`).
+    auto is_token_char = [] (char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || static_cast<unsigned char>(c) >= 0x80
+                || c == '_' || c == '.' || c == '-' || c == '+';
+    };
+    // The kind of a significant token: whitespace and comments are skipped.
+    enum class kind { none, word, literal, quoted_name, punct };
+    struct token {
+        kind k = kind::none;
+        std::string text; // A word in upper case, a literal unescaped.
+    };
+    token prev, prev2;
+    unsigned options_depth = 0; // Nesting of braces inside `OPTIONS = { ... }`, 0 outside.
+    bool mask_next_value = false; // After the `:` of a PASSWORD key of OPTIONS.
+    // After the first token of the value of a PASSWORD key of OPTIONS, which
+    // the '***' stands for: the rest of the value, up to the `,` or `}` which
+    // ends it, is dropped, so that `- Infinity` is masked as a whole.
+    bool in_masked_value = false;
+    std::string deferred; // Whitespace and comments inside a masked value, kept if the value ends after them.
+    while (i < in.size()) {
+        const auto rest = in.substr(i);
+        size_t end;
+        token tok;
+        if (rest.starts_with("--") || rest.starts_with("//")) {
+            end = after_line(i);
+        } else if (rest.starts_with("/*")) {
+            end = after("*/", i + 2);
+        } else if (std::isspace(static_cast<unsigned char>(in[i]))) {
+            end = i + 1;
+        } else if (rest.starts_with("$$")) {
+            end = after("$$", i + 2);
+            tok = {kind::literal, std::string(inside(end, 2))};
+        } else if (in[i] == '\'') {
+            end = after_quoted('\'');
+            tok = {kind::literal, boost::replace_all_copy(std::string(inside(end, 1)), "''", "'")};
+        } else if (in[i] == '"') {
+            end = after_quoted('"');
+            tok = {kind::quoted_name, {}};
+        } else if (is_token_char(in[i])) {
+            // A token ends before the `--` of a comment: `r-- c` is `r` and a
+            // comment. A colon continues it only before a digit, as in the ISO
+            // 8601 duration P2020-01-01T12:34:56, so `12345:'x'` is `12345` and `:`.
+            end = i + 1;
+            while (end < in.size() && !in.substr(end).starts_with("--")
+                    && (is_token_char(in[end])
+                        || (in[end] == ':' && end + 1 < in.size() && std::isdigit(static_cast<unsigned char>(in[end + 1]))))) {
+                ++end;
+            }
+            tok = {kind::word, boost::to_upper_copy(std::string(in.substr(i, end - i)))};
+        } else {
+            end = i + 1;
+            tok = {kind::punct, std::string(1, in[i])};
+        }
+        if (tok.k == kind::none) {
+            (in_masked_value ? deferred : out).append(in.substr(i, end - i));
+            i = end;
             continue;
         }
-        sstring password;
-        if (!is_password_empty(v)) {
-            // Password needs escaping to be searchable literally:
-            password = escape_for_regex(v);
+        if (in_masked_value) {
+            const bool ends = tok.k == kind::punct && (tok.text == "," || tok.text == "}");
+            if (ends) {
+                out.append(deferred);
+                in_masked_value = false;
+            }
+            deferred.clear();
+            if (!ends) {
+                i = end;
+                continue;
+            }
         }
-        // Now find the pattern of map element, like: "' PassWord ' : '1234vcxz!@#$'",
-        //   capture "' PassWord ' : " and match "'1234vcxz!@#$'"
-        const std::regex re(R"(('\s*)" + std::string(key_trimmed) + R"(\s*'\s*:\s*)')"
-                + std::string(password) + "'", std::regex_constants::ECMAScript);
-        const auto replace_result = std::regex_replace(ai->query().c_str(), re, "$1'***'");
-        ai->set_query_string(static_cast<std::string_view>(replace_result));
+        const bool after_password = (prev.k == kind::word && prev.text == "PASSWORD")
+                || (prev.k == kind::punct && prev.text == "=" && prev2.k == kind::word && prev2.text == "PASSWORD");
+        const bool mask = (tok.k == kind::literal && after_password)
+                || (mask_next_value && (tok.k == kind::literal || tok.k == kind::word));
+        in_masked_value = mask && mask_next_value;
+        mask_next_value = false;
+        if (tok.k == kind::punct) {
+            if (tok.text == "{" && (options_depth > 0
+                    || (prev.k == kind::punct && prev.text == "=" && prev2.k == kind::word && prev2.text == "OPTIONS"))) {
+                ++options_depth;
+            } else if (tok.text == "}" && options_depth > 0) {
+                --options_depth;
+            } else if (tok.text == ":" && options_depth > 0 && prev.k == kind::literal
+                    && boost::iequals(boost::trim_copy(prev.text), "PASSWORD")) {
+                mask_next_value = true;
+            }
+        }
+        out.append(mask ? std::string_view("'***'") : in.substr(i, end - i));
+        prev2 = std::move(prev);
+        prev = std::move(tok);
+        i = end;
     }
+    out.append(deferred);
+    return sstring(out);
 }
 
-void create_role_statement::sanitize_audit_info() {
-    if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
-        if (_options.password) {
-            sanitize_audit_info_password(ai, *_options.password);
-        }
-        if (_options.hashed_password) {
-            sanitize_audit_info_password(ai, *_options.hashed_password);
-        }
-        if (_options.options) {
-            sanitize_audit_info_options(ai, *_options.options);
-        }
-    }
+sstring create_role_statement::mask_secrets(sstring text) const {
+    return mask_role_credentials(text);
 }
 
 //
@@ -275,18 +355,8 @@ alter_role_statement::execute(query_processor&, service::query_state& state, con
     co_return nullptr;
 }
 
-void alter_role_statement::sanitize_audit_info() {
-    if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
-        if (_options.password) {
-            sanitize_audit_info_password(ai, *_options.password);
-        }
-        if (_options.hashed_password) {
-            sanitize_audit_info_password(ai, *_options.hashed_password);
-        }
-        if (_options.options) {
-            sanitize_audit_info_options(ai, *_options.options);
-        }
-    }
+sstring alter_role_statement::mask_secrets(sstring text) const {
+    return mask_role_credentials(text);
 }
 
 //

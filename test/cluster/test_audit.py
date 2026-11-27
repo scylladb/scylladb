@@ -1403,11 +1403,18 @@ class CQLAuditTester(AuditTester):
         with helper_class() as helper:
             session = await self.prepare(user="cassandra", password="cassandra", helper=helper)
 
-            tests = [self.PasswordMaskingCase("role1", "Secret!@#$", "Secret^%$#@!"), self.PasswordMaskingCase("role2", "", "")]
+            # The passwords are written as CQL literals: a quote in a value
+            # is doubled, and $$ quotes take a value as is.
+            tests = [
+                self.PasswordMaskingCase("role1", "'Secret!@#$'", "'Secret^%$#@!'"),
+                self.PasswordMaskingCase("role2", "''", "''"),
+                self.PasswordMaskingCase("role3", "'it''s'", "'a''b'''"),
+                self.PasswordMaskingCase("role4", "$$se$cret$$", "$$$$"),
+            ]
             for role_name, password, new_password in tests:
                 self.execute_and_validate_new_audit_entry(
                     session,
-                    f"CREATE ROLE {role_name} WITH PASSWORD = '{password}'",
+                    f"CREATE ROLE {role_name} WITH PASSWORD = {password}",
                     category="DCL",
                     expected_operation=f"CREATE ROLE {role_name} WITH PASSWORD = '***'",
                     user="cassandra",
@@ -1415,7 +1422,7 @@ class CQLAuditTester(AuditTester):
                 )
                 self.execute_and_validate_new_audit_entry(
                     session,
-                    f"ALTER ROLE {role_name} WITH PASSWORD = '{new_password}'",
+                    f"ALTER ROLE {role_name} WITH PASSWORD = {new_password}",
                     category="DCL",
                     expected_operation=f"ALTER ROLE {role_name} WITH PASSWORD = '***'",
                     user="cassandra",
