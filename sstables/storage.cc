@@ -1289,23 +1289,22 @@ future<> object_storage_base::destroy(const sstable& sst) {
     // Delete components only if no references remain. Snapshot references
     // count like any other, so a snapshotted sstable's data survives the
     // removal of the live sstable.
-    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
-    if (refs.empty()) {
-        // Delete the S3 objects. Errors are logged but not propagated because
-        // destroy() is called fire-and-forget from the shared_ptr deleter.
-        // Any objects that could not be deleted here will be retried on the
-        // next startup via garbage_collect() which handles "removing" entries.
-        std::vector<sstring> components;
+    auto objects = co_await list_object_storage_refs_and_components(*_client, _bucket, prefix(), sid);
+    if (objects.refs == 0) {
+        // The TOC's components are at hand and their DELETEs idempotent; the listing adds
+        // objects the TOC does not name, like a leftover TemporaryHashes.
+        auto& components = objects.components;
         for (const auto& [type, name] : sst.all_components()) {
             if (type != component_type::TOC) {
                 components.push_back(name);
             }
         }
-        // Not in the TOC, and left behind by a write that failed before build_delayed_filter() removed it.
-        auto& component_map = sstable_version_constants::get_component_map(sst.get_version());
-        if (auto it = component_map.find(component_type::TemporaryHashes); it != component_map.end()) {
-            components.push_back(it->second);
-        }
+        std::ranges::sort(components);
+        components.erase(std::ranges::unique(components).begin(), components.end());
+        // Delete the S3 objects. Errors are logged but not propagated because
+        // destroy() is called fire-and-forget from the shared_ptr deleter.
+        // Any objects that could not be deleted here will be retried on the
+        // next startup via garbage_collect() which handles "removing" entries.
         co_await delete_components(std::move(components), sid, true);
     }
 
@@ -1329,7 +1328,7 @@ future<> object_storage_base::destroy(const sstable& sst) {
     } catch (...) {
         sstlog.warn("Failed to delete registry entry for {}: {:t}", sst.toc_filename(), std::current_exception());
     }
-    sstlog.debug("Deleted reference {} remaining_refs={}", ref_name.str(), refs.size());
+    sstlog.debug("Deleted reference {} remaining_refs={}", ref_name.str(), objects.refs);
 }
 
 class object_storage_atomic_deletion_impl : public atomic_deletion_impl {
