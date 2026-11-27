@@ -57,8 +57,8 @@ def connect(request, host, scylla_only):
     if EXTENSION not in supported:
         skip_env(f"The server doesn't support {EXTENSION}")
 
-    def open_connection(negotiate: bool = True):
-        return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {})
+    def open_connection(negotiate: bool = True, version: int = 4):
+        return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {}, version)
     return open_connection
 
 
@@ -233,6 +233,23 @@ def test_execute_without_tablet_version_block(cql, connect, test_keyspace):
 
         # The same request with a block succeeds, so the rest of it is valid.
         assert cql_frames.execute(sock, statement_id, [1, 1], tablet_version_block=0x00).opcode == cql_frames.RESULT
+
+
+# Protocol v3 has no custom payload to carry the routing information, so the
+# server doesn't advertise the extension on a v3 connection. Reproduces
+# SCYLLADB-5742.
+def test_not_advertised_on_protocol_v3(connect):
+    with connect(negotiate=False, version=3) as sock:
+        assert EXTENSION not in cql_frames.supported(sock, version=3)
+
+
+# Nor does the server enable the extension on a v3 connection if the driver
+# asks for it anyway: an EXECUTE request carries no tablet version block, and
+# its response carries no routing information.
+def test_not_negotiated_on_protocol_v3(cql, connect, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table, connect(negotiate=True, version=3) as sock:
+        statement_id = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
+        assert routing_information_of(cql_frames.execute(sock, statement_id, [1, 1], version=3)) is None
 
 
 # The routing information is about the tablet of the partition the statement
