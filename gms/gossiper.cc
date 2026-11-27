@@ -514,6 +514,7 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
 }
 
 future<rpc::no_wait_type> gossiper::background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn) {
+    logger.debug("Received {}", type);
     (void)with_gate(_background_msg, [this, type = std::move(type), fn = std::move(fn)] () mutable {
         return container().invoke_on(0, std::move(fn)).handle_exception([type = std::move(type)] (auto ep) {
             logger.warn("Failed to handle {}: {}", type, ep);
@@ -2062,8 +2063,11 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
 
-    // Create a new local state.
-    endpoint_state local_state{get_broadcast_address()};
+    // Create a new local state. If gossip is being reenabled, a local state already
+    // exists. Keep its application states: they include HOST_ID, without which
+    // replicate() ignores the new state and the new generation is lost.
+    auto old_local_state = get_this_endpoint_state_ptr();
+    endpoint_state local_state = old_local_state ? *old_local_state : endpoint_state{get_broadcast_address()};
     local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
     for (auto& entry : preload_local_states) {
         local_state.add_application_state(entry.first, entry.second);
@@ -2076,13 +2080,13 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     logger.info("Gossip started with local state: {}", my_endpoint_state());
     _enabled = true;
     _nr_run = 0;
-    if (!_background_msg.is_closed()) {
-        co_await _background_msg.close();
-    }
-    _background_msg = seastar::named_gate("gossiper");
-    _msg_abort_source = abort_source();
     /* Ensure all shards have enabled gossip before starting the failure detector loop */
-    co_await container().invoke_on_all([] (gms::gossiper& g) {
+    co_await container().invoke_on_all([] (gms::gossiper& g) -> future<> {
+        if (!g._background_msg.is_closed()) {
+            co_await g._background_msg.close();
+        }
+        g._background_msg = seastar::named_gate("gossiper");
+        g._msg_abort_source = abort_source();
         g._enabled = true;
     });
 
@@ -2513,11 +2517,6 @@ future<> gossiper::mark_as_shutdown(const locator::host_id& endpoint, permit_id 
         co_await replicate(std::move(ep_state), pid);
         co_await mark_dead(endpoint, get_endpoint_state_ptr(endpoint), pid);
     }
-}
-
-void gossiper::force_newer_generation() {
-    auto& eps = my_endpoint_state();
-    eps.get_heart_beat_state().force_newer_generation_unsafe();
 }
 
 static sstring do_get_gossip_status(const gms::versioned_value* app_state) noexcept {

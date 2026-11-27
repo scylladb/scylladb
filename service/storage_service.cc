@@ -2749,8 +2749,7 @@ future<> storage_service::start_gossiping() {
             try {
                 co_await set_gossip_tokens(ss._gossiper,
                         co_await ss._sys_ks.local().get_local_tokens());
-                ss._gossiper.force_newer_generation();
-                co_await ss._gossiper.start_gossiping(gms::get_generation_number());
+                co_await ss._gossiper.start_gossiping(co_await ss._sys_ks.local().increment_and_get_generation());
             } catch (...) {
                 should_stop_gossiper = true;
             }
