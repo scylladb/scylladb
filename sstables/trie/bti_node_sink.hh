@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <absl/container/flat_hash_map.h>
 #include "writer_node.hh"
 #include "bti_node_type.hh"
 #include "sstables/file_writer.hh"
@@ -25,12 +26,37 @@ sink_offset max_offset_from_child(const writer_node& x, sink_pos pos);
 // into a stream of bytes on disk as defined by the BTI format at:
 // https://github.com/apache/cassandra/blob/f16fb6765b8a3ff8f49accf61c908791520c0d6e/src/java/org/apache/cassandra/io/sstable/format/bti/BtiFormat.md
 //
+// With page footers (`mu`), every page ends with a chunk table and a footer
+// (see bti_page_footer.hh). The sink then keeps the current page in memory, and
+// writes it to the file when the page ends. All bytes of the file, including the
+// raw bytes that aren't trie nodes, must then be written through the sink.
+// Without page footers, the sink writes straight to the file.
 class bti_node_sink {
     sstables::file_writer& _w;
     size_t _page_size;
+    // True if every page ends with a chunk table and a footer. The index writers
+    // set it with bti_index_has_page_footers(), so it's true for `mu`.
+    bool _page_footers;
+    // With page footers: the bytes written to the current page so far.
+    std::vector<char> _page;
+    // With page footers: the number of bytes written to the current page so far.
+    // It's the offset of the next byte in `_page`. The page starts at file
+    // position `_w.offset()`, so pos() is `_w.offset() + _page_fill`.
+    // It's 0 when the current page is empty, and always 0 without page footers.
+    size_t _page_fill = 0;
+    // With page footers: the chunk table of the current page, by slot,
+    // and the slot of each chunk in it.
+    std::vector<uint64_t> _table;
+    absl::flat_hash_map<uint64_t, uint16_t> _slots;
+    // Set by abandon().
+    bool _abandoned = false;
     constexpr static size_t max_page_size = 64 * 1024;
 public:
-    bti_node_sink(sstables::file_writer& w, size_t page_size);
+    bti_node_sink(sstables::file_writer& w, size_t page_size, bool page_footers = false);
+    // With page footers, the current page is only in memory until it ends.
+    // Destroying the sink with an unended page is an internal error, unless
+    // abandon() was called: the page would be missing from the file.
+    ~bti_node_sink();
 private:
     // Truncates `x` to the given number of least significant bytes,
     // and writes out the result in big endian.
@@ -38,12 +64,23 @@ private:
     void write_int(uint64_t x, size_t bytes);
     // Writes raw bytes to the output file.
     void write_bytes(const_bytes x);
+    // Writes bytes into the usable area of the current page.
+    // With page footers, they must fit before the chunk table.
+    void put(const char* data, size_t n);
+    // The offset of the chunk table in the current page.
+    size_t table_start_in_page() const;
+    // With page footers: writes the padding, the chunk table and the footer
+    // of the current page, and starts the next page.
+    void end_page();
+    // With page footers: returns the slot of `chunk` in the current page's table,
+    // and adds the chunk to the table if needed.
+    unsigned slot_for_chunk(uint64_t chunk);
     // Writes a sparse-type node (SPARSE_*) to the file.
-    size_t write_sparse(const writer_node& x, node_type type, int bytes_per_pointer, sink_pos pos);
+    size_t write_sparse(const writer_node& x, const trie_payload& p, node_type type, int bytes_per_pointer, sink_pos pos);
     // Computes the size of a sparse-type node (SPARSE_*).
     node_size size_sparse(const writer_node& x, int bits_per_pointer) const;
     // Writes a dense-type node (SPARSE_*) to the file.
-    size_t write_dense(const writer_node& x, node_type type, int bytes_per_pointer, sink_pos pos);
+    size_t write_dense(const writer_node& x, const trie_payload& p, node_type type, int bytes_per_pointer, sink_pos pos);
     // Computes the size of a dense-type node (DENSE_*).
     node_size size_dense(const writer_node& x, int bits_per_pointer) const;
 public:
@@ -77,11 +114,17 @@ public:
     // of bti_node_sink can fill the `_pos` of children and the `pos` passed
     // here via an argument with whatever it wants, something possibly
     // unrelated to `current_pos()`.
-    void write_body(const writer_node& x, sink_pos pos, node_type type);
+    //
+    // `p` is written as the payload, and x._payload is ignored. write() passes
+    // x._payload, or a copy of it with the chunk table slot filled in.
+    void write_body(const writer_node& x, sink_pos pos, node_type type, const trie_payload& p);
     // Writes all nodes, except the final node, of the chain corresponding to the writer_node.
     // (See write_body for what "chain" means).
     sink_pos write_chain(const writer_node& x, node_size body_offset);
     // Writes both the body and the chain.
+    //
+    // If the payload has a chunk, the chunk gets a slot in the current page's
+    // chunk table, and the slot is written to the low bti_slot_bits bits of the payload.
     sink_pos write(const writer_node& x, sink_pos pos);
     // Computes the size of the given node after serialization, in bytes,
     // if it's serialized with the given BTI type.
@@ -102,16 +145,54 @@ public:
     node_size serialized_size(const writer_node& x, sink_pos pos) const;
     // Page size, same as the one passed via the constructor.
     uint64_t page_size() const;
+    // The usable size of an empty page: the page size, minus the footer.
+    uint64_t page_capacity() const;
+    // The size of a chunk table entry, or 0 without page footers.
+    uint64_t table_entry_size() const;
     // Returns the number of bytes between current file position
-    // and the start of the next page.
-    // In range [0; page_size).
+    // and the start of the next page, or, with page footers,
+    // the start of the current page's chunk table.
+    // Without page footers: in range [1; page_size()].
+    // With page footers: in range [0; page_capacity()].
     uint64_t bytes_left_in_page() const;
-    // Appends bytes_left_in_page() nul bytes to the file.
+    // Ends the current page and starts the next one.
+    // Without page footers: appends bytes_left_in_page() nul bytes to the file.
+    // With page footers: appends the padding, the chunk table and the footer.
     void pad_to_page_boundary();
-    // Returns the position reported by the underlying `file_writer`.
+    // Returns the current position in the file.
     sink_pos pos() const;
-    sstables::file_writer& file_writer();
+
+    // Writes bytes that aren't a trie node (e.g. a row index header).
+    // With page footers, the bytes can span pages: they skip the chunk table and
+    // the footer of each page they cross.
+    void write_raw(const char* data, size_t n);
+    // Returns the position of the next byte that write_raw() will write.
+    // Use it, not pos(), to record the position of raw bytes.
+    //
+    // With page footers, if the previous write ended exactly at the start of the
+    // current page's chunk table, this ends the page first. Thus the position
+    // points at the next byte, not at the table.
+    sink_pos raw_pos();
+    // With page footers: writes `tail` so that it ends exactly at the start of the
+    // chunk table of a page, and ends that page. It's never split.
+    // Precondition: tail.size() <= page_capacity().
+    void write_page_tail(const char* data, size_t n);
+    // Ends the last page, if it's not ended yet. Must be called after the last
+    // write to the file. An empty file stays empty.
+    void end_last_page();
+    // Discards the current page, if it's not ended yet. Call it instead of
+    // end_last_page() if the file won't be finished, e.g. because the write failed.
+    void abandon() noexcept;
 };
 static_assert(trie_writer_sink<bti_node_sink>);
+
+// Writes raw bytes through bti_node_sink::write_raw().
+// Satisfies the sstables::Writer concept, for the serialization helpers.
+struct bti_raw_writer {
+    bti_node_sink& sink;
+    void write(const char* data, size_t n) {
+        sink.write_raw(data, n);
+    }
+};
 
 } // namespace sstables::trie

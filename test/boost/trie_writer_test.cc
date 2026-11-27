@@ -13,9 +13,12 @@
 #include <xxhash.h>
 #include <fmt/ranges.h>
 #include <numeric>
+#include <random>
+#include <set>
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/key_utils.hh"
+#include "test/lib/random_utils.hh"
 #include "utils/bit_cast.hh"
 #include "sstables/trie/trie_writer.hh"
 #include "utils/assert.hh"
@@ -61,23 +64,45 @@ std::vector<std::vector<size_t>> generate_all_subsets(size_t n, size_t k) {
     return samples;
 }
 
+// How the payloads of a test refer to chunks (see trie_payload::_chunk).
+enum class chunk_mode {
+    // No payload has a chunk. Pages have no chunk tables.
+    none,
+    // Every payload has its own chunk.
+    distinct,
+    // Pairs of adjacent payloads share a chunk.
+    pairs,
+    // Every other payload has no chunk. The others share chunks in pairs.
+    holes,
+};
+
 // Checks that the stream of nodes produced by a trie_writer
 // with given parameters is consistent with the inputs.
+//
+// With chunks, each page of the output ends with a chunk table, which has an
+// entry of 1 byte for each distinct chunk of the payloads in the page. The check
+// fails if a node overlaps the table.
 void test_one_set_of_strings(
     const std::vector<std::string_view>& inputs,
     size_t branching_factor,
     size_t page_size,
     size_t max_chain_len,
     size_t start_pos,
-    uint64_t seed
+    uint64_t seed,
+    chunk_mode chunks = chunk_mode::none
 ) {
-    testlog.debug("test_one_set_of_strings: inputs={}, page_size={}, max_chain_len={}", inputs, page_size, max_chain_len);
+    testlog.debug("test_one_set_of_strings: inputs={}, page_size={}, max_chain_len={}, chunks={}", inputs, page_size, max_chain_len, int(chunks));
     SCYLLA_ASSERT(std::ranges::is_sorted(inputs));
     struct trie_output_stream {
         sink_pos _pos{0};
         size_t _page_size = 0;
         uint64_t _seed = 0;
         uint64_t _padding = 0;
+        uint64_t _table_entry_size = 0;
+        // The start of the current page.
+        uint64_t _page_start = 0;
+        // The chunk table of the current page.
+        std::set<uint64_t> _table;
         struct serialized {
             trie_payload payload;
             std::vector<std::byte> transition;
@@ -85,10 +110,12 @@ void test_one_set_of_strings(
         };
         std::map<sink_pos, serialized> _output;
 
-        trie_output_stream(size_t page_size, uint64_t seed) : _page_size(page_size), _seed(seed) {
+        trie_output_stream(size_t page_size, uint64_t seed, uint64_t table_entry_size)
+            : _page_size(page_size), _seed(seed), _table_entry_size(table_entry_size) {
         }
         node_size serialized_size(const writer_node& x, sink_pos start_pos) const {
-            // Returns a "random" size in range [1, page_size].
+            // Returns a "random" size in range [1, page_size],
+            // or [1, page_size - table_entry_size] for a node with a chunk.
             //
             // With enough test cases, this should be enough to test the full variety
             // of interesting situations in the writer.
@@ -112,7 +139,7 @@ void test_one_set_of_strings(
                 }
             }
             auto hash = XXH64(relevant_data.data(), std::span(relevant_data).size_bytes(), _seed);
-            auto result = 1 + hash % _page_size;
+            auto result = 1 + hash % (_page_size - (x._payload.has_chunk() ? _table_entry_size : 0));
             testlog.trace("serialized_size: x={}, result={}, offsets={}", fmt::ptr(&x), result, relevant_data);
             return node_size(result);
         }
@@ -125,35 +152,58 @@ void test_one_set_of_strings(
             const_bytes transition_view{x._transition.get(), x._transition_length};
             s.transition = std::vector<std::byte>(transition_view.begin(), transition_view.end());
             s.payload = x._payload;
+            _page_start = effective_page_start();
+            if (x._payload.has_chunk()) {
+                _table.insert(x._payload._chunk);
+            }
             sink_pos result = _pos + sink_offset(1);
             auto sz = serialized_size(x, _pos);
+            // The node must fit before the table.
+            BOOST_REQUIRE_LE(uint64_t(sz.value), bytes_left_in_page());
             _pos = _pos + sz;
             _output.insert({result, std::move(s)});
             testlog.trace("write: {}", sz.value);
             return result;
         }
-        size_t page_size() const {
+        uint64_t page_capacity() const {
             return _page_size;
         };
+        uint64_t table_entry_size() const {
+            return _table_entry_size;
+        }
+        // If nodes filled the current page exactly, and it has no table,
+        // the next page starts without pad_to_page_boundary().
+        uint64_t effective_page_start() const {
+            if (uint64_t(_pos.value) == _page_start + _page_size && _table.empty()) {
+                return _page_start + _page_size;
+            }
+            return _page_start;
+        }
         void pad_to_page_boundary() {
-            size_t pad = bytes_left_in_page();
+            auto next = effective_page_start() + _page_size;
+            size_t pad = next - _pos.value;
             _padding += pad;
             testlog.trace("pad: {}", pad);
-            _pos = _pos + sink_offset(pad);
+            _pos = sink_pos(next);
+            _page_start = next;
+            _table.clear();
         };
-        size_t bytes_left_in_page() const {
-            return round_up(_pos.value + 1, page_size()) - _pos.value;
+        uint64_t bytes_left_in_page() const {
+            auto table_start = effective_page_start() + _page_size - _table.size() * _table_entry_size;
+            SCYLLA_ASSERT(uint64_t(_pos.value) <= table_start);
+            return table_start - _pos.value;
         };
         sink_pos pos() const {
             return _pos;
         }
         void skip(size_t sz) {
             _pos = _pos + sink_offset(sz);
+            _page_start = round_down(_pos.value, _page_size);
         }
     };
     static_assert(trie_writer_sink<trie_output_stream>);
 
-    trie_output_stream out(page_size, seed);
+    trie_output_stream out(page_size, seed, chunks == chunk_mode::none ? 0 : 1);
 
     out.skip(start_pos);
 
@@ -166,6 +216,17 @@ void test_one_set_of_strings(
     for (size_t i = 0; i < inputs.size(); ++i) {
         size_t depth = std::ranges::mismatch(inputs[i], prev).in1 - inputs[i].begin();
         payloads.push_back(trie_payload(1 + i%15, object_representation(42 + i)));
+        // Equal chunks are contiguous in key order, as trie_payload::_chunk requires.
+        switch (chunks) {
+        case chunk_mode::none: break;
+        case chunk_mode::distinct: payloads.back()._chunk = i; break;
+        case chunk_mode::pairs: payloads.back()._chunk = i / 2; break;
+        case chunk_mode::holes:
+            if (i % 2 == 0) {
+                payloads.back()._chunk = i / 4;
+            }
+            break;
+        }
         wr.add(depth, string_as_bytes(inputs[i]).subspan(depth), payloads.back());
         prev = inputs[i];
     }
@@ -228,7 +289,12 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
     // trie_logger.set_level(seastar::log_level::trace);
     size_t max_input_length = 3;
     size_t max_set_size = 3;
+    // Page sizes of the cases without chunks.
     size_t max_page_size = 3;
+    // The page size of the cases with chunks. It's the smallest page that can
+    // hold two table entries: two 1-byte nodes with different chunks, and
+    // their 1-byte entries. Smaller pages didn't catch any more bugs.
+    size_t chunk_page_size = 4;
     size_t max_start_pos = 1;
     const char chars[] = "abc";
     auto all_strings = tests::generate_all_strings(chars, max_input_length);
@@ -242,18 +308,64 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
             for (const auto& i : x) {
                 test_set.push_back(all_strings[i]);
             }
-            for (size_t page_size = 1; page_size <= max_page_size; ++page_size)
+            for (size_t page_size = 1; page_size <= chunk_page_size; ++page_size)
             for (size_t max_chain_len = 1; max_chain_len <= max_input_length; ++max_chain_len)
-            for (size_t start_pos = 0; start_pos <= max_start_pos; ++start_pos) {
+            for (size_t start_pos = 0; start_pos <= max_start_pos; ++start_pos)
+            for (auto chunks : {chunk_mode::none, chunk_mode::distinct, chunk_mode::pairs, chunk_mode::holes}) {
+                bool run = chunks == chunk_mode::none ? page_size <= max_page_size : page_size == chunk_page_size;
+                if (!run) {
+                    continue;
+                }
                 if (case_counter % 1000 == 0) {
                     testlog.debug("test_exhaustive: in progress: cases={}", case_counter);
                 }
-                test_one_set_of_strings(test_set, std::size(chars), page_size, max_chain_len, start_pos, case_counter);
+                test_one_set_of_strings(test_set, std::size(chars), page_size, max_chain_len, start_pos, case_counter, chunks);
                 case_counter += 1;
             }
         }
     }
     testlog.info("test_exhaustive: cases={}", case_counter);
+}
+
+// Checks that chunk_set counts the distinct chunks among the unwritten payloads
+// exactly, also when written-out subtrees leave holes between them.
+BOOST_AUTO_TEST_CASE(test_chunk_set_exact_with_holes) {
+    std::mt19937_64 rng(tests::random::get_int<uint64_t>());
+    for (int iteration = 0; iteration < 10000; ++iteration) {
+        // A sorted sequence of chunks, in key order, with repeats.
+        size_t n = 1 + rng() % 20;
+        std::vector<uint64_t> chunks;
+        uint64_t c = 0;
+        for (size_t i = 0; i < n; ++i) {
+            c += rng() % 3 == 0;
+            chunks.push_back(c);
+        }
+        // Splits the sequence into subtrees, and marks some of them written.
+        std::vector<chunk_set> parts;
+        std::set<uint64_t> unwritten;
+        for (size_t i = 0; i < n;) {
+            size_t len = 1 + rng() % 4;
+            bool written = rng() % 3 == 0;
+            chunk_set part;
+            for (size_t j = i; j < std::min(n, i + len); ++j) {
+                auto p = trie_payload(1, std::array<std::byte, 1>{});
+                p._chunk = chunks[j];
+                if (!written) {
+                    part.append(chunk_set::of(p));
+                    unwritten.insert(chunks[j]);
+                }
+            }
+            parts.push_back(part);
+            i += len;
+        }
+        // Joins the parts in key order, in a random tree shape.
+        while (parts.size() > 1) {
+            size_t i = rng() % (parts.size() - 1);
+            parts[i].append(parts[i + 1]);
+            parts.erase(parts.begin() + i + 1);
+        }
+        BOOST_REQUIRE_EQUAL(parts[0].count, unwritten.size());
+    }
 }
 
 struct null_trie_output_stream {
@@ -268,15 +380,18 @@ struct null_trie_output_stream {
         _pos = _pos + sink_offset(1);
         return _pos;
     }
-    size_t page_size() const {
+    uint64_t page_capacity() const {
         return _page_size;
     };
+    uint64_t table_entry_size() const {
+        return 0;
+    }
     void pad_to_page_boundary() {
         size_t pad = bytes_left_in_page();
         _pos = _pos + sink_offset(pad);
     };
-    size_t bytes_left_in_page() const {
-        return round_up(_pos.value + 1, page_size()) - _pos.value;
+    uint64_t bytes_left_in_page() const {
+        return round_up(_pos.value + 1, _page_size) - _pos.value;
     };
     sink_pos pos() const {
         return _pos;
@@ -299,7 +414,7 @@ SEASTAR_THREAD_TEST_CASE(test_finite_memory_usage) {
     // Max memory usage for a dense dataset is around 256 * 256 * 80.
     // (~80 bytes per leaf node, 256 leaf node per internal node, 256 internal nodes).
     // With TRIE_SANITIZE_BUMP_ALLOCATOR, we allow way more memory for extra allocator metadata.
-    const size_t max_allowed_memory_usage = memory_usage_before + 8000000 * (TRIE_SANITIZE_BUMP_ALLOCATOR ? 10 : 1);
+    const size_t max_allowed_memory_usage = memory_usage_before + 16000000 * (TRIE_SANITIZE_BUMP_ALLOCATOR ? 10 : 1);
 
     auto out = null_trie_output_stream(4096);
     auto wr = trie_writer(out);

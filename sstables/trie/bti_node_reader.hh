@@ -61,6 +61,8 @@ struct bti_node_reader {
     trie::node_traverse_sidemost_result walk_down_rightmost_path(int64_t pos);
     trie::get_child_result get_child(int64_t pos, int child_idx, bool forward) const;
     const_bytes get_payload(int64_t pos) const;
+    // Returns the whole page that holds `pos`.
+    const_bytes get_page(int64_t pos) const;
 };
 static_assert(node_reader<bti_node_reader>);
 

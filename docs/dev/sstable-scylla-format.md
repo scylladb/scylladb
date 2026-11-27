@@ -35,6 +35,7 @@ in individual sections
         | components_digests
         | large_data_records
         | scrub_time
+        | incompatible_features
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -90,6 +91,15 @@ tablet/shard migration.
 `scrub_time` (tag 14): an `int64_t` with the timestamp of when the sstable was
 last written or validated as milliseconds since the epoch of `db_clock`. Used
 to decide automatic scrub eligibility.
+
+`incompatible_features` (tag 15): an `array<uint64_t>` of bit masks. Feature
+`f` is bit `f % 64` of element `f / 64`. A set bit means that the sstable uses
+a feature that changes how it must be read. A reader must refuse to open an
+sstable with a set bit that it doesn't know. No such features are defined yet.
+Scylla versions that don't know this subcomponent skip it, so a writer may set
+bits only in sstable formats that every reader checks this subcomponent for:
+`mu` and later. Writers of these formats always write this subcomponent, even
+when it has no set bits.
 
 The [scylla sstable dump-scylla-metadata](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst#dump-scylla-metadata) tool
 can be used to dump the scylla metadata in JSON format.
