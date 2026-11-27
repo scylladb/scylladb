@@ -142,6 +142,9 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     property_definitions::validate(allowed_keywords, exts.schema_extension_keywords(), obsolete_keywords);
 
     cluster_config_props::validate_config_values(table_scope, *this, db.features());
+    if (strong_consistency::is_strongly_consistent(db, ks_name)) {
+        strong_consistency::reject_auto_repair_options_for_strong_consistency(*this);
+    }
 
     try {
         get_id();

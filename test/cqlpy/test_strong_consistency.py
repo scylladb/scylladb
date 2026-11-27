@@ -327,6 +327,30 @@ def test_per_partition_rate_limit_on_sc_table(cql, sc_keyspace):
             cql.execute(f"ALTER TABLE {table} WITH per_partition_rate_limit = {{'max_reads_per_second': 100}}")
 
 
+def test_auto_repair_options_on_sc_table(cql, sc_keyspace):
+    """
+    Repair doesn't apply to strongly consistent tables, so neither a strongly
+    consistent keyspace nor its tables take the automatic repair options.
+    Setting one to NULL only removes it, so that is accepted.
+    """
+    sc_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+               "AND tablets = {'initial': 1} AND consistency = 'global'")
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        for option, value in [("auto_repair_enabled", "true"), ("auto_repair_threshold_in_seconds", "3600")]:
+            match = f"'{option}' is not supported in strongly consistent keyspaces"
+            with pytest.raises(ConfigurationException, match=match):
+                cql.execute(f"CREATE KEYSPACE {unique_name()} {sc_opts} AND {option} = {value}")
+            with pytest.raises(ConfigurationException, match=match):
+                cql.execute(f"ALTER KEYSPACE {sc_keyspace} WITH {option} = {value}")
+            with pytest.raises(ConfigurationException, match=match):
+                cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, v int) WITH {option} = {value}")
+            with pytest.raises(ConfigurationException, match=match):
+                cql.execute(f"ALTER TABLE {table} WITH {option} = {value}")
+
+            cql.execute(f"ALTER KEYSPACE {sc_keyspace} WITH {option} = NULL")
+            cql.execute(f"ALTER TABLE {table} WITH {option} = NULL")
+
+
 def test_views_and_indexes_on_sc_table(cql, sc_keyspace):
     """
     Materialized views and secondary indexes are rejected on tables in

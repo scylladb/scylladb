@@ -71,3 +71,8 @@ A keyspace or table that stores its own ``auto_repair_enabled = true`` keeps aut
 option to ``NULL`` at both the keyspace and table scopes to make it follow the cluster value again.
 
 Automatic repair relies on :doc:`Incremental Repair </features/incremental-repair>` and as such it only works with :doc:`tablet </architecture/tablets>` tables.
+
+Tables of :ref:`strongly consistent keyspaces <consistency-option>` are never repaired automatically:
+repair doesn't apply to them, because Raft replicates their writes. Such a keyspace and its tables
+don't accept ``auto_repair_enabled`` and ``auto_repair_threshold_in_seconds``, and the values set for
+the whole cluster don't apply to them.

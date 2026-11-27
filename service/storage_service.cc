@@ -5918,6 +5918,16 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+
+        // Repair is not supported for strongly consistent tables: raft replicates their writes.
+        if (tmap.has_raft_info()) {
+            auto table_schema = _db.local().find_schema(table);
+            throw std::invalid_argument(::format(
+                "Cannot repair table '{}'.'{}' because keyspace '{}' is strongly consistent. "
+                "Repair is not supported for strongly consistent keyspaces.",
+                table_schema->ks_name(), table_schema->cf_name(), table_schema->ks_name()));
+        }
+
         group0_update_collector updates;
 
         if (all_tokens) {

@@ -1383,6 +1383,10 @@ public:
                 continue;
             }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
+            // Repair is not supported for strongly consistent tables: raft replicates their writes.
+            if (tmap.has_raft_info()) {
+                continue;
+            }
             co_await coroutine::maybe_yield();
             auto settings = resolve_auto_repair_settings(table);
             auto now = db_clock::now();

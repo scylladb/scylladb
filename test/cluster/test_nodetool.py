@@ -1,6 +1,8 @@
 import pytest
 import asyncio
+import re
 import subprocess
+from test.cluster.util import create_new_test_keyspace
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_first_completed
@@ -233,3 +235,30 @@ async def test_regular_node_joining(manager: ScyllaClusterManager):
     [await manager.api.message_injection(s.ip_addr, 'delay_node_bootstrap') for s in servers]
 
     await task
+
+
+async def test_cluster_repair_skips_strongly_consistent_keyspaces(manager: ScyllaClusterManager):
+    """
+    `nodetool cluster repair` without a keyspace repairs every eventually consistent tablet
+    keyspace and leaves out the strongly consistent ones, which repair doesn't apply to.
+    Repairing a strongly consistent keyspace by name fails.
+    """
+    servers = await manager.running_servers()
+    cql = manager.get_cql()
+
+    sc_ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                                "AND tablets = {'initial': 2} "
+                                                "AND consistency = 'global'")
+    ec_ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                                "AND tablets = {'initial': 2}")
+    await cql.run_async(f"CREATE TABLE {sc_ks}.test (pk int PRIMARY KEY, c int)")
+    await cql.run_async(f"CREATE TABLE {ec_ks}.test (pk int PRIMARY KEY, c int)")
+
+    result = await run_nodetool(manager, servers[0], "cluster", "repair")
+    started = re.search(f"Starting repair with task_id=(\\S+) keyspace={ec_ks} table=test", result.stdout)
+    assert started, result.stdout
+    assert f"Repair with task_id={started.group(1)} finished" in result.stdout
+    assert f"keyspace={sc_ks} " not in result.stdout
+
+    result = await run_nodetool(manager, servers[0], "cluster", "repair", sc_ks, expected_exit_code=1)
+    assert f"Cannot repair keyspace {sc_ks} because it is strongly consistent" in result.stderr

@@ -30,6 +30,7 @@
 #include "cql3/cql_config.hh"
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
@@ -74,6 +75,9 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
         }
         try {
             auto ks = qp.db().find_keyspace(_name);
+            if (data_dictionary::is_strongly_consistent(ks.metadata()->consistency_option())) {
+                strong_consistency::reject_auto_repair_options_for_strong_consistency(*_attrs);
+            }
             data_dictionary::storage_options current_options = ks.metadata()->get_storage_options();
             data_dictionary::storage_options new_options = _attrs->get_storage_options();
             if (!qp.proxy().features().keyspace_storage_options && !new_options.is_local_type()) {

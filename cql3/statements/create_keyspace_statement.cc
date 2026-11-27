@@ -11,6 +11,7 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "exceptions/exceptions.hh"
 #include "locator/tablets.hh"
 #include "prepared_statement.hh"
@@ -72,6 +73,9 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
     }
 
     _attrs->validate(qp.proxy().features());
+    if (data_dictionary::is_strongly_consistent(_attrs->get_consistency_option())) {
+        strong_consistency::reject_auto_repair_options_for_strong_consistency(*_attrs);
+    }
 
     if (!bool(_attrs->get_replication_strategy_class())) {
         throw exceptions::configuration_exception("Missing mandatory replication strategy class");
