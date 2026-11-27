@@ -350,15 +350,15 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
         }
         if (has_tablet_map) {
             auto& tmap = tmptr->tablets().get_tablet_map(table);
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            for (const auto* task_info : {info.repair_task_info.get(), info.pending_repair_request.get()}) {
-                if (task_info && task_info->tablet_task_id.uuid() == id.uuid()) {
-                    update_status(*task_info, res.status, sched_nr);
-                    no_tablets_processed = false;
+            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
+                for (const auto* task_info : {info.repair_task_info.get(), info.pending_repair_request.get()}) {
+                    if (task_info && task_info->tablet_task_id.uuid() == id.uuid()) {
+                        update_status(*task_info, res.status, sched_nr);
+                        no_tablets_processed = false;
+                    }
                 }
-            }
-            return make_ready_future();
-        });
+                return make_ready_future();
+            });
         }
         res.status.children = co_await get_children(get_module(), id, _ss.get_token_metadata_ptr());
     } else if (is_migration_task(task_type)) {    // Migration task.
