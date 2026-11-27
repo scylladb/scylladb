@@ -2606,10 +2606,8 @@ async def test_cluster_snapshot_backup_and_restore_several_nodes_per_rack(manage
 
 
 def bucket_objects(object_storage, prefix=''):
-    '''The objects of the test bucket, or of one prefix of it, mapped to their sizes.
-    Skips folder marker objects, such as the "sstables/" one create_bucket() puts in
-    every s3 bucket (SCYLLADB-5060): Scylla never writes keys which end in "/".'''
-    return {o.key: o.size for o in object_storage.list_objects(prefix) if not o.key.endswith('/')}
+    '''The objects of the test bucket, or of one prefix of it, mapped to their sizes.'''
+    return {o.key: o.size for o in object_storage.list_objects(prefix)}
 
 
 def assert_objects_intact(expected, actual, what):

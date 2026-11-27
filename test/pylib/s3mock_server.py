@@ -4,9 +4,10 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-"""S3 server for testing, backed by the Versity S3 Gateway container.
+"""S3 and GCS server for testing, backed by the Labaz container.
 
-   Provides helpers to setup and manage the S3 endpoint the tests run against.
+   Provides helpers to setup and manage the S3 and GCS endpoints the tests run
+   against: one Labaz serves both, over the same buckets.
 
    Not to be confused with test/pylib/s3_server_mock.py, which is a tiny
    hand-written HTTP server used to inject S3 errors; this one is a full S3
@@ -40,16 +41,7 @@ def create_conf(url: str, region: str):
 
 
 def create_bucket(resource, name: str):
-    """Create the bucket with an empty "sstables/" folder object in it.
-
-    The gateway's posix backend removes a directory once its last object is
-    deleted, so deleting the last sstable of a bucket also removes sstables/,
-    and a PUT creating sstables/<other_id>/ at that moment fails with a
-    409 ExistingObjectIsDirectory that aborts the flushing node (SCYLLADB-5060).
-    A directory that was PUT as its own key is not removed this way.
-    """
     resource.Bucket(name).create()
-    resource.Object(name, 'sstables/').put()
 
 
 class S3MockServer:
@@ -58,15 +50,18 @@ class S3MockServer:
     ENV_BUCKET = 'S3_BUCKET_FOR_TEST'
     ENV_ACCESS_KEY = 'AWS_ACCESS_KEY_ID'
     ENV_SECRET_KEY = 'AWS_SECRET_ACCESS_KEY'
+    ENV_GS_ADDRESS = 'GS_SERVER_ADDRESS_FOR_TEST'
+    ENV_GS_CREDENTIALS = 'GS_CREDENTIALS_FILE'
     DEFAULT_REGION = 'local'
 
-    # A Go S3 gateway over a directory: buckets are subdirectories, objects are
-    # files, metadata lives in xattrs.  Serves 0.15s after the container starts.
-    IMAGE = 'docker.io/versity/versitygw:v1.8.0'
-    # The port the gateway serves plain HTTP on inside the container. The host port
-    # is picked by the container runtime, see DockerizedServer.
+    # An S3 and GCS server over plain files (https://github.com/xemul/labaz).
+    # A released image unless LABAZ_IMAGE names another one, such as a local one.
+    IMAGE = os.environ.get('LABAZ_IMAGE', 'ghcr.io/xemul/labaz:v0.2')
+    # The ports it serves S3 and GCS over plain HTTP on inside the container. The
+    # host ports are picked by the container runtime, see DockerizedServer.
     IMAGE_PORT = 7070
-    STARTED_MESSAGE = 'Admin/S3 service listening on'
+    GS_IMAGE_PORT = 4443
+    STARTED_MESSAGE = 'labaz: ready'
 
     def __init__(self, log_dir, logger):
         """
@@ -78,10 +73,13 @@ class S3MockServer:
         self.server = None
         self.address = None
         self.port = None
+        self.gs_port = None
+        # Published for S3 only: GCS tests create buckets of their own, as
+        # gcs_fixture does when GS_BUCKET_FOR_TEST is not set.
         self.bucket_name = 'testbucket'
-        # The key pair the tests sign with and the gateway's root account is set
-        # to: a random one unless the environment already carries one (which the
-        # KMS tests rely on, see aws_kms_fixture.hh).
+        # The key pair the tests sign with and the server checks S3 requests
+        # against: a random one unless the environment already carries one (which
+        # the KMS tests rely on, see aws_kms_fixture.hh).
         self.access_key = os.environ.get(self.ENV_ACCESS_KEY, ''.join(random.choice(string.hexdigits) for i in range(16)))
         self.secret_key = os.environ.get(self.ENV_SECRET_KEY, ''.join(random.choice(string.hexdigits) for i in range(32)))
         self.old_env = dict()
@@ -92,6 +90,10 @@ class S3MockServer:
     @property
     def uri(self):
         return f'http://{self.address}:{self.port}'
+
+    @property
+    def gs_uri(self):
+        return f'http://{self.address}:{self.gs_port}'
 
     def _create_bucket(self):
         resource = boto3.resource('s3',
@@ -111,13 +113,18 @@ class S3MockServer:
         os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
         os.environ[self.ENV_ACCESS_KEY] = f'{self.access_key}'
         os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
+        os.environ[self.ENV_GS_ADDRESS] = self.gs_uri
+        # GCS requests are not authenticated.
+        os.environ[self.ENV_GS_CREDENTIALS] = 'none'
 
     def _get_environs(self):
         return [self.ENV_ADDRESS,
                 self.ENV_PORT,
                 self.ENV_BUCKET,
                 self.ENV_ACCESS_KEY,
-                self.ENV_SECRET_KEY]
+                self.ENV_SECRET_KEY,
+                self.ENV_GS_ADDRESS,
+                self.ENV_GS_CREDENTIALS]
 
     def get_envs_settings(self):
         return {key: os.environ[key] for key in self._get_environs()}
@@ -141,27 +148,32 @@ class S3MockServer:
         server = DockerizedServer(self.IMAGE,
                                   self.log_dir,
                                   logfilenamebase='s3mock',
-                                  # The gateway verifies SigV4 signatures: the root account must
-                                  # be the pair the tests sign with, and the region the one they
-                                  # sign for.  /tmp is the image's writable scratch space.  The
-                                  # gateway closes every connection after one reply unless told
-                                  # otherwise, while dozens of tests share it at once and keep
-                                  # theirs alive (see SCYLLADB-4576).
+                                  # The server verifies SigV4 signatures: the key must be the
+                                  # pair the tests sign with, and the region the one they sign
+                                  # for.
                                   # Key-only -e: podman takes the values from its own environment,
                                   # so a real key pair inherited from CI is never on a command line.
-                                  docker_args=['-e', 'ROOT_ACCESS_KEY', '-e', 'ROOT_SECRET_KEY'],
-                                  env={**os.environ, 'ROOT_ACCESS_KEY': self.access_key,
-                                       'ROOT_SECRET_KEY': self.secret_key},
-                                  image_args=['--region', self.DEFAULT_REGION, '--keep-alive', 'posix', '/tmp'],
+                                  # LABAZ_LOG_LEVEL, if set, sets the server's log levels, e.g.
+                                  # s3=trace:gcs=trace:potato=trace to see every request.
+                                  # LABAZ_SMP sets the number of shards: objects are spread
+                                  # over them, so that the tests running at once do not all
+                                  # queue on one.
+                                  docker_args=['-e', 'LABAZ_S3_KEY', '-e', 'LABAZ_S3_REGION',
+                                               '-e', 'LABAZ_LOG_LEVEL', '-e', 'LABAZ_SMP'],
+                                  env={'LABAZ_SMP': '4',
+                                       **os.environ, 'LABAZ_S3_KEY': f'{self.access_key}:{self.secret_key}',
+                                       'LABAZ_S3_REGION': self.DEFAULT_REGION},
                                   success_string=self.STARTED_MESSAGE,
                                   failure_string='address already in use',
-                                  port=self.IMAGE_PORT)
+                                  port=self.IMAGE_PORT,
+                                  extra_ports=[self.GS_IMAGE_PORT])
         await server.start()
         # Assigned only once the container is up, so that stop() has nothing to do
         # if we never got that far.
         self.server = server
         self.address = server.host
         self.port = server.port
+        self.gs_port = server.ports[self.GS_IMAGE_PORT]
         self._set_environ()
         try:
             self.logger.info('Creating bucket %s on %s', self.bucket_name, self.uri)
@@ -186,7 +198,7 @@ class S3MockServer:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Start the S3 gateway the tests run against")
+    parser = argparse.ArgumentParser(description="Start the S3 and GCS server the tests run against")
     parser.add_argument('--logdir', default='.')
     args = parser.parse_args()
     server = S3MockServer(args.logdir, logging.getLogger('s3mock'))

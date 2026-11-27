@@ -536,7 +536,8 @@ def create_gs_server(log_dir):
     bucket = os.environ.get('GS_BUCKET_FOR_TEST')
     credentials_file = os.environ.get('GS_CREDENTIALS_FILE')
 
-    if endpoint is not None and bucket is not None:
+    # The tests create buckets of their own, so a server is all it takes.
+    if endpoint is not None:
         return GSFront(endpoint, bucket, credentials_file)
     return GSServerImpl(log_dir)
 
