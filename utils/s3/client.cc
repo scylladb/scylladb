@@ -50,6 +50,7 @@
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "utils/div_ceil.hh"
+#include "utils/error_injection.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
@@ -1117,6 +1118,9 @@ protected:
     std::optional<tag> _tag;
     object_metadata _metadata;
     seastar::abort_source* _as;
+    // Set when starting the upload fails: the buffers of the part that triggered it are gone,
+    // so the sink stays failed rather than let a later flush write the rest as the object.
+    std::exception_ptr _start_error;
     // Set once this sink has produced its object, either with a plain PUT or with
     // a completed multipart upload. finalize_upload() clears _upload_id and
     // output_stream::close() flushes a second time, so upload_started() alone
@@ -1138,24 +1142,21 @@ protected:
     sstring _produced_etag;
 
     future<> start_upload();
+    future<> do_start_upload();
     future<> finalize_upload();
     future<> upload_part(memory_data_sink_buffers bufs);
     future<> upload_part(std::unique_ptr<upload_sink> source);
+    // Copies source_object, the whole of it or only source_range, into part
+    // part_number (0-based) of this upload with an UploadPartCopy request, and
+    // stores the ETag of that part in _part_etags[part_number].
+    // The returned future does not fail when the copy does: as with the parts
+    // upload_part() sends in the background, the failure is only logged and the
+    // ETag stays empty, so finalize_upload() fails the whole upload.
+    future<> copy_part(sstring source_object, std::optional<s3::range> source_range, unsigned part_number);
     future<> abort_upload();
 
     bool upload_started() const noexcept {
         return !_upload_id.empty();
-    }
-
-    // Create the object even though nothing was written into the sink. A
-    // zero-length component is still a component, and object stores hold
-    // zero-length objects. Without this the object is silently missing.
-    future<> put_empty_object() {
-        s3l.trace("PUT empty object {}", _object_name);
-        _object_produced = true;
-        return _client->put_object_and_get_etag(_object_name, temporary_buffer<char>(), _metadata, _as).then([this] (sstring tag) {
-            _produced_etag = std::move(tag);
-        });
     }
 
     multipart_upload(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
@@ -1226,7 +1227,7 @@ private:
                                              [part_size, source_size, this](auto part_num) -> future<> {
                                                  auto part_offset = part_num * part_size;
                                                  auto actual_part_size = std::min(source_size - part_offset, part_size);
-                                                 co_await copy_part(part_offset, actual_part_size, part_num);
+                                                 co_await copy_part(_source_object, s3::range(part_offset, actual_part_size), part_num);
                                              });
             // Here we are going to finalize the upload and close the _bg_flushes, in case an exception is thrown the
             // gate will be closed and the upload will be aborted. See below.
@@ -1242,36 +1243,6 @@ private:
             co_await abort_upload();
             std::rethrow_exception(ex);
         }
-    }
-
-    future<> copy_part(size_t offset, size_t part_size, size_t part_number) {
-        auto req = http::request::make("PUT", _client->_host, _object_name);
-        req._headers["x-amz-copy-source"] = uri_encode_path(_source_object);
-        auto range = format("bytes={}-{}", offset, offset + part_size - 1);
-        s3l.trace("PUT part {}, Upload range: {}, Upload ID: {}", part_number, range, _upload_id);
-
-        req._headers["x-amz-copy-source-range"] = range;
-        req.set_query_param("partNumber", to_sstring(part_number + 1));
-        req.set_query_param("uploadId", _upload_id);
-
-        co_await _client->make_request(std::move(req),[this, part_number](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
-            auto _in = std::move(in);
-            auto body = co_await util::read_entire_stream_contiguous(_in);
-            if (auto possible_error = aws::aws_error::parse(sstring(body))) {
-                throw aws::aws_exception(std::move(possible_error.value()));
-            }
-            auto etag = parse_multipart_copy_upload_etag(body);
-            if (etag.empty()) {
-                throw std::runtime_error("Cannot parse ETag");
-            }
-            s3l.trace("Part {} data -> etag = {} (upload id {})", part_number, etag, _upload_id);
-            _part_etags[part_number] = std::move(etag);
-        },http::reply::status_type::ok, _as)
-        .handle_exception([this, part_number](auto ex) {
-            s3l.warn("Failed to upload part {}, upload id {}. Reason: {}", part_number, _upload_id, ex);
-        });
-
-        co_return;
     }
 
     static constexpr size_t _default_copy_part_size = 5_GiB;
@@ -1377,6 +1348,18 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
 }
 
 future<> client::multipart_upload::start_upload() {
+    if (_start_error) {
+        co_await coroutine::return_exception_ptr(_start_error);
+    }
+    try {
+        co_await do_start_upload();
+    } catch (...) {
+        _start_error = std::current_exception();
+        throw;
+    }
+}
+
+future<> client::multipart_upload::do_start_upload() {
     s3l.trace("POST uploads {} (tag {})", _object_name, seastar::value_of([this] { return _tag ? _tag->key + "=" + _tag->value : "none"; }));
     auto rep = http::request::make("POST", _client->_host, _object_name);
     rep.set_query_param("uploads", "");
@@ -1455,6 +1438,43 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     }).finally([gh = std::move(gh), mpu = std::move(mpu)] {});
 }
 
+future<> client::multipart_upload::copy_part(sstring source_object, std::optional<s3::range> source_range, unsigned part_number) {
+    auto req = http::request::make("PUT", _client->_host, _object_name);
+    req.set_query_param("partNumber", seastar::format("{}", part_number + 1));
+    req.set_query_param("uploadId", _upload_id);
+    req._headers["x-amz-copy-source"] = uri_encode_path(source_object);
+    if (source_range) {
+        req._headers["x-amz-copy-source-range"] = source_range->to_header_string();
+    }
+    s3l.trace("PUT part {} from {} {} (upload id {})", part_number, source_object,
+            source_range ? source_range->to_header_string() : sstring("whole"), _upload_id);
+
+    co_await _client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
+        auto in = std::move(in_);
+        auto body = co_await util::read_entire_stream_contiguous(in);
+        // S3 can report a failed UploadPartCopy in a 200 OK reply, with an <Error>
+        // in the body, which make_request() passes here unparsed. The aws_exception
+        // carries the error type and message parsed from it.
+        if (auto possible_error = aws::aws_error::parse(sstring(body))) {
+            throw aws::aws_exception(std::move(possible_error.value()));
+        }
+        // Fails the copy of one part the way an error reply of S3 would. It is keyed
+        // by the part number because the ranges of a piece are copied concurrently.
+        if (utils::get_local_injector().inject_parameter<unsigned>("s3_copy_part_fail") == part_number) {
+            co_await coroutine::return_exception(std::runtime_error(seastar::format("injected failure of the copy of part {}", part_number)));
+        }
+        auto etag = parse_multipart_copy_upload_etag(body);
+        if (etag.empty()) {
+            throw std::runtime_error("cannot parse the ETag of a copied part");
+        }
+        s3l.trace("copy-uploaded part {} -> etag = {} (upload id {})", part_number, etag, _upload_id);
+        _part_etags[part_number] = std::move(etag);
+    }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
+        // ... the exact exception only remains in logs
+        s3l.warn("couldn't copy-upload part {}: {} (upload id {})", part_number, ex, _upload_id);
+    });
+}
+
 future<> client::multipart_upload::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
@@ -1531,14 +1551,15 @@ future<> client::multipart_upload::finalize_upload() {
 }
 
 future<> client::upload_sink_base::flush() {
+    auto flushed = _start_error ? make_exception_future<>(_start_error) : do_flush();
     if (!_etag) {
-        return do_flush();
+        return flushed;
     }
     // The first flush produces the object, or fails trying, so it is the one that
     // resolves the etag future, either way. Failing it with the flush's exception
     // tells the caller why there is no tag better than the broken_promise it would
     // otherwise get when the sink is destroyed.
-    return do_flush().then_wrapped([this] (future<> f) {
+    return flushed.then_wrapped([this] (future<> f) {
         auto etag = std::exchange(_etag, std::nullopt);
         if (f.failed()) {
             auto ex = f.get_exception();
@@ -1580,6 +1601,7 @@ future<> client::upload_sink_base::close() {
 
 class client::upload_sink final : public client::upload_sink_base {
     memory_data_sink_buffers _bufs;
+    uint64_t _size = 0;
     future<> maybe_flush() {
         if (_bufs.size() >= minimum_part_size) {
             co_await upload_part(std::move(_bufs));
@@ -1592,12 +1614,21 @@ public:
     {}
 
     // True while nothing has been written into the sink, so it has no object to
-    // copy-upload from. Used by upload_jumbo_sink to skip such a piece.
+    // copy-upload from. Used by upload_jumbo_sink to skip such a piece. A sink whose
+    // start failed lost its buffers, so it is not empty: its flush must fail.
     bool empty() const noexcept {
-        return _bufs.size() == 0 && !upload_started();
+        return _bufs.size() == 0 && !upload_started() && !_start_error;
+    }
+
+    // The number of bytes put into the sink, i.e. the size of the object it produces.
+    uint64_t size() const noexcept {
+        return _size;
     }
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
+        for (const auto& buf : data) {
+            _size += buf.size();
+        }
         append_buffers(_bufs, std::move(data));
         return maybe_flush();
     }
@@ -1650,13 +1681,21 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
     }
 
     auto& piece = *piece_ptr;
-    unsigned part_number = _part_etags.size();
-    _part_etags.emplace_back();
-    s3l.trace("PUT part {} from {} (upload id {})", part_number, piece._object_name, _upload_id);
-    auto req = http::request::make("PUT", _client->_host, _object_name);
-    req.set_query_param("partNumber", format("{}", part_number + 1));
-    req.set_query_param("uploadId", _upload_id);
-    req._headers["x-amz-copy-source"] = uri_encode_path(piece._object_name);
+    // UploadPartCopy copies at most maximum_part_size, but a piece can hold
+    // maximum_parts_in_piece parts of minimum_part_size, about 50 GiB, so a larger
+    // piece takes several parts of this upload, each copied from a range of it.
+    // The parts are of equal size, not maximum_part_size and a remainder, because
+    // the parts of the next piece follow them, so each of them has to reach
+    // minimum_part_size. Their numbers are taken here, before the piece is copied
+    // in the background, because the next piece takes the numbers that follow.
+    // Tests lower the limit, as copying 5 GiB is too much for them, but not below
+    // 2 * minimum_part_size, the least for which equal parts reach minimum_part_size.
+    const uint64_t max_copy_part_size = std::clamp(utils::get_local_injector().inject_parameter<size_t>("s3_jumbo_piece_copy_part_size").value_or(maximum_part_size),
+            2 * minimum_part_size, maximum_part_size);
+    const uint64_t piece_size = piece.size();
+    const unsigned parts = static_cast<unsigned>(std::max<uint64_t>(1, div_ceil(piece_size, max_copy_part_size)));
+    const unsigned first_part = _part_etags.size();
+    _part_etags.resize(first_part + parts);
 
     // See comment in upload_part(memory_data_sink_buffers) overload regarding the
     // _bg_flushes usage and _part_etags assignments
@@ -1670,25 +1709,16 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
         // unfinished, and drains its background part uploads before the
         // piece is destroyed below.
         return piece.close();
-    }).then([this, part_number, req = std::move(req)] () mutable {
-        return _client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
-            return do_with(std::move(in_), [this, part_number] (auto& in) mutable {
-                return util::read_entire_stream_contiguous(in).then([this, part_number] (auto body) mutable {
-                    if (auto possible_error = aws::aws_error::parse(sstring(body))) {
-                        return make_exception_future<>(aws::aws_exception(std::move(possible_error.value())));
-                    }
-                    auto etag = parse_multipart_copy_upload_etag(body);
-                    if (etag.empty()) {
-                        return make_exception_future<>(std::runtime_error("cannot copy part upload"));
-                    }
-                    s3l.trace("copy-uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
-                    _part_etags[part_number] = std::move(etag);
-                    return make_ready_future<>();
-                });
-            });
-        }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
-            // ... the exact exception only remains in logs
-            s3l.warn("couldn't copy-upload part {}: {} (upload id {})", part_number, ex, _upload_id);
+    }).then([this, first_part, parts, piece_size, &piece] {
+        if (parts == 1) {
+            // S3 accepts a range only on a source larger than 5 MB, and the last
+            // piece can be smaller.
+            return copy_part(piece._object_name, std::nullopt, first_part);
+        }
+        const uint64_t part_size = div_ceil(piece_size, parts);
+        return max_concurrent_for_each(std::views::iota(0u, parts), max_client_mpu_in_flight, [this, first_part, part_size, piece_size, &piece] (unsigned i) {
+            const uint64_t offset = i * part_size;
+            return copy_part(piece._object_name, s3::range(offset, std::min(part_size, piece_size - offset)), first_part + i);
         });
     }).then_wrapped([this, &piece] (auto f) {
         if (f.failed()) {
@@ -1704,13 +1734,35 @@ class client::upload_jumbo_sink final : public upload_sink_base {
     static constexpr tag piece_tag = { .key = "kind", .value = "piece" };
 
     const unsigned _maximum_parts_in_piece;
+    // Half of the part numbers (or max_parts_per_piece, if smaller); pieces use the rest,
+    // ~10 per ~50 GiB piece, so an object tops out near 25 TB.
+    const unsigned _maximum_direct_parts;
+    // Most objects end here: one PUT or a plain multipart upload, with no piece to copy.
+    bool _direct = true;
+    memory_data_sink_buffers _bufs;
+    unsigned _next_piece = 0;
     std::unique_ptr<upload_sink> _current;
 
+    std::unique_ptr<upload_sink> make_piece() {
+        return std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, _next_piece++), object_metadata{}, piece_tag, _as);
+    }
+
     future<> maybe_flush() {
+        if (_direct) {
+            if (_bufs.size() < minimum_part_size) {
+                co_return;
+            }
+            co_await upload_part(std::move(_bufs));
+            if (parts_count() >= _maximum_direct_parts) {
+                // Everything buffered went into the part, so no short part is left behind.
+                _direct = false;
+                _current = make_piece();
+            }
+            co_return;
+        }
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag, _as);
-            co_await upload_part(std::exchange(_current, std::move(next)));
-            s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
+            s3l.trace("Initiating piece {} (upload_id {})", _next_piece, _upload_id);
+            co_await upload_part(std::exchange(_current, make_piece()));
         }
     }
 
@@ -1718,16 +1770,33 @@ public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
-        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag, _as))
+        , _maximum_direct_parts(std::min(_maximum_parts_in_piece, maximum_parts_in_piece / 2))
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
-        co_await _current->put(std::move(data));
+        if (_direct) {
+            append_buffers(_bufs, std::move(data));
+        } else {
+            co_await _current->put(std::move(data));
+        }
         co_await maybe_flush();
     }
 
     virtual future<> do_flush() override {
-        if (_current) {
+        if (_direct) {
+            if (_object_produced) {
+                co_return;
+            }
+            if (!upload_started()) {
+                // This also makes the zero-length object.
+                _object_produced = true;
+                _produced_etag = co_await _client->put_object_and_get_etag(_object_name, std::move(_bufs), _metadata, _as);
+                co_return;
+            }
+            if (_bufs.size() != 0) {
+                co_await upload_part(std::move(_bufs));
+            }
+        } else if (_current) {
             auto piece = std::exchange(_current, nullptr);
             if (piece->empty()) {
                 // Nothing was written into the piece, so upload_sink::flush()
@@ -1749,8 +1818,6 @@ public:
                 co_await abort_upload();
                 std::rethrow_exception(ex);
             }
-        } else if (!_object_produced) {
-            co_await put_empty_object();
         }
     }
 

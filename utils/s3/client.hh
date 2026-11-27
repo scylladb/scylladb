@@ -322,6 +322,8 @@ public:
     // to consume the future even if the upload fails, or seastar reports it as an ignored
     // exceptional future.
     std::pair<data_sink, future<sstring>> make_upload_sink_and_get_etag(sstring object_name, object_metadata = {}, seastar::abort_source* = nullptr);
+    // Uploads up to min(max_parts_per_piece, half the part numbers) parts directly, then the rest as temporary
+    // "piece" objects copied in with UploadPartCopy (ranged past maximum_part_size); tops out near 25 TB.
     data_sink make_upload_jumbo_sink(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
     // Same etag contract as make_upload_sink_and_get_etag() above.
     std::pair<data_sink, future<sstring>> make_upload_jumbo_sink_and_get_etag(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {},
