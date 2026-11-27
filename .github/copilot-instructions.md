@@ -117,6 +117,8 @@ ninja build/<mode>/scylla
 - Do not reformat or restyle code you are not otherwise changing. Cosmetic changes are made only
   when asked for, and then as separate patches (see "Patch organization" in
   `docs/dev/review-checklist.md`).
+- Split a larger change into a series of small patches that leads up to it, as "Patch
+  organization" in `docs/dev/review-checklist.md` describes.
 - Adding or updating comments that explain the change is welcome.
 
 ## Test Philosophy
