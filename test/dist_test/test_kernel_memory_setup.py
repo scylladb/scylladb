@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
+from pathlib import Path
+
 import pytest
 
 import scylla_util
@@ -11,12 +13,16 @@ RELEASE = '7.0.0-1014-aws'
 DROPIN = '/etc/default/grub.d/99-scylla-kho.cfg'
 GRUBBY = 'grubby --update-kernel=ALL --args=kho=off'
 KHO_DEFAULT_ON = 'CONFIG_KEXEC_HANDOVER=y\nCONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y\n'
+SYSCTL_CONF = '/etc/sysctl.d/99-scylla-lowmem-reserve.conf'
+SYSCTL = f'sysctl -p {SYSCTL_CONF}'
 
 
 def boot(scripts, monkeypatch, cmdline='ro', config=KHO_DEFAULT_ON):
-    """The running kernel: its command line, and its build config (None: no /boot/config file)."""
+    """The running kernel: its command line, its build config (None: no /boot/config file), and its memory zones."""
     monkeypatch.setattr('platform.release', lambda: RELEASE)
     scripts.file('/proc/cmdline', cmdline + '\n')
+    scripts.file('/proc/sys/vm/lowmem_reserve_ratio', '256\t256\t32\t0\t0\n')
+    scripts.fs.create_dir('/etc/sysctl.d')
     if config is not None:
         scripts.file(f'/boot/config-{RELEASE}', config)
 
@@ -38,7 +44,7 @@ def test_debian_grub_dropin(kernel, monkeypatch, capsys):
     tools(monkeypatch, 'update-grub')
     assert kernel.run('scylla_kernel_memory_setup') == 0
     assert 'GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX kho=off"\n' in kernel.read(DROPIN)
-    assert kernel.cmd.calls == ['update-grub']
+    assert kernel.cmd.calls == ['update-grub', SYSCTL]
     assert 'Reboot the machine to apply kho=off' in capsys.readouterr().out
 
 
@@ -47,7 +53,7 @@ def test_debian_prefers_dropin_over_grubby(kernel, monkeypatch):
     kernel.distro('ubuntu')
     tools(monkeypatch, 'grubby', 'update-grub')
     assert kernel.run('scylla_kernel_memory_setup') == 0
-    assert kernel.cmd.calls == ['update-grub']
+    assert kernel.cmd.calls == ['update-grub', SYSCTL]
     assert 'kho=off' in kernel.read(DROPIN)
 
 
@@ -66,7 +72,7 @@ def test_grubby(kernel, monkeypatch):
     """Elsewhere (the Red Hat family) grubby adds kho=off to every installed kernel's boot entry."""
     tools(monkeypatch, 'grubby')
     assert kernel.run('scylla_kernel_memory_setup') == 0
-    assert kernel.cmd.calls == [GRUBBY]
+    assert kernel.cmd.calls == [GRUBBY, SYSCTL]
 
 
 @pytest.mark.parametrize('config,message', [(KHO_DEFAULT_ON, True), ('CONFIG_KEXEC_HANDOVER=y\n', False)],
@@ -77,7 +83,7 @@ def test_unsupported_bootloader(scripts, monkeypatch, capsys, config, message):
     scripts.distro('ubuntu')
     tools(monkeypatch)
     assert scripts.run('scylla_kernel_memory_setup') == 0
-    assert not scripts.cmd.calls
+    assert scripts.cmd.calls == [SYSCTL]
     out = capsys.readouterr().out
     assert ('add kho=off to the kernel command line manually' in out) == message
     assert 'Reboot' not in out
@@ -89,6 +95,16 @@ def test_bootloader_failure_does_not_fail_setup(kernel, monkeypatch, capsys):
     kernel.cmd.set('grubby', returncode=1)
     assert kernel.run('scylla_kernel_memory_setup') == 0
     assert 'Disabling Kexec HandOver failed' in capsys.readouterr().out
+    assert kernel.cmd.calls[-1] == SYSCTL
+
+
+def test_sysctl_failure_does_not_skip_kho(kernel, monkeypatch, capsys):
+    """A failing sysctl (e.g. a read-only /proc/sys in a container) neither skips kho=off nor fails scylla_setup."""
+    tools(monkeypatch, 'grubby')
+    kernel.cmd.set('sysctl', returncode=1)
+    assert kernel.run('scylla_kernel_memory_setup') == 0
+    assert GRUBBY in kernel.cmd
+    assert 'Removing the low zone reserve failed' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('cmdline,config,enabled', [
@@ -119,5 +135,27 @@ def test_reboot_message(scripts, monkeypatch, capsys, enabled):
     boot(scripts, monkeypatch, cmdline='ro' if enabled else 'ro kho=off')
     tools(monkeypatch, 'grubby')
     assert scripts.run('scylla_kernel_memory_setup') == 0
-    assert scripts.cmd.calls == [GRUBBY]
+    assert scripts.cmd.calls == [GRUBBY, SYSCTL]
     assert ('Reboot the machine' in capsys.readouterr().out) == enabled
+
+
+@pytest.mark.parametrize('zones,expected', [('256\t256\t32\t0\t0\n', '0 0 0 0 0'), ('256\t32\t0\t0\n', '0 0 0 0')],
+                         ids=['5-zones', '4-zones'])
+def test_lowmem_reserve(kernel, monkeypatch, zones, expected):
+    """The low zone reserve is removed with one ratio per zone of the running kernel, persisted and applied now."""
+    Path('/proc/sys/vm/lowmem_reserve_ratio').write_text(zones)
+    tools(monkeypatch, 'grubby')
+    assert kernel.run('scylla_kernel_memory_setup') == 0
+    assert f'vm.lowmem_reserve_ratio = {expected}\n' in kernel.read(SYSCTL_CONF)
+    assert kernel.cmd.calls == [GRUBBY, SYSCTL]
+
+
+@pytest.mark.parametrize('release', ['4.14.355-275.570.amzn2.x86_64', 'unknown'])
+def test_lowmem_reserve_old_kernel(kernel, monkeypatch, capsys, release):
+    """Before Linux 4.17 a ratio of 0 was raised to 1, reserving whole zones, so the sysctl is left alone there."""
+    monkeypatch.setattr('platform.release', lambda: release)
+    tools(monkeypatch, 'grubby')
+    assert kernel.run('scylla_kernel_memory_setup') == 0
+    assert kernel.cmd.calls == [GRUBBY]
+    assert not Path(SYSCTL_CONF).exists()
+    assert 'keeping vm.lowmem_reserve_ratio' in capsys.readouterr().out

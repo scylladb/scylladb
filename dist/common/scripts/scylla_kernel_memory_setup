@@ -11,14 +11,18 @@
 # Make sure the kernel can use that reserve for its own allocations.
 
 import os
+import re
 import sys
 import argparse
+import platform
 import shutil
 from subprocess import run, CalledProcessError
 from scylla_util import is_debian_variant, kho_enabled
 
 GRUB_DROPIN = '/etc/default/grub.d/99-scylla-kho.cfg'
 KHO_OFF = 'kho=off'
+LOWMEM_RESERVE_RATIO = '/proc/sys/vm/lowmem_reserve_ratio'
+SYSCTL_CONF = '/etc/sysctl.d/99-scylla-lowmem-reserve.conf'
 
 
 def disable_kho():
@@ -44,6 +48,28 @@ def disable_kho():
         print(f'Kexec HandOver is enabled in the running kernel. Reboot the machine to apply {KHO_OFF}.')
 
 
+def disable_lowmem_reserve():
+    """Let allocations that may use any zone fall back to the low zones (DMA, DMA32) without a reserve.
+
+    The reserve keeps hundreds of MB of the low zones out of reach of kernel
+    allocations, which matters when Scylla leaves the kernel a small reserve.
+    The sysctl takes one ratio per zone, and the number of zones depends on
+    the kernel configuration, so it is written for the zones of the running
+    kernel.  Before Linux 4.17 a ratio below 1 was raised to 1, which reserves
+    the whole of the higher zones instead, so older kernels are left alone.
+    """
+    version = re.match(r'(\d+)\.(\d+)', platform.release())
+    if not version or tuple(map(int, version.groups())) < (4, 17):
+        print(f'Kernel {platform.release()} is older than Linux 4.17 or unknown, keeping vm.lowmem_reserve_ratio.')
+        return
+    with open(LOWMEM_RESERVE_RATIO) as f:
+        zones = len(f.read().split())
+    with open(SYSCTL_CONF, 'w') as f:
+        f.write('# Added by scylla_kernel_memory_setup: let the kernel use the low zones next to Scylla.\n')
+        f.write(f'vm.lowmem_reserve_ratio = {" ".join(["0"] * zones)}\n')
+    run(f'sysctl -p {SYSCTL_CONF}', shell=True, check=True)
+
+
 def try_step(name, step):
     """Run a step; a failure is reported but doesn't fail the setup, which goes on with its other steps."""
     try:
@@ -60,3 +86,4 @@ if __name__ == '__main__':
     parser.parse_args()
 
     try_step('Disabling Kexec HandOver', disable_kho)
+    try_step('Removing the low zone reserve', disable_lowmem_reserve)

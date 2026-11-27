@@ -451,7 +451,7 @@ if __name__ == '__main__':
         if memory_setup:
             run_setup_script('memory', 'scylla_memory_setup --lock-memory')
 
-        kernel_memory_setup = interactive_ask_service('Do you want to disable Kexec HandOver (kho=off on the kernel command line)?', 'Kexec HandOver keeps gigabytes of memory that the kernel cannot use for its own allocations, out of the small part ScyllaDB leaves to it. Yes - adds kho=off; a reboot is needed when it is enabled now. No - skip this step.', kernel_memory_setup)
+        kernel_memory_setup = interactive_ask_service('Do you want to disable Kexec HandOver (kho=off on the kernel command line) and the low memory zone reserve (vm.lowmem_reserve_ratio)?', 'Both keep memory that the kernel cannot use for its own allocations, out of the small part ScyllaDB leaves to it. Yes - adds kho=off, which needs a reboot when Kexec HandOver is enabled now, and sets vm.lowmem_reserve_ratio to 0. No - skip this step.', kernel_memory_setup)
         args.no_kernel_memory_setup = not kernel_memory_setup
         if kernel_memory_setup:
             run_setup_script('kernel memory', 'scylla_kernel_memory_setup')

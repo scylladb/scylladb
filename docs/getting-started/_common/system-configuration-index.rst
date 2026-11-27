@@ -45,7 +45,7 @@ The following scripts are available for you to run for configuring ScyllaDB. Som
    * - scylla_io_setup
      - Benchmarks the disks and generates the io.conf and io_properties.yaml files.
    * - scylla_kernel_memory_setup
-     - Configures the kernel so it can use the memory ScyllaDB leaves to it: adds ``kho=off`` to the kernel command line, disabling Kexec HandOver (enabled by default on Linux 7.0 in Ubuntu 26.04). Takes effect after a reboot.
+     - Configures the kernel so it can use the memory ScyllaDB leaves to it: sets ``vm.lowmem_reserve_ratio`` to 0, and adds ``kho=off`` to the kernel command line, disabling Kexec HandOver (enabled by default on Linux 7.0 in Ubuntu 26.04). ``kho=off`` takes effect after a reboot.
    * - scylla_ntp_setup
      - Configures Network Time Protocol
    * - scylla_prepare
