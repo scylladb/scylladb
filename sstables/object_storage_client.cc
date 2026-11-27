@@ -174,6 +174,9 @@ public:
     future<> delete_object(object_name name, abort_source* as) override {
         return _client->delete_object(name.str(), as);
     }
+    future<> delete_objects(sstring bucket, std::span<const sstring> objects, abort_source* as) override {
+        return _client->delete_objects(std::move(bucket), objects, as);
+    }
     file make_readable_file(object_name name, abort_source* as) override {
         return _client->make_readable_file(name.str(), as);
     }
@@ -277,6 +280,16 @@ public:
     }
     future<> delete_object(object_name name, abort_source* as) override {
         return _client->delete_object(name.bucket(), name.object(), as);
+    }
+    future<> delete_objects(sstring bucket, std::span<const sstring> objects, abort_source* as) override {
+        // The JSON API batch would only save round trips, each of its calls still counts
+        // as a separate operation, so plain deletes are good enough for now. Not all at
+        // once though: deletes come seconds apart, by when the server has closed the idle
+        // pooled connections, and each delete in flight would open a new one.
+        constexpr size_t max_concurrent_deletes = 4;
+        co_await max_concurrent_for_each(objects, max_concurrent_deletes, [this, &bucket, as] (const sstring& object) {
+            return _client->delete_object(bucket, object, as);
+        });
     }
     file make_readable_file(object_name name, abort_source* as) override {
         return _client->make_readable_file(name.bucket(), name.object(),

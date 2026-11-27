@@ -1695,6 +1695,45 @@ SEASTAR_THREAD_TEST_CASE(test_client_delete_absent_object_s3) {
     do_test_client_delete_absent_object(make_s3_client);
 }
 
+// The keys travel in the XML body of DeleteObjects, so the ones with characters special
+// to XML or to URLs must survive. Absent keys must not fail the call, like they don't
+// fail delete_object(), and there are more keys than a single request takes.
+void do_test_client_delete_objects(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+
+    const std::vector<sstring> existing = { "testdeleteobjects", sstring(special_characters_object_name), "testdeleteobjects-<&>\"'", "testdeleteobjects-cr\r-lf\n" };
+    for (const auto& key : existing) {
+        cln->put_object(guard.object_path(key), temporary_buffer<char>()).get();
+    }
+    const auto kept = guard.object_path("testdeleteobjects-kept");
+    cln->put_object(kept, temporary_buffer<char>()).get();
+
+    // One existing key goes to the first request, the rest to the second one
+    std::vector<sstring> keys = { existing[0] };
+    for (int i = 0; i < 1500; i++) {
+        keys.push_back(format("testdeleteobjects-absent-{}", i));
+    }
+    keys.insert(keys.end(), existing.begin() + 1, existing.end());
+
+    cln->delete_objects(guard.bucket(), keys).get();
+    for (const auto& key : existing) {
+        BOOST_REQUIRE(!cln->object_exists(guard.object_path(key)).get());
+    }
+    BOOST_REQUIRE(cln->object_exists(kept).get());
+
+    // Like delete_object(), it tolerates a missing bucket
+    cln->delete_objects(format("{}-no-such-bucket", guard.bucket()), std::vector<sstring>{ "object" }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_delete_objects_s3) {
+    do_test_client_delete_objects(make_s3_client);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_delete_objects_proxy) {
+    do_test_client_delete_objects(make_proxy_client);
+}
+
 // Integration test: drive a real upload through the fuzzing S3 proxy with the
 // actual AWS throttling controller wired in, and verify the
 // throttling machinery is exercised end-to-end by watching its metrics.

@@ -17,6 +17,8 @@ import uuid
 from enum import Enum
 from functools import partial
 from collections import OrderedDict
+from xml.etree import ElementTree
+from xml.sax.saxutils import escape
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -116,12 +118,11 @@ class InjectingHandler(BaseHTTPRequestHandler):
     # Processes POST method, see `build_POST_reponse` for details
     def do_POST(self):
         content_length = self.headers['Content-Length']
-        if content_length:
-            put_data = self.rfile.read(int(content_length))
+        put_data = self.rfile.read(int(content_length)) if content_length else b''
         self.send_response(200)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.send_header('Connection', 'keep-alive')
-        response = self.build_POST_reponse(self.parsed_qs(), urlparse(self.path).path).encode('utf-8')
+        response = self.build_POST_reponse(self.parsed_qs(), urlparse(self.path).path, put_data).encode('utf-8')
         self.send_header('Content-Length', str(len(response)))
         self.end_headers()
         self.wfile.write(response)
@@ -180,7 +181,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
     # `CompleteMultipartUpload`, and failure policy. For example, when the policy is `RETRYABLE_FAILURE` it will
     # transmit the erroneous response for the first time and then switch the policy to `SUCCESS`. One can extend this
     # mechanism by adding additional policies or rewriting the response body logic
-    def build_POST_reponse(self, query, path):
+    def build_POST_reponse(self, query, path, body):
         if 'RoleArn' in query:
             return """<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
     <AssumeRoleResult>
@@ -207,6 +208,8 @@ class InjectingHandler(BaseHTTPRequestHandler):
         <RequestId>c6104cbe-af31-11e0-8154-cbc7ccf896c7</RequestId>
     </ResponseMetadata>
 </AssumeRoleResponse>"""
+        if 'delete' in query:
+            return self.build_delete_objects_response(path, body)
         if 'uploads' in query:
             req_uuid = str(uuid.uuid4())
             return f"""<InitiateMultipartUploadResult>
@@ -248,6 +251,30 @@ class InjectingHandler(BaseHTTPRequestHandler):
                     raise ValueError("Unknown policy")
 
         raise ValueError(f"No matching response for POST request: path={path}, query={query}")
+
+    # DeleteObjects in quiet mode: lists only the keys that failed, each according to the policy of the
+    # object (registered by its "/bucket/key" path), and RETRYABLE_FAILURE fails a key only once
+    def build_delete_objects_response(self, bucket_path, body):
+        errors = []
+        for node in ElementTree.fromstring(body).iter():
+            if not node.tag.endswith('Key'):
+                continue
+            key = node.text or ''
+            object_path = f"{bucket_path}/{key}"
+            match self.policies.get(object_path):
+                case Policy.SUCCESS:
+                    continue
+                case Policy.RETRYABLE_FAILURE | Policy.NEVERENDING_RETRYABLE_FAILURE as policy:
+                    if policy == Policy.RETRYABLE_FAILURE:
+                        self.policies.put(object_path, Policy.SUCCESS)
+                    code, message = 'InternalError', 'We encountered an internal error. Please try again.'
+                case Policy.NONRETRYABLE_FAILURE:
+                    code, message = 'AccessDenied', 'Access Denied'
+                case _:
+                    raise ValueError("Unknown policy")
+            errors.append(f"<Error><Key>{escape(key)}</Key><Code>{code}</Code><Message>{message}</Message></Error>")
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">{''.join(errors)}</DeleteResult>"""
 
 
 # Mock server to setup `ThreadingHTTPServer` instance with custom request handler (see above), managing requests state

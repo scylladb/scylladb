@@ -18,6 +18,7 @@
 #include <seastar/http/client.hh>
 #include <filesystem>
 #include <initializer_list>
+#include <span>
 #include <stdexcept>
 #include <utility>
 #include <unordered_map>
@@ -304,6 +305,11 @@ public:
     future<sstring> put_object_and_get_etag(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata = {}, seastar::abort_source* = nullptr);
     future<> copy_object(sstring source_object, sstring target_object, object_metadata = {}, std::optional<size_t> part_size = {}, std::optional<tag> tag = {}, seastar::abort_source* = nullptr);
     future<> delete_object(sstring object_name, seastar::abort_source* = nullptr);
+    // Deletes the keys (relative to the bucket, i.e. without the bucket and with no leading '/')
+    // with as few DeleteObjects requests as it takes. Like with delete_object(), keys that don't
+    // exist count as deleted. The batch is not atomic: if some keys fail to delete, the rest are
+    // still deleted, and the exception names the failed ones.
+    future<> delete_objects(sstring bucket, std::span<const sstring> keys, seastar::abort_source* = nullptr);
     future<> create_bucket(sstring bucket_name, seastar::abort_source* = nullptr);
     future<> delete_bucket(sstring bucket_name, seastar::abort_source* = nullptr);
     future<> delete_bucket_with_objects(sstring bucket_name, seastar::abort_source* = nullptr);
