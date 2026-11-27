@@ -988,6 +988,27 @@ static future<std::vector<sstring>> list_object_storage_sstable_objects(object_s
     co_return names;
 }
 
+struct object_storage_sstable_objects {
+    size_t refs = 0;
+    // Without the TOC, which delete_object_storage_components() deletes last.
+    std::vector<sstring> components;
+};
+
+// One listing of "{prefix}/{sid}/" tells both whether references are left and which
+// components are there, so removal sends a DELETE only to objects that exist.
+static future<object_storage_sstable_objects> list_object_storage_refs_and_components(object_storage_client& client,
+        sstring bucket, std::string_view prefix, sstable_id sid) {
+    object_storage_sstable_objects ret;
+    for (auto& name : co_await list_object_storage_sstable_objects(client, std::move(bucket), prefix, sid)) {
+        if (std::string_view(name).starts_with("refs/")) {
+            ++ret.refs;
+        } else if (name != sstable_version_constants::TOC_SUFFIX) {
+            ret.components.push_back(std::move(name));
+        }
+    }
+    co_return ret;
+}
+
 sstring object_storage_prefix(const std::optional<sstring>& location) {
     return location ? *location : sstring(object_storage_default_prefix);
 }
@@ -1012,17 +1033,6 @@ future<size_t> object_storage_base::num_references(const sstable& sst) const {
 
 future<> object_storage_base::delete_components(std::vector<sstring> components, sstable_id sid, bool log_errors) const {
     return delete_object_storage_components(*_client, _bucket, sstring(prefix()), sid, std::move(components), abort_source(), log_errors);
-}
-
-// For when the sstable's TOC is not at hand: every non-TOC component its version can have.
-static std::vector<sstring> all_possible_components(sstable_version_types version) {
-    std::vector<sstring> components;
-    for (const auto& [type, name] : sstable_version_constants::get_component_map(version)) {
-        if (type != component_type::TOC) {
-            components.push_back(name);
-        }
-    }
-    return components;
 }
 
 sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type gen) {
@@ -1093,13 +1103,6 @@ future<> delete_object_storage_components(object_storage_client& client, sstring
     co_await delete_component(sstable_version_constants::TOC_SUFFIX);
 }
 
-future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
-        sstring prefix, sstable_id sid, sstable_version_types version,
-        seastar::abort_source* as, bool log_errors) {
-    return delete_object_storage_components(client, std::move(bucket), std::move(prefix), sid,
-            all_possible_components(version), as, log_errors);
-}
-
 future<> release_object_storage_snapshot_ref(object_storage_client& client,
         const data_dictionary::storage_options::object_storage& os,
         std::string_view tag, const entry_descriptor& desc) {
@@ -1111,9 +1114,9 @@ future<> release_object_storage_snapshot_ref(object_storage_client& client,
     co_await delete_object_storage_snapshot_ref(client,
             object_name(sstring(os.bucket), prefix, sid, object_storage_snapshot_ref_name(tag, desc.generation)));
 
-    auto refs = co_await list_object_storage_references(client, sstring(os.bucket), prefix, sid);
-    if (refs.empty()) {
-        co_await delete_object_storage_components(client, sstring(os.bucket), sstring(prefix), sid, desc.version);
+    auto objects = co_await list_object_storage_refs_and_components(client, sstring(os.bucket), prefix, sid);
+    if (objects.refs == 0) {
+        co_await delete_object_storage_components(client, sstring(os.bucket), sstring(prefix), sid, std::move(objects.components));
     }
 }
 
@@ -1382,13 +1385,13 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, lo
     co_await delete_object(ref_name);
     sstlog.debug("Deleted reference {}", ref_name.str());
 
-    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
-    if (!refs.empty()) {
-        sstlog.debug("Reference {}: remaining_refs={}", ref_name.str(), refs.size());
+    auto objects = co_await list_object_storage_refs_and_components(*_client, _bucket, prefix(), sid);
+    if (objects.refs != 0) {
+        sstlog.debug("Reference {}: remaining_refs={}", ref_name.str(), objects.refs);
         co_return;
     }
 
-    co_await delete_components(all_possible_components(desc.version), sid, false);
+    co_await delete_components(std::move(objects.components), sid, false);
     sstlog.debug("Reference {}: remaining_refs=0", ref_name.str());
 }
 

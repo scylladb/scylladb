@@ -233,12 +233,6 @@ future<> delete_object_storage_components(object_storage_client& client, sstring
         sstring prefix, sstable_id sid, std::vector<sstring> components,
         seastar::abort_source* as = nullptr, bool log_errors = false);
 
-// Deletes the component objects of one sstable, forgiving missing objects.
-// TOC goes last, so a crash mid-way leaves the sstable discoverable.
-future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
-        sstring prefix, sstable_id sid, sstable_version_types version,
-        seastar::abort_source* as = nullptr, bool log_errors = false);
-
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
