@@ -20,6 +20,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
+#include <fmt/ranges.h>
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -44,60 +45,153 @@ std::vector<replica::memtable*> active_memtables(replica::table& t) {
     return active_memtables;
 }
 
+// Shard owning the first fragment, per the sstable's schema; a heuristic, the rest isn't checked.
+static future<std::optional<shard_id>> shard_of_first_fragment(mutation_reader& rd, const schema& s) {
+    auto* mf = co_await rd.peek();
+    if (!mf || !mf->is_partition_start()) {
+        co_return std::nullopt;
+    }
+    co_return s.get_sharder().shard_of(mf->as_partition_start().key().token());
+}
+
+// The set of shards owning at least one of the given mutations' tokens.
+static std::set<shard_id> shards_for_mutations(const schema& s, const utils::chunked_vector<mutation>& muts) {
+    std::set<shard_id> shards;
+    for (auto& m : muts) {
+        shards.insert(s.get_sharder().shard_of(m.token()));
+    }
+    return shards;
+}
+
+// detect_shard: attribute the write to the data's owning shard when cfg.shard is still
+// the default; false when the caller already resolved it.
+static future<sstables::shared_sstable> do_make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt,
+        sstable_writer_config cfg, bool detect_shard = true) {
+    reader_concurrency_semaphore sem(
+        reader_concurrency_semaphore::no_limits{}, "make_sstable_containing", reader_concurrency_semaphore::register_metrics::no);
+
+    std::exception_ptr ex;
+    std::optional<mutation_reader> scan_rd;
+    std::optional<mutation_reader> reader;
+    try {
+        if (detect_shard && cfg.shard == this_shard_id()) {
+            // Not a hard failure on ambiguity: sstable_resharding_test writes memtables
+            // spanning every shard and sets the sharding metadata itself.
+            auto scan_permit = sem.make_tracking_only_permit(mt->schema(), "shard_scan", db::no_timeout, {});
+            scan_rd.emplace(mt->make_mutation_reader(mt->schema(), std::move(scan_permit)));
+            if (auto shard = co_await shard_of_first_fragment(*scan_rd, *sst->get_schema())) {
+                cfg.shard = *shard;
+            }
+            co_await scan_rd->close();
+            scan_rd.reset();
+        }
+        auto permit = sem.make_tracking_only_permit(mt->schema(), "mt_to_sst", db::no_timeout, {});
+        reader.emplace(mt->make_flush_reader(mt->schema(), std::move(permit)));
+        auto rd = std::move(*reader);
+        reader.reset();
+        co_await sst->write_components(std::move(rd), mt->partition_count(), mt->schema(), cfg, mt->get_encoding_stats());
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (scan_rd) {
+        co_await scan_rd->close();
+    }
+    if (reader) {
+        co_await reader->close();
+    }
+    co_await sem.stop();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+
+    sstable_open_config open_cfg { .load_first_and_last_position_metadata = true };
+    co_await sst->open_data(open_cfg);
+    co_return sst;
+}
+
 future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt) {
     return make_sstable_containing(sst_factory(), std::move(mt));
 }
 
 future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt) {
-    co_await write_memtable_to_sstable(*mt, sst);
-    sstable_open_config cfg { .load_first_and_last_position_metadata = true };
-    co_await sst->open_data(cfg);
-    co_return sst;
+    auto cfg = sst->manager().configure_writer("memtable");
+    return do_make_sstable_containing(std::move(sst), std::move(mt), std::move(cfg));
 }
 
-future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate) {
+future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate, std::optional<shard_id> shard) {
+    BOOST_REQUIRE(!muts.empty());
     schema_ptr s = muts[0].schema();
-    co_await make_sstable_containing(sst, co_await make_memtable(s, muts));
+
+    auto cfg = sst->manager().configure_writer("memtable");
+    if (shard) {
+        cfg.shard = *shard;
+    } else {
+        auto shards = shards_for_mutations(*sst->get_schema(), muts);
+        BOOST_REQUIRE_MESSAGE(shards.size() == 1,
+            fmt::format("make_sstable_containing: mutations span {} shards ({}), but a single sstable can only be attributed to one",
+                   shards.size(), fmt::join(shards, ",")));
+        cfg.shard = *shards.begin();
+    }
+
+    auto mt = co_await make_memtable(s, muts);
+    sst = co_await do_make_sstable_containing(std::move(sst), std::move(mt), std::move(cfg), /*detect_shard=*/false);
 
     if (do_validate) {
         reader_concurrency_semaphore sem(
             reader_concurrency_semaphore::no_limits{}, "make_sstable_containing", reader_concurrency_semaphore::register_metrics::no);
 
-        std::set<mutation, mutation_decorated_key_less_comparator> merged;
-        for (auto&& m : muts) {
-            auto it = merged.find(m);
-            if (it == merged.end()) {
-                merged.insert(std::move(m));
-            } else {
-                auto old = merged.extract(it);
-                old.value().apply(std::move(m));
-                merged.insert(std::move(old));
+        std::exception_ptr ex;
+        std::optional<mutation_reader> reader;
+        try {
+            std::set<mutation, mutation_decorated_key_less_comparator> merged;
+            for (auto&& m : muts) {
+                auto it = merged.find(m);
+                if (it == merged.end()) {
+                    merged.insert(std::move(m));
+                } else {
+                    auto old = merged.extract(it);
+                    old.value().apply(std::move(m));
+                    merged.insert(std::move(old));
+                }
+                co_await coroutine::maybe_yield();
             }
-            co_await coroutine::maybe_yield();
-        }
 
-        // validate the sstable
-        auto rd = sst->as_mutation_source().make_mutation_reader(s, sem.make_tracking_only_permit(nullptr, "test", db::no_timeout, {}));
-        for (auto&& m : merged) {
-            auto mo = co_await read_mutation_from_mutation_reader(rd);
-            BOOST_REQUIRE(mo);
-            assert_that(*mo).is_equal_to_compacted(m);
-            co_await coroutine::maybe_yield();
+            reader.emplace(sst->as_mutation_source().make_mutation_reader(s, sem.make_tracking_only_permit(nullptr, "test", db::no_timeout, {})));
+            for (auto&& m : merged) {
+                auto mo = co_await read_mutation_from_mutation_reader(*reader);
+                BOOST_REQUIRE(mo);
+                assert_that(*mo).is_equal_to_compacted(m);
+                co_await coroutine::maybe_yield();
+            }
+        } catch (...) {
+            ex = std::current_exception();
         }
-        co_await rd.close();
+        if (reader) {
+            co_await reader->close();
+        }
         co_await sem.stop();
+        if (ex) {
+            std::rethrow_exception(std::move(ex));
+        }
     }
     co_return sst;
 }
 
-future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate) {
-    return make_sstable_containing(sst_factory(), std::move(muts), do_validate);
+future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate, std::optional<shard_id> shard) {
+    return make_sstable_containing(sst_factory(), std::move(muts), do_validate, shard);
 }
 
 shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writer_config cfg,
         sstables::generation_type gen, const sstables::sstable::version_types version, int expected_partition, db_clock::time_point query_time) {
     auto s = rd.schema();
+    auto close_rd = deferred_close(rd);
+    if (cfg.shard == this_shard_id()) {
+        if (auto shard = shard_of_first_fragment(rd, *s).get()) {
+            cfg.shard = *shard;
+        }
+    }
     auto sst = env.make_sstable(s, gen, version, sstable_format_types::big, default_sstable_buffer_size, query_time);
+    // rd is moved into write_components; close_rd closing the moved-from reader afterwards is harmless.
     sst->write_components(std::move(rd), expected_partition, s, cfg, encoding_stats{}).get();
     sst->load(s->get_sharder()).get();
     return sst;
