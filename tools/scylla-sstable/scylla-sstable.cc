@@ -44,6 +44,8 @@
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
 #include "sstables/index_reader.hh"
+#include "sstables/parquet/compression.hh"
+#include "sstables/parquet/file_summary.hh"
 #include "sstables/sstable_version.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
@@ -646,10 +648,9 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
                         sstables::object_storage_sstable_version_attribute,
                         sstables::object_storage_sstable_format_attribute));
                 }
-                auto version = sstables::version_from_string(version_it->second);
-                auto format = sstables::format_from_string(format_it->second);
+                auto version = sstables::version_and_format_from_strings(version_it->second, format_it->second);
                 ed = sstables::entry_descriptor(sstables::generation_type(sid_uuid), sstables::sstable_id(sid_uuid),
-                        version, format, sstables::sstable::component_from_sstring(version, component));
+                        version, sstables::sstable::component_from_sstring(version, component));
             }
         } else {
             auto ed_result = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
@@ -670,7 +671,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             const auto dir_path = sst_path.parent_path();
             options = data_dictionary::make_local_options(dir_path);
         }
-        auto sst = sst_man.make_sstable(schema, options, ed->generation, ed->sid, sstables::sstable_state::normal, ed->version, ed->format);
+        auto sst = sst_man.make_sstable(schema, options, ed->generation, ed->sid, sstables::sstable_state::normal, ed->version);
 
         try {
             auto open_cfg = sstables::sstable_open_config{
@@ -1085,25 +1086,28 @@ private:
     std::string _group_id;
     condition_variable _staging_done_condition;
     mutable sstable_generation_generator _generation_generator;
+    std::optional<sstables::sstable_version_types> _version;
 
 private:
     sstables::shared_sstable do_make_sstable() const {
-        const auto format = sstables::sstable_format_types::big;
-        const auto version = _sst_man.get_preferred_sstable_version();
+        const auto version = _version.value_or(_sst_man.choose_sstable_version(*_schema));
         auto generation = _generation_generator();
-        auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, format, component_type::Data);
+        auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, component_type::Data);
         if (file_exists(sst_name).get()) {
             throw std::runtime_error(fmt::format("cannot create output sstable {}, file already exists", sst_name));
         }
         auto local = data_dictionary::make_local_options(_output_dir);
-        return _sst_man.make_sstable(_schema, local, generation, sstables::sstable_state::normal, version, format);
+        return _sst_man.make_sstable(_schema, local, generation, sstables::sstable_state::normal, version);
     }
     sstables::sstable_writer_config do_configure_writer(sstring origin) const {
         return _sst_man.configure_writer(std::move(origin));
     }
 
 public:
-    scylla_sstable_compaction_group_view(schema_ptr schema, reader_permit permit, sstables::sstables_manager& sst_man, std::string output_dir)
+    // `version` is the version of the output sstables, by default the one
+    // that ScyllaDB would choose.
+    scylla_sstable_compaction_group_view(schema_ptr schema, reader_permit permit, sstables::sstables_manager& sst_man, std::string output_dir,
+            std::optional<sstables::sstable_version_types> version = std::nullopt)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _sst_man(sst_man)
@@ -1116,6 +1120,7 @@ public:
         , _backlog_tracker(std::make_unique<dummy_compaction_backlog_tracker>())
         , _group_id("dummy-group")
         , _generation_generator()
+        , _version(version)
     { }
     virtual dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
     virtual const schema_ptr& schema() const noexcept override { return _schema; }
@@ -1211,7 +1216,10 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
         validate_output_dir(output_dir);
     }
 
-    scylla_sstable_compaction_group_view compaction_group_view(schema, permit, sst_man, output_dir);
+    const auto version = vm.contains("sstable-version")
+        ? std::optional(sstables::version_from_string(vm["sstable-version"].as<std::string>()))
+        : std::nullopt;
+    scylla_sstable_compaction_group_view compaction_group_view(schema, permit, sst_man, output_dir, version);
 
     auto compaction_descriptor = compaction::compaction_descriptor(std::move(sstables));
     compaction_descriptor.options = compaction::compaction_type_options::make_scrub(scrub_mode, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no, compaction::compaction_type_options::scrub::drop_unfixable_sstables::no, compaction::compaction_type_options::scrub::update_scrub_time::no);
@@ -1228,6 +1236,9 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
 void write_index_component(schema_ptr schema, reader_permit permit, const sstables::shared_sstable& sst, json_writer& writer) {
     auto idx_reader = sst->make_index_reader(permit);
     auto close_idx_reader = deferred_close(*idx_reader);
+    // The index of a Parquet Data file stores row ordinals, not byte
+    // positions, so they get their own key.
+    const auto pos_key = sstables::has_parquet_data_file(sst->get_version()) ? "row" : "pos";
 
     writer.StartArray();
     while (!idx_reader->eof()) {
@@ -1240,7 +1251,7 @@ void write_index_component(schema_ptr schema, reader_permit permit, const sstabl
             writer.Key("key");
             writer.DataKey(*schema, *pkey);
         }
-        writer.Key("pos");
+        writer.Key(pos_key);
         writer.Uint64(pos);
         writer.EndObject();
 
@@ -1270,6 +1281,25 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
 }
 
 void write_compression_info_component(const sstables::shared_sstable& sst, json_writer& writer) {
+    // A Parquet Data file has no CompressionInfo.db: each page carries its
+    // own compression, and the footer records the compression codec of each
+    // column.
+    if (sstables::has_parquet_data_file(sst->get_version())) {
+        sst_log.info("Sstable {} has a Parquet Data file and no CompressionInfo.db, printing the compression codecs of its columns", sst->get_filename());
+        std::set<std::string_view> codecs;
+        for (const auto& c : sst->get_parquet_file_summary().columns()) {
+            codecs.insert(sstables::parquet::codec_name(c.codec));
+        }
+        writer.StartObject();
+        writer.Key("parquet_codecs");
+        writer.StartArray();
+        for (const auto& c : codecs) {
+            writer.String(c);
+        }
+        writer.EndArray();
+        writer.EndObject();
+        return;
+    }
     const auto& compression = sst->get_compression();
 
     writer.StartObject();
@@ -1311,6 +1341,11 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
 }
 
 void write_summary_component(schema_ptr schema, const sstables::shared_sstable& sst, json_writer& writer) {
+    if (sstables::has_parquet_data_file(sst->get_version())) {
+        sst_log.info("Sstable {} has a Parquet Data file and a trie index, which have no Summary.db", sst->get_filename());
+        writer.Null();
+        return;
+    }
     auto& summary = sst->get_summary();
 
     writer.StartObject();
@@ -1679,6 +1714,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
         case sstables::scylla_metadata_type::ScrubTime: return "scrub_time";
+        case sstables::scylla_metadata_type::ParquetDataFile: return "parquet_data_file";
     }
     std::abort();
 }
@@ -1880,6 +1916,21 @@ public:
     void operator()(const sstables::scrub_time_type& as) const {
         _writer.Int64(as.timestamp);
     }
+
+    void operator()(const sstables::scylla_metadata::parquet_data_file& p) const {
+        _writer.StartObject();
+        _writer.Key("rows");
+        _writer.Uint64(p.rows);
+        _writer.Key("raw_size");
+        _writer.Uint64(p.raw_size);
+        _writer.Key("file_size");
+        _writer.Uint64(p.file_size);
+        _writer.Key("footer_size");
+        _writer.Uint64(p.footer_size);
+        _writer.Key("footer_crc32");
+        _writer.Uint(p.footer_crc32);
+        _writer.EndObject();
+    }
 };
 
 void write_scylla_metadata_component(schema_ptr schema, const sstables::shared_sstable& sst, json_writer& writer) {
@@ -2072,6 +2123,11 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
     }
 
     for (const auto& sst : sstables) {
+        if (sstables::has_parquet_data_file(sst->get_version())) {
+            sst_log.info("Sstable {} has a Parquet Data file, whose pages carry their own compression, nothing to do."
+                    " No decompressed or decrypted copy of a Parquet Data file is written.", sst->get_filename());
+            continue;
+        }
         if (!sst->get_compression()) {
             sst_log.info("Sstable {} is not compressed, nothing to do", sst->get_filename());
             continue;
@@ -2300,16 +2356,15 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto input_format = get_input_format_from_options(vm, input_format::cql);
     auto memory_limit = vm["memory-limit"].as<size_t>();
     auto output_dir = vm["output-dir"].as<std::string>();
-    auto format = sstables::sstable_format_types::big;
     auto version = vm.contains("sstable-version")
         ? version_from_string(vm["sstable-version"].as<std::string>())
-        : manager.get_preferred_sstable_version();
+        : manager.choose_sstable_version(*schema);
 
     auto consume_reader = [&] (mutation_reader reader, size_t partition_count_estimate) -> future<> {
         auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
 
         {
-            auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
+            auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, component_type::Data);
             if (co_await file_exists(sst_name)) {
                 throw std::invalid_argument(fmt::format("cannot create output sstable {}, file already exists", sst_name));
             }
@@ -2318,7 +2373,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
         auto writer_cfg = manager.configure_writer("scylla-sstable");
         writer_cfg.validation_level = validation_level;
         auto local = data_dictionary::make_local_options(output_dir);
-        auto sst = manager.make_sstable(schema, local, generation, sstables::sstable_state::normal, version, format);
+        auto sst = manager.make_sstable(schema, local, generation, sstables::sstable_state::normal, version);
 
         co_await sst->write_components(std::move(reader), partition_count_estimate, schema, writer_cfg, encoding_stats{});
 
@@ -2629,10 +2684,9 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
 
     const auto local = data_dictionary::make_local_options(output_dir);
 
-    const auto new_format = sstables::sstable_format_types::big;
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
-        : sst_man.get_preferred_sstable_version();
+        : sst_man.choose_sstable_version(*schema);
 
     for (const auto& sst : sstables) {
         if (sst->get_version() == new_version && !all) {
@@ -2643,7 +2697,7 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
         const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
 
         auto writer_cfg = sst_man.configure_writer("scylla-sstable");
-        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version);
 
         new_sst->write_components(
                 sst->make_full_scan_reader(schema, permit),
@@ -2705,10 +2759,9 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
 
     const auto local = data_dictionary::make_local_options(output_dir);
 
-    const auto new_format = sstables::sstable_format_types::big;
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
-        : sst_man.get_preferred_sstable_version();
+        : sst_man.choose_sstable_version(*schema);
 
     auto sources = create_mutation_sources(sstables, vm.count("merge"));
 
@@ -2736,7 +2789,7 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
         const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
 
         auto writer_cfg = sst_man.configure_writer("scylla-sstable");
-        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version);
 
         new_sst->write_components(
                 std::move(reader),
@@ -2766,10 +2819,9 @@ void split_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     const auto local = data_dictionary::make_local_options(output_dir);
 
-    const auto new_format = sstables::sstable_format_types::big;
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
-        : sst_man.get_preferred_sstable_version();
+        : sst_man.choose_sstable_version(*schema);
 
     // Parse split tokens
     auto split_token_strings = vm["split-token"].as<std::vector<sstring>>();
@@ -2805,7 +2857,7 @@ void split_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
         auto consumer = [&] (mutation_reader reader) -> future<> {
             const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
-            auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+            auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version);
 
             auto writer_cfg = sst_man.configure_writer("scylla-sstable");
 
@@ -2956,14 +3008,15 @@ fmt::format(R"(
 Read and re-write the sstable, getting rid of or fixing broken parts, depending
 on the selected mode.
 Output sstables are written to the directory specified via `--output-dir`.
-They will be written with the BIG format and the highest supported sstable
-format, with generations chosen by scylla-sstable.
+They will be written with the same version as ScyllaDB would (can be changed
+with --sstable-version), with generations chosen by scylla-sstable.
 
 For more information, see: {}
 )", doc_link("operating-scylla/admin-tools/scylla-sstable#scrub")),
             {
                     typed_option<std::string>("scrub-mode", "scrub mode to use, one of (abort, skip, segregate, validate)"),
                     typed_option<std::string>("output-dir", ".", "directory to place the scrubbed sstables to"),
+                    typed_option<std::string>("sstable-version", "sstable version to use, defaults to the same version as ScyllaDB would"),
             }},
             scrub_operation},
 /* validate-checksums */

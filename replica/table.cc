@@ -541,7 +541,7 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
 
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state) {
     auto& sstm = get_sstables_manager();
-    return make_sstable(state, sstm.get_preferred_sstable_version());
+    return make_sstable(state, sstm.choose_sstable_version(*_schema));
 }
 
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state, sstables::sstable_version_types version) {
@@ -551,7 +551,7 @@ sstables::shared_sstable table::make_sstable(sstables::sstable_state state, ssta
     if (_storage_opts->is_object_storage_type()) {
         sid_opt = sstables::sstable_id(gen.as_uuid());
     }
-    return sstm.make_sstable(_schema, *_storage_opts, gen, sid_opt, state, version, sstables::sstable::format_types::big);
+    return sstm.make_sstable(_schema, *_storage_opts, gen, sid_opt, state, version);
 }
 
 sstables::shared_sstable table::make_sstable() {

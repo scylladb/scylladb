@@ -637,6 +637,15 @@ scylla_tests = set([
     'test/boost/nonwrapping_interval_test',
     'test/boost/object_storage_upload_test',
     'test/boost/observable_test',
+    'test/boost/parquet_codec_test',
+    'test/boost/parquet_encoding_test',
+    'test/boost/parquet_end_to_end_test',
+    'test/boost/parquet_format_selection_test',
+    'test/boost/parquet_mapping_test',
+    'test/boost/parquet_reader_test',
+    'test/boost/parquet_sstable_reader_test',
+    'test/boost/parquet_sstable_writer_test',
+    'test/boost/parquet_writer_test',
     'test/boost/partitioner_test',
     'test/boost/pretty_printers_test',
     'test/boost/radix_tree_test',
@@ -1039,6 +1048,30 @@ scylla_core = (['message/messaging_service.cc',
                 'sstables/random_access_reader.cc',
                 'sstables/metadata_collector.cc',
                 'sstables/writer.cc',
+                'sstables/large_data_tracker.cc',
+                'sstables/serialization_header_builder.cc',
+                'sstables/trie_index_writer.cc',
+                'sstables/filter_writer.cc',
+                'sstables/sstable_sealer.cc',
+                'sstables/parquet/bit_util.cc',
+                'sstables/parquet/compression.cc',
+                'sstables/parquet/encoding.cc',
+                'sstables/parquet/fetcher.cc',
+                'sstables/parquet/file_summary.cc',
+                'sstables/parquet/file_verifier.cc',
+                'sstables/parquet/mapping.cc',
+                'sstables/parquet/mapping_reader.cc',
+                'sstables/parquet/mapping_writer.cc',
+                'sstables/parquet/metadata.cc',
+                'sstables/parquet/page_decoder.cc',
+                'sstables/parquet/reader.cc',
+                'sstables/parquet/reader_cache.cc',
+                'sstables/parquet/rle.cc',
+                'sstables/parquet/schema.cc',
+                'sstables/parquet/sstable_reader.cc',
+                'sstables/parquet/sstable_writer.cc',
+                'sstables/parquet/thrift.cc',
+                'sstables/parquet/writer.cc',
                 'sstables/trie/bti_key_translation.cc',
                 'sstables/trie/bti_index_reader.cc',
                 'sstables/trie/bti_node_reader.cc',
@@ -1653,6 +1686,7 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/perf/perf_cql_raw.cc',
                 'test/perf/perf_compaction_efficiency.cc',
                 'test/perf/perf_sstable.cc',
+                'test/perf/perf_sstable_datasets.cc',
                 'test/perf/perf_tablets.cc',
                 'test/perf/tablet_load_balancing.cc',
                 'test/perf/perf.cc',
@@ -1728,6 +1762,19 @@ tests_not_using_seastar_test_framework = set([
     'test/manual/sstable_scan_footprint_test',
     'test/unit/cross_shard_barrier_test',
 ]) | pure_boost_tests
+
+# Tests that use Arrow C++ as the reference Parquet implementation.
+# Arrow is linked into these test binaries only, never into scylla.
+arrow_tests = set([
+    'test/boost/parquet_codec_test',
+    'test/boost/parquet_encoding_test',
+    'test/boost/parquet_end_to_end_test',
+    'test/boost/parquet_mapping_test',
+    'test/boost/parquet_reader_test',
+    'test/boost/parquet_sstable_writer_test',
+    'test/boost/parquet_writer_test',
+])
+arrow_test_sources = set(t + '.cc' for t in arrow_tests)
 
 
 COVERAGE_INST_FLAGS = ['-fprofile-instr-generate', '-fcoverage-mapping', f'-fprofile-list=./{PROFILES_LIST_FILE_NAME}']
@@ -2027,6 +2074,14 @@ default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items()
 build_modes =  {m: modes[m] for m in selected_modes}
 
 buildfile_final_name = args.buildfile_final_name or args.buildfile
+
+# Arrow is optional. Without it, the tests that use it are not built, and
+# test.py skips them. See optional_tests in test/boost/test_config.yaml.
+have_parquet = have_pkg('parquet')
+if not have_parquet:
+    print('Parquet (Arrow C++) not found, the tests that use it will not be built')
+    tests -= arrow_tests
+    all_artifacts -= arrow_tests
 
 if args.artifacts:
     build_artifacts = set()
@@ -3028,6 +3083,10 @@ if isinstance(conan_dependencies, ConanPkgConfigDependencies):
             for libdir in shlex.split(pkg_config(pkg, '--libs-only-L', pkg_config_path=pkg_config_dir)):
                 modes[mode]['conan_libs'] += f' -Wl,-rpath,{libdir.removeprefix("-L")}'
 
+# The parquet package pulls in arrow. See arrow_tests.
+arrow_cflags = pkg_config('parquet', '--cflags') if have_parquet else ''
+arrow_libs = pkg_config('parquet', '--libs') if have_parquet else ''
+
 user_cflags += ' -fvisibility-inlines-hidden'
 user_ldflags += ' -fvisibility-inlines-hidden'
 if args.staticcxx:
@@ -3441,6 +3500,8 @@ def write_build_file(f,
                     local_libs += f' {seastar_testing_libs}'
                 else:
                     local_libs += ' ' + '-lgnutls' + ' ' + '-lboost_unit_test_framework'
+                if binary in arrow_tests:
+                    local_libs += ' ' + arrow_libs
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
@@ -3547,6 +3608,8 @@ def write_build_file(f,
             f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
             if src in modeval['per_src_extra_cxxflags']:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
+            if arrow_cflags and src in arrow_test_sources:
+                f.write(f'    obj_cxxflags = {arrow_cflags}\n')
         for swagger in swaggers:
             hh = swagger.headers(gen_dir)[0]
             cc = swagger.sources(gen_dir)[0]

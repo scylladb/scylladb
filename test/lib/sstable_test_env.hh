@@ -146,13 +146,13 @@ public:
     sstables::generation_type new_generation() noexcept;
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
-            sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
+            sstable::version_types v = sstables::get_highest_sstable_version(),
             size_t buffer_size = default_sstable_buffer_size, db_clock::time_point now = db_clock::now());
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstable::version_types v = sstables::get_highest_sstable_version());
 
     shared_sstable make_sstable(schema_ptr schema, sstables::generation_type generation,
-            sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
+            sstable::version_types v = sstables::get_highest_sstable_version(),
             size_t buffer_size = default_sstable_buffer_size, db_clock::time_point now = db_clock::now());
 
     shared_sstable make_sstable(schema_ptr schema, sstable::version_types v = sstables::get_highest_sstable_version());
@@ -174,14 +174,14 @@ public:
     // counting pointer to an sstable - allowing for the returned handle to
     // be passed around until no longer needed.
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation,
-            sstable::version_types version, sstable::format_types f = sstable::format_types::big,
+            sstable::version_types version,
             sstable_open_config cfg = { .load_first_and_last_position_metadata = true });
 
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::int_t gen_value,
-            sstable::version_types version, sstable::format_types f = sstable::format_types::big);
+            sstable::version_types version);
 
     future<shared_sstable> reusable_sst(schema_ptr schema, sstables::generation_type generation,
-            sstable::version_types version, sstable::format_types f = sstable::format_types::big);
+            sstable::version_types version);
 
     future<shared_sstable> reusable_sst(schema_ptr schema, shared_sstable sst);
 

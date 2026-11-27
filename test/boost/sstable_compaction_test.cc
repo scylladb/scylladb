@@ -2925,6 +2925,56 @@ future<> min_max_clustering_key_2(test_env& env) {
     return make_ready_future();
 }
 
+// Compaction reports its progress as the read progress of its input
+// sstables, out of the sum of their data_size(). A finished compaction has
+// read all of it, whatever the format. For `aa`, both are in raw size.
+SEASTAR_TEST_CASE(compaction_progress_ends_at_data_size_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            testlog.info("version={}", version);
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                    .with_column("pk", int32_type, column_kind::partition_key)
+                    .with_column("ck", int32_type, column_kind::clustering_key)
+                    .with_column("v", utf8_type)
+                    .build();
+            auto cf = env.make_table_for_tests(s);
+            auto close_cf = deferred_stop(cf);
+            auto sst_gen = env.make_sst_factory(s, version);
+            const auto keys = tests::generate_partition_keys(20, s);
+            const auto& v = *s->get_column_definition("v");
+            auto make_input = [&] (int first_row) {
+                utils::chunked_vector<mutation> muts;
+                for (const auto& dk : keys) {
+                    mutation m(s, dk);
+                    for (int i = first_row; i < first_row + 20; ++i) {
+                        auto ck = clustering_key::from_single_value(*s, int32_type->decompose(i));
+                        m.set_clustered_cell(ck, v, atomic_cell::make_live(*utf8_type, 1, utf8_type->decompose(sstring(i % 300, 'v'))));
+                    }
+                    muts.push_back(std::move(m));
+                }
+                return make_sstable_containing(sst_gen, std::move(muts)).get();
+            };
+            auto sst1 = make_input(0);
+            auto sst2 = make_input(10);
+
+            auto& table_s = cf.as_compaction_group_view();
+            auto descriptor = compaction::compaction_descriptor({sst1, sst2});
+            descriptor.creator = [&] (shard_id) { return sst_gen(); };
+            descriptor.replacer = replacer_fn_no_op();
+            descriptor.gc_state = table_s.get_tombstone_gc_state();
+            compaction::compaction_progress_monitor progress_monitor;
+            uint64_t compaction_size = 0;
+            run_compaction_task(env, descriptor.run_identifier, table_s, [&] (compaction::compaction_data& cdata) {
+                return compaction::compact_sstables(std::move(descriptor), cdata, table_s, progress_monitor).then([&] (compaction::compaction_result) {
+                    compaction_size = cdata.compaction_size;
+                });
+            }).get();
+            BOOST_REQUIRE_EQUAL(compaction_size, sst1->data_size() + sst2->data_size());
+            BOOST_REQUIRE_EQUAL(progress_monitor.get_progress(), compaction_size);
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(min_max_clustering_key_test_2_test) {
     return test_env::do_with_async([](test_env& env) { min_max_clustering_key_2(env).get(); }, {});
 }
@@ -6984,7 +7034,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
     BOOST_REQUIRE(d.state == sst->state());
 
-    auto sst2 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version, d.format);
+    auto sst2 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version);
     sst2->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::TOC).get());
     BOOST_REQUIRE(sst2->get_storage().exists(*sst2, sstables::component_type::TemporaryTOC).get());
@@ -6993,7 +7043,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
     d = sst->clone(gen_generator(), leave_unsealed).get();
     BOOST_REQUIRE(d.state == sst->state());
 
-    auto sst3 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version, d.format);
+    auto sst3 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version);
     sst3->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(sst3->get_storage().exists(*sst3, sstables::component_type::TOC).get());
     BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::TemporaryTOC).get());
@@ -7020,7 +7070,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     bool leave_unsealed = true;
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst2 = env.make_sstable(s, d.generation, d.version);
     {
         bool checked = false;
         env.manager()
@@ -7042,7 +7092,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     leave_unsealed = false;
     d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst3 = env.make_sstable(s, d.generation, d.version);
     {
         bool checked = false;
         env.manager()
@@ -7814,7 +7864,7 @@ SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
                 .build();
 
         auto make_sstable = [&] (uint64_t data_size) {
-            auto sst = env.make_sstable(s, "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+            auto sst = env.make_sstable(s, "/nowhere/in/particular", env.new_generation(), sstable_version_types::md);
             auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
             sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, data_size);
             return sst;

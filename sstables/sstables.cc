@@ -85,6 +85,9 @@
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
 #include "readers/reversing.hh"
+#include "sstables/parquet/file_verifier.hh"
+#include "sstables/parquet/stats.hh"
+#include "sstables/parquet/sstable_reader.hh"
 #include "readers/forwardable.hh"
 #include "sstables/trie/bti_index.hh"
 #include "partition_slice_builder.hh"
@@ -299,10 +302,12 @@ const std::unordered_map<sstable_version_types, sstring, enum_hash<sstable_versi
     { sstable_version_types::me , "me" },
     { sstable_version_types::ms , "ms" },
     { sstable_version_types::mt , "mt" },
+    { sstable_version_types::aa , "aa" },
 };
 
 const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format_types>> format_string = {
-    { sstable_format_types::big , "big" }
+    { sstable_format_types::big , "big" },
+    { sstable_format_types::pq , "pq" },
 };
 
 // This assumes that the mappings are small enough, and called unfrequent
@@ -773,7 +778,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
             co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
             break;
         case metadata_type::Serialization:
-            if (v < sstable_version_types::mc) {
+            if (!has_serialization_header(v)) {
                 throw_malformed_sstable_exception(
                     "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
             } else {
@@ -791,7 +796,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
             throw_malformed_sstable_exception(fmt::format("Statistics is malformed: missing metadata type {}", int(type)));
         }
     }
-    if (v >= sstable_version_types::mc && !s.contents.contains(metadata_type::Serialization)) {
+    if (has_serialization_header(v) && !s.contents.contains(metadata_type::Serialization)) {
         throw_malformed_sstable_exception("Statistics is malformed: missing Serialization header");
     }
 }
@@ -1058,10 +1063,12 @@ void sstable::generate_toc() {
     if (_schema->bloom_filter_fp_chance() != 1.0) {
         _recognized_components.insert(component_type::Filter);
     }
-    if (!_schema->get_compressor_params().compression_enabled()) {
-        _recognized_components.insert(component_type::CRC);
-    } else {
-        _recognized_components.insert(component_type::CompressionInfo);
+    if (has_compression_info_or_crc(_version)) {
+        if (!_schema->get_compressor_params().compression_enabled()) {
+            _recognized_components.insert(component_type::CRC);
+        } else {
+            _recognized_components.insert(component_type::CompressionInfo);
+        }
     }
     _recognized_components.insert(component_type::Scylla);
 }
@@ -2028,6 +2035,9 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     }
     _data_file_size = st.st_size;
     _data_file_write_time = db_clock::from_time_t(st.st_mtime);
+    if (has_parquet_data_file(_version)) {
+        co_await open_parquet_data_file();
+    }
 
   if (_index_file) {
     auto size = co_await _index_file.size();
@@ -2079,6 +2089,72 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     }
 }
 
+future<> sstable::open_parquet_data_file() {
+    // The reader takes the column names from the serialization header,
+    // which does not hold for a dense table.
+    if (_schema->is_compact_table()) {
+        throw std::runtime_error(seastar::format("Cannot open sstable {} of format {}: compact storage table {}.{} is not supported",
+                get_filename(), get_format(), _schema->ks_name(), _schema->cf_name()));
+    }
+    const auto* entry = _components->scylla_metadata ? _components->scylla_metadata->get_parquet_data_file() : nullptr;
+    if (!entry) {
+        throw_malformed_sstable_exception("Scylla.db has no entry for the Parquet Data file", filename(component_type::Scylla));
+    }
+    if (entry->file_size != _data_file_size) {
+        throw_malformed_sstable_exception(seastar::format("the Data file has {} bytes, Scylla.db says {}", _data_file_size, entry->file_size),
+                filename(component_type::Data));
+    }
+    // Another shard may have read the footer already. Then the components
+    // are that shard's, and they are only read here.
+    if (!_components->parquet_summary) {
+        auto summary = co_await parquet::read_file_summary(_data_file, _data_file_size, entry->footer_crc32);
+        if (summary.rows() != entry->rows) {
+            throw_malformed_sstable_exception(seastar::format("the Data file has {} rows, Scylla.db says {}", summary.rows(), entry->rows),
+                    filename(component_type::Data));
+        }
+        _components->parquet_summary.emplace(std::move(summary));
+        _components->parquet_summary_memory = parquet::accounted_memory(&parquet::shard_stats::footer_summary_bytes,
+                _components->parquet_summary->memory_usage());
+    }
+    try {
+        auto& tracker = _manager.get_cache_tracker();
+        _parquet = seastar::make_shared<parquet::sstable_read_state>(
+                parquet::open_mapping(get_serialization_header(), *_components->parquet_summary),
+                tracker.region(), tracker.get_lru(), tracker.get_parquet_metadata_cache_stats());
+    } catch (const malformed_sstable_exception& e) {
+        throw_malformed_sstable_exception(e.what(), filename(component_type::Data));
+    }
+}
+
+parquet::sstable_read_state& sstable::get_parquet_read_state() const {
+    if (!_parquet) [[unlikely]] {
+        on_internal_error(sstlog, fmt::format("sstable {} has no open Parquet Data file", get_filename()));
+    }
+    return *_parquet;
+}
+
+const parquet::file_summary& sstable::get_parquet_file_summary() const {
+    if (!_components->parquet_summary) [[unlikely]] {
+        on_internal_error(sstlog, fmt::format("sstable {} has no Parquet file summary", get_filename()));
+    }
+    return *_components->parquet_summary;
+}
+
+file sstable::make_data_file_for_read(reader_permit permit, tracing::trace_state_ptr trace_state) const {
+    file f = make_tracked_file(_data_file, std::move(permit));
+    if (trace_state) {
+        f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
+    }
+    return f;
+}
+
+file sstable::make_untracked_data_file_for_read(tracing::trace_state_ptr trace_state) const {
+    if (trace_state) {
+        return tracing::make_traced_file(_data_file, std::move(trace_state), format("{}:", get_filename()));
+    }
+    return _data_file;
+}
+
 future<> sstable::create_data() noexcept {
     auto oflags = sstable_write_open_flags;
     file_open_options opt;
@@ -2100,11 +2176,14 @@ future<> sstable::drop_caches() {
         co_await _cached_rows_file->evict_gently();
     }
     co_await _index_cache->evict_gently();
+    if (_parquet) {
+        co_await _parquet->cache().evict_gently();
+    }
 }
 
 // Return the filter format for the given sstable version
 static inline utils::filter_format get_filter_format(sstable_version_types version) {
-    return (version >= sstable_version_types::mc)
+    return has_m_format_filter(version)
                ? utils::filter_format::m_format
                : utils::filter_format::k_l_format;
 }
@@ -2406,7 +2485,6 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
             .rows = _rows_file ? std::optional<seastar::file_handle>(_rows_file.dup()) : std::nullopt,
             .generation = _generation,
             .version = _version,
-            .format = _format,
             .uncompressed_data_size = data_size(),
             .metadata_size_on_disk = _metadata_size_on_disk
         };
@@ -2414,7 +2492,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
 }
 
 entry_descriptor sstable::get_descriptor(component_type c) const {
-    return entry_descriptor(_generation, _sstable_identifier, _version, _format, c);
+    return entry_descriptor(_generation, _sstable_identifier, _version, c);
 }
 
 future<>
@@ -2575,7 +2653,7 @@ void seal_statistics(sstable_version_types v, statistics& s, metadata_collector&
     s.contents[metadata_type::Validation] = std::make_unique<validation_metadata>(std::move(validation));
 
     collector.construct_compaction(compaction);
-    if (v < sstable_version_types::mc && !compaction_ancestors.empty()) {
+    if (has_compaction_ancestors(v) && !compaction_ancestors.empty()) {
         compaction.ancestors.elements = utils::chunked_vector<uint32_t>(compaction_ancestors.begin(), compaction_ancestors.end());
     }
     s.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>(std::move(compaction));
@@ -2661,7 +2739,8 @@ static sstable_column_kind to_sstable_column_kind(column_kind k) {
 void
 sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
-        std::optional<scylla_metadata::large_data_records> ld_records) {
+        std::optional<scylla_metadata::large_data_records> ld_records,
+        std::optional<scylla_metadata::parquet_data_file> parquet_data_file) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
 
@@ -2686,6 +2765,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
     if (ld_records) {
         _components->scylla_metadata->data.set<scylla_metadata_type::LargeDataRecords>(std::move(*ld_records));
+    }
+    if (parquet_data_file) {
+        _components->scylla_metadata->data.set<scylla_metadata_type::ParquetDataFile>(std::move(*parquet_data_file));
     }
     if (!_origin.empty()) {
         scylla_metadata::sstable_origin o;
@@ -2787,7 +2869,7 @@ void sstable::validate_sstable_identifier() const {
 }
 
 bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
-    if (_version < sstables::sstable_version_types::md) {
+    if (!has_correct_min_max_column_names()) {
         return true;
     }
 
@@ -2859,7 +2941,10 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     }
     co_await utils::get_local_injector().inject("sstable_validate/pause", utils::wait_for_message(std::chrono::seconds(5)));
 
-    if (_version >= sstable_version_types::mc) {
+    if (has_parquet_data_file(_version)) {
+        co_return co_await parquet::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
+    }
+    if (has_mx_data_file(_version)) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
 
@@ -3048,6 +3133,16 @@ bool sstable::is_shared() const {
 }
 
 uint64_t sstable::data_size() const {
+    if (has_parquet_data_file(_version)) {
+        // The raw size is close to the uncompressed size of an `mx` Data
+        // file, so the size tiers of compaction, the backlog, and read and
+        // write progress keep their meaning.
+        // Scylla.db is read before the Data file is opened, and the writer
+        // sets the entry when it seals the sstable. Before either, the size
+        // is 0, as for an `mx` sstable before it is opened.
+        const auto* p = _components->scylla_metadata ? _components->scylla_metadata->get_parquet_data_file() : nullptr;
+        return p ? p->raw_size : 0;
+    }
     if (has_component(component_type::CompressionInfo)) {
         return _components->compression.uncompressed_file_length();
     }
@@ -3056,6 +3151,13 @@ uint64_t sstable::data_size() const {
 
 uint64_t sstable::ondisk_data_size() const {
     return _data_file_size;
+}
+
+uint64_t sstable::data_end_position() const {
+    if (has_parquet_data_file(_version)) {
+        return get_parquet_file_summary().rows();
+    }
+    return data_size();
 }
 
 utils::file_size_stats sstable::get_file_size_stats() const {
@@ -3089,7 +3191,7 @@ bool sstable::has_component(component_type f) const {
 }
 
 std::optional<bool> sstable::originated_on_this_node() const {
-    if (_version < version_types::me) {
+    if (!has_originating_host_id(_version)) {
         // earlier formats do not store originating host id
         return std::nullopt;
     }
@@ -3115,7 +3217,7 @@ std::optional<bool> sstable::originated_on_this_node() const {
 }
 
 void sstable::validate_originating_host_id() const {
-    if (_version < version_types::me) {
+    if (!has_originating_host_id(_version)) {
         // earlier formats do not store originating host id
         return;
     }
@@ -3145,10 +3247,10 @@ void sstable::validate_originating_host_id() const {
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                                    format_types format, sstring component) {
+                                    sstring component) {
     sstring v = fmt::to_string(version);
     sstring g = to_sstring(generation);
-    sstring f = fmt::to_string(format);
+    sstring f = fmt::to_string(format_of(version));
     switch (version) {
     case sstable::version_types::ka:
         return ks + "-" + cf + "-" + v + "-" + g + "-" + component;
@@ -3159,6 +3261,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::me:
     case sstable::version_types::ms:
     case sstable::version_types::mt:
+    case sstable::version_types::aa:
         return v + "-" + g + "-" + f + "-" + component;
     }
     on_internal_error(sstlog, seastar::format("invalid version {} for sstable: table={}.{}, generation={}, format={}, component={}",
@@ -3166,19 +3269,19 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                          format_types format, component_type component) {
-    return component_basename(ks, cf, version, generation, format,
+                          component_type component) {
+    return component_basename(ks, cf, version, generation,
             sstable_version_constants::get_component_map(version).at(component));
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                          format_types format, component_type component) {
-    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
+                          component_type component) {
+    return dir + "/" + component_basename(ks, cf, version, generation, component);
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                          format_types format, sstring component) {
-    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
+                          sstring component) {
+    return dir + "/" + component_basename(ks, cf, version, generation, component);
 }
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
@@ -3241,7 +3344,11 @@ sstable::make_reader(
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
     auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
 
-    if (_version >= version_types::mc && (!reversed || range.is_singular())) {
+    if (has_parquet_data_file(_version)) {
+        return parquet::make_reader(shared_from_this(), std::move(query_schema), std::move(permit), range, slice,
+                std::move(trace_state), fwd, fwd_mr, mon, integrity, std::move(index_reader), single_partition_read_murmur_hash);
+    }
+    if (has_mx_data_file(_version) && (!reversed || range.is_singular())) {
         return mx::make_reader(
             shared_from_this(),
             std::move(query_schema),
@@ -3262,7 +3369,7 @@ sstable::make_reader(
     // FIXME: remove this workaround eventually.
     auto max_result_size = permit.max_result_size();
 
-    if (_version >= version_types::mc) {
+    if (has_mx_data_file(_version)) {
         // The only mx case falling through here is reversed multi-partition reader
         auto rd = make_reversing_reader(mx::make_reader(shared_from_this(), query_schema->make_reversed(), std::move(permit),
                 range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon,
@@ -3296,7 +3403,10 @@ sstable::make_full_scan_reader(
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor,
         integrity_check integrity) {
-    if (_version >= version_types::mc) {
+    if (has_parquet_data_file(_version)) {
+        return parquet::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
+    }
+    if (has_mx_data_file(_version)) {
         return mx::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
     }
     return kl::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
@@ -3307,7 +3417,8 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
     //   la-42-big-Data.db
     //   ka-42-big-Data.db
     //   me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
-    static boost::regex la_mx("(la|m[cdest])-([^-]+)-(\\w+)-(.*)");
+    //   aa-3g8w_00qf_4pbog2i7h2c7am0uoe-pq-Data.db
+    static boost::regex la_mx("(la|m[cdest]|aa)-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     // Use non-greedy match so that a snapshot tag that ressembles a name-<uuid> wouldn't match
@@ -3368,7 +3479,8 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
         return std::unexpected{seastar::format("invalid version for file {}. Name doesn't match any known version.", fname)};
     }
     try {
-        return std::make_tuple(entry_descriptor(generation_type::from_string(generation), std::nullopt, version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
+        check_format_of_version(version, format_from_string(format));
+        return std::make_tuple(entry_descriptor(generation_type::from_string(generation), std::nullopt, version, sstable::component_from_sstring(version, component)), ks, cf);
     } catch (const std::exception& e) {
         return std::unexpected{seastar::format("failed to parse sstable filename {}: {}", fname, e.what())};
     }
@@ -3402,21 +3514,16 @@ sstable_format_types format_from_string(std::string_view s) {
     }
 }
 
-bool has_summary_and_index(sstable_version_types v) {
-    return v != sstable_version_types::ms && v != sstable_version_types::mt;
+void check_format_of_version(sstable_version_types v, sstable_format_types f) {
+    if (f != format_of(v)) {
+        throw std::invalid_argument(seastar::format("sstable version {} belongs to format {}, not to format {}", v, format_of(v), f));
+    }
 }
 
-bool uses_legacy_dk_order(sstable_version_types v) {
-    // Decorated keys in sstables and memtables are ordered by a bytewise comparison
-    // of their "legacy form".
-    // Due to a design mistake, `ms` was the one format with index encoding designed
-    // for the other (column-wise, wrong) ordering.
-    // All `ms` files which were ever actually produced are compatible with the legacy
-    // ordering anyway, because some asserts in the writer would prevent the creation
-    // of an sstable which doesn't match that ordering.
-    // Nevertheless, index readers have to know when they are dealing with `ms`, because
-    // it uses a specific encoding of partition keys in the index.
-    return v != sstable_version_types::ms;
+sstable_version_types version_and_format_from_strings(std::string_view version, std::string_view format) {
+    auto v = version_from_string(version);
+    check_format_of_version(v, format_from_string(format));
+    return v;
 }
 
 component_type sstable::component_from_sstring(version_types v, const sstring &s) {
@@ -3455,8 +3562,22 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
         co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
     };
+    if (has_parquet_data_file(_version)) {
+        // The digest covers the whole file. A read of a part of it cannot
+        // check anything, because the pages are not decoded here. Such a
+        // read must not pass for a checked one.
+        if (integrity == integrity_check::yes && (pos != 0 || len < _data_file_size)) {
+            on_internal_error(sstlog, seastar::format("sstable {}: the integrity of a part [{}, {}) of a Parquet Data file of {} bytes cannot be checked",
+                    get_filename(), pos, pos + len, _data_file_size));
+        }
+        auto stream = co_await stream_creator(pos, len, std::move(options));
+        if (digest) {
+            co_return make_digest_checked_input_stream(std::move(stream), *digest, std::move(error_handler));
+        }
+        co_return stream;
+    }
     if (_components->compression && raw == raw_stream::no) {
-        if (_version >= sstable_version_types::mc) {
+        if (has_m_format_checksums(_version)) {
             co_return make_compressed_file_m_format_input_stream(stream_creator, &_components->compression,
                pos, len, std::move(options), permit, digest);
         } else {
@@ -3465,14 +3586,14 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         }
     }
 
-    if (_components->compression && raw == raw_stream::compressed_chunks && _version >= sstable_version_types::mc) {
+    if (_components->compression && raw == raw_stream::compressed_chunks && has_m_format_checksums(_version)) {
         co_return make_compressed_raw_file_input_stream(stream_creator, &_components->compression, std::move(options), permit, digest);
     }
 
     if (_components->checksum && integrity == integrity_check::yes) {
         auto checksum = get_checksum();
         auto file_len = data_size();
-        if (_version >= sstable_version_types::mc) {
+        if (has_m_format_checksums(_version)) {
              co_return make_checksummed_file_m_format_input_stream(stream_creator, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
         } else {
@@ -3735,11 +3856,48 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     co_return std::move(checksum);
 }
 
+// Validates a Parquet Data file: the checksum of every page, the footer
+// checksum, and the digest of the whole file if there is one. See
+// parquet/file_verifier.hh.
+static future<validate_checksums_result> validate_parquet_data_file(shared_sstable sst, reader_permit permit,
+        std::optional<uint32_t> digest, validate_checksums_result ret) {
+    if (!digest) {
+        sstlog.warn("No digest available for SSTable: {}", sst->get_filename());
+    }
+    const auto* entry = sst->get_scylla_metadata() ? sst->get_scylla_metadata()->get_parquet_data_file() : nullptr;
+    if (!entry) {
+        sstlog.error("{}: Scylla.db has no entry for the Parquet Data file", sst->get_filename());
+        ret.status = validate_checksums_status::invalid;
+        co_return ret;
+    }
+    auto stream = co_await sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr);
+    std::exception_ptr ex;
+    try {
+        const auto errors = co_await parquet::verify_file(stream, sst->make_data_file_for_read(permit, nullptr), sst->get_parquet_file_summary(),
+                parquet::verify_options{.file_size = sst->ondisk_data_size(), .footer_crc32 = entry->footer_crc32, .digest = digest, .permit = permit},
+                [&sst] (sstring msg) {
+                    sstlog.error("{}: {}", sst->get_filename(), msg);
+                });
+        if (errors) {
+            ret.status = validate_checksums_status::invalid;
+        }
+    } catch (const malformed_sstable_exception& e) {
+        sstlog.error("{}: {}", sst->get_filename(), e.what());
+        ret.status = validate_checksums_status::invalid;
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await stream.close();
+    maybe_rethrow_exception(std::move(ex));
+    co_return ret;
+}
+
 future<validate_checksums_result> validate_checksums_and_digests(shared_sstable sst, reader_permit permit) {
     auto valid = true;
     std::exception_ptr ex;
 
-    auto has_checksums = sst->has_component(component_type::CRC) || sst->get_compression();
+    // The pages of a Parquet Data file carry their own checksums.
+    auto has_checksums = sst->has_component(component_type::CRC) || sst->get_compression() || has_parquet_data_file(sst->get_version());
     auto has_digest = sst->has_component(component_type::Digest);
 
     validate_checksums_result ret = {
@@ -3765,6 +3923,9 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
     }
 
     const auto digest = co_await sst->read_digest();
+    if (has_parquet_data_file(sst->get_version())) {
+        co_return co_await validate_parquet_data_file(sst, std::move(permit), digest, ret);
+    }
     auto checksum = co_await sst->read_checksum();
     if (!checksum && !sst->get_compression()) {
         sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
@@ -3785,7 +3946,7 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
 
     try {
         if (sst->get_compression()) {
-            if (sst->get_version() >= sstable_version_types::mc) {
+            if (has_m_format_checksums(sst->get_version())) {
                 valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, digest);
             } else {
                 valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);
@@ -3862,6 +4023,9 @@ std::strong_ordering sstable::compare_by_first_key(const sstable& other) const {
 }
 
 double sstable::get_compression_ratio() const {
+    if (has_parquet_data_file(_version)) {
+        return get_stats_metadata().compression_ratio;
+    }
     if (this->has_component(component_type::CompressionInfo)) {
         return double(_components->compression.compressed_file_length()) / _components->compression.uncompressed_file_length();
     } else {
@@ -4121,7 +4285,7 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
     try {
         co_await ir->advance_to(dht::to_partition_range(range));
         auto data_file_range = ir->data_file_positions();
-        auto uncompressed_data_size = data_size();
+        auto uncompressed_data_size = data_end_position();
         auto start = data_file_range.start;
         auto end = data_file_range.end.value_or(uncompressed_data_size);
         auto total_count = get_estimated_key_count();
@@ -4291,6 +4455,43 @@ void register_index_page_metrics(seastar::metrics::metric_groups& metrics, parti
 future<> init_metrics() {
   return seastar::smp::invoke_on_all([] {
     namespace sm = seastar::metrics;
+    const auto& pq = parquet::local_shard_stats;
+    metrics.add_group("sstables", {
+        sm::make_counter("parquet_read_requests", [&pq] { return pq.read_requests; },
+            sm::description("Read requests that readers of Parquet Data files issued for pages and OffsetIndex blocks")),
+        sm::make_counter("parquet_read_bytes", [&pq] { return pq.bytes_read; },
+            sm::description("Bytes that readers of Parquet Data files read for pages and OffsetIndex blocks")),
+        sm::make_counter("parquet_data_pages_read", [&pq] { return pq.data_pages_read; },
+            sm::description("Data pages that readers of Parquet Data files decoded")),
+        sm::make_counter("parquet_dictionary_pages_read", [&pq] { return pq.dictionary_pages_read; },
+            sm::description("Dictionary pages that readers of Parquet Data files read, because the dictionary was not cached")),
+        sm::make_counter("parquet_offset_index_reads", [&pq] { return pq.offset_index_reads; },
+            sm::description("Read requests for the OffsetIndex blocks of row groups of Parquet Data files")),
+        sm::make_counter("parquet_offset_index_cache_hits", [&pq] { return pq.offset_index_cache_hits; },
+            sm::description("Lookups of the OffsetIndexes of a row group of a Parquet Data file that the cache served")),
+        sm::make_counter("parquet_offset_index_cache_misses", [&pq] { return pq.offset_index_cache_misses; },
+            sm::description("Lookups of the OffsetIndexes of a row group of a Parquet Data file that the cache did not serve")),
+        sm::make_counter("parquet_dictionary_cache_hits", [&pq] { return pq.dictionary_cache_hits; },
+            sm::description("Lookups of the dictionary of a column chunk of a Parquet Data file that the cache served")),
+        sm::make_counter("parquet_dictionary_cache_misses", [&pq] { return pq.dictionary_cache_misses; },
+            sm::description("Lookups of the dictionary of a column chunk of a Parquet Data file that the cache did not serve")),
+        sm::make_counter("parquet_metadata_cache_evictions", [&pq] { return pq.metadata_cache_evictions; },
+            sm::description("OffsetIndexes of row groups and dictionaries of Parquet Data files that memory reclaim evicted from their cache")),
+        sm::make_gauge("parquet_metadata_cache_bytes", [&pq] { return pq.metadata_cache_bytes; },
+            sm::description("Bytes of the OffsetIndexes and dictionaries of Parquet Data files that the caches hold in the cache region")),
+        sm::make_gauge("parquet_footer_summary_bytes", [&pq] { return pq.footer_summary_bytes; },
+            sm::description("Bytes of the footer summaries of the open Parquet Data files that this shard owns")),
+        sm::make_counter("parquet_data_pages_written", [&pq] { return pq.data_pages_written; },
+            sm::description("Data pages in the Parquet Data files that writers finished")),
+        sm::make_counter("parquet_dictionary_pages_written", [&pq] { return pq.dictionary_pages_written; },
+            sm::description("Dictionary pages in the Parquet Data files that writers finished")),
+        sm::make_counter("parquet_dictionary_fallbacks", [&pq] { return pq.dictionary_fallbacks; },
+            sm::description("Column chunks of Parquet Data files whose dictionary outgrew its limit, so that their later pages use another encoding")),
+        sm::make_counter("parquet_row_groups_written", [&pq] { return pq.row_groups_written; },
+            sm::description("Row groups in the Parquet Data files that writers finished")),
+        sm::make_counter("parquet_late_chunks_written", [&pq] { return pq.late_chunks_written; },
+            sm::description("All-null column chunks that writers of Parquet Data files added at the end of a file, for columns that got their first value late")),
+    });
     metrics.add_group("sstables", {
         sm::make_counter("pi_cache_hits_l0", [] { return promoted_index_cache_metrics.hits_l0; },
             sm::description("Number of requests for promoted index block in state l0 which didn't have to go to the page cache")),
@@ -4391,7 +4592,6 @@ sstable::sstable(schema_ptr schema,
         optimized_optional<sstable_id> sstable_identifier,
         sstable_state state,
         version_types v,
-        format_types f,
         db::large_data_handler& large_data_handler,
         db::corrupt_data_handler& corrupt_data_handler,
         sstables_manager& manager,
@@ -4404,7 +4604,6 @@ sstable::sstable(schema_ptr schema,
     , _state(state)
     , _storage(make_storage(manager, _schema, storage, _state))
     , _version(v)
-    , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
             manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region(), manager.get_cache_tracker().get_partition_index_cache_stats()))
     , _now(now)
@@ -4451,6 +4650,9 @@ future<> sstable::destroy() {
     co_await _index_cache->evict_gently();
     if (_cached_index_file) {
         co_await _cached_index_file->evict_gently();
+    }
+    if (_parquet) {
+        co_await _parquet->cache().evict_gently();
     }
     co_await _storage->destroy(*this);
 
@@ -4548,7 +4750,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             cached_partitions_file,
             cached_rows_file,
             _partitions_db_footer.value().trie_root_position,
-            data_size(),
+            data_end_position(),
             _version,
             _schema,
             std::move(permit),
@@ -4889,7 +5091,7 @@ public:
 };
 
 std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, const entry_descriptor& desc, sstable_stream_sink_cfg cfg) {
-    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, desc.sid, state, desc.version, desc.format);
+    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, desc.sid, state, desc.version);
 
     auto type = desc.component;
     // Don't write actual TOC. Write temp, if successful, storage::seal will rename this to actual

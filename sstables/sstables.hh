@@ -82,6 +82,10 @@ namespace mc {
 class writer;
 }
 
+namespace parquet {
+class sstable_read_state;
+}
+
 namespace fs = std::filesystem;
 
 extern logging::logger sstlog;
@@ -129,6 +133,15 @@ struct sstable_writer_config {
     sstring origin;
     bool correct_pi_block_width = true;
     uint32_t large_data_records_per_sstable = 10;
+    // The tunables of the writer of a Parquet Data file (`has_parquet_data_file()`),
+    // in bytes. See writer_config in sstables/parquet/writer.hh.
+    uint64_t parquet_row_group_size = 8 << 20;
+    uint64_t parquet_page_set_size = 128 << 10;
+    uint64_t parquet_min_page_size = 8 << 10;
+    uint64_t parquet_dictionary_page_limit = 4 << 10;
+    // For tests: the Parquet writer picks the defaults of each row at random,
+    // with this seed. See make_random_row_defaults_policy().
+    std::optional<uint64_t> parquet_random_row_defaults_seed;
 
 private:
     explicit sstable_writer_config() {}
@@ -217,7 +230,6 @@ public:
             optimized_optional<sstable_id> sstable_identifier,
             sstable_state state,
             version_types v,
-            format_types f,
             db::large_data_handler& large_data_handler,
             db::corrupt_data_handler& corrupt_data_handler,
             sstables_manager& manager,
@@ -247,14 +259,16 @@ public:
     };
 
     static component_type component_from_sstring(version_types version, const sstring& s);
+    // The file name carries the format next to the version. The format is
+    // that of the version, see format_of().
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                                      format_types format, component_type component);
+                                      component_type component);
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                                      format_types format, sstring component);
+                                      sstring component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                            format_types format, component_type component);
+                            component_type component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                            format_types format, sstring component);
+                            sstring component);
 
     // load sstable using components shared by a shard
     future<> load(foreign_sstable_open_info info) noexcept;
@@ -396,9 +410,27 @@ public:
     bool is_shared() const;
 
     // Returns uncompressed size of data component.
+    // For a Parquet Data file, the total raw size of its rows, which
+    // Scylla.db stores. It does not count the footer, the page headers, or
+    // the levels.
     uint64_t data_size() const;
     // Returns on-disk size of data component.
+    // For a Parquet Data file, the size of the file, footer included.
     uint64_t ondisk_data_size() const;
+    // The position of the end of the Data file, in the units of the index:
+    // the uncompressed size, or the row count of a Parquet Data file.
+    uint64_t data_end_position() const;
+
+    // The read state and the footer summary of a Parquet Data file
+    // (has_parquet_data_file()). The Data file must be open.
+    parquet::sstable_read_state& get_parquet_read_state() const;
+    const parquet::file_summary& get_parquet_file_summary() const;
+    // The Data file, for a read that tracks its buffers with `permit`, and
+    // traces its reads with `trace_state`.
+    file make_data_file_for_read(reader_permit permit, tracing::trace_state_ptr trace_state) const;
+    // The Data file, for a read that charges its buffers to its permit
+    // itself, and traces its reads with `trace_state`.
+    file make_untracked_data_file_for_read(tracing::trace_state_ptr trace_state) const;
 
     uint64_t index_size() const {
         return _index_file_size;
@@ -425,7 +457,7 @@ public:
     }
 
     format_types get_format() const {
-        return _format;
+        return format_of(_version);
     }
 
     // Returns the total bytes of all components.
@@ -446,7 +478,7 @@ public:
     int compare_by_max_timestamp(const sstable& other) const;
 
     sstring component_basename(component_type f) const {
-        return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+        return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, f);
     }
 
     component_name get_filename(component_type f = component_type::Data) const {
@@ -584,6 +616,8 @@ private:
     file _partitions_file;
     seastar::shared_ptr<cached_file> _cached_partitions_file;
     std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
+    // Set for a Parquet Data file once it is open. See open_parquet_data_file().
+    seastar::shared_ptr<parquet::sstable_read_state> _parquet;
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
     uint64_t _data_file_size;
@@ -615,7 +649,6 @@ private:
     std::unique_ptr<storage> _storage;
 
     const version_types _version;
-    const format_types _format;
 
     filter_tracker _filter_tracker;
     std::unique_ptr<partition_index_cache> _index_cache;
@@ -763,7 +796,8 @@ private:
                                run_identifier identifier,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
-                               std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
+                               std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt,
+                               std::optional<scylla_metadata::parquet_data_file> parquet_data_file = std::nullopt);
     sstable_id ensure_sstable_identifier();
     // Verifies that the sstable identifier persisted in the Scylla metadata
     // agrees with the one this sstable is known by, when both are known.
@@ -781,6 +815,9 @@ private:
     void build_delayed_filter(uint64_t num_partitions);
 
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
+    // Reads the footer of a Parquet Data file, unless another shard did,
+    // and builds this shard's read state.
+    future<> open_parquet_data_file();
 
     future<> read_toc(sstable_open_config cfg = {}) noexcept;
     future<> read_summary() noexcept;
@@ -877,6 +914,13 @@ public:
     // When created with `integrity_check::yes`, the integrity mechanisms
     // of the underlying data streams will be enabled.
     //
+    // A Parquet Data file is always streamed as-is: its pages carry their
+    // own compression and checksums, and the stream does not decode them.
+    // With `integrity_check::yes`, the stream must cover the whole file, and
+    // it checks the digest if the sstable has read it (read_digest()). A
+    // stream of a part of the file could check nothing, so asking for one
+    // with `integrity_check::yes` is an internal error.
+    //
     // The `error_handler` parameter allows to customize the error handling
     // logic when a checksum or digest mismatch is detected on an
     // integrity-checked stream with no compression. The parameter is ignored
@@ -904,6 +948,13 @@ public:
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
+
+    // Whether data_read() returns the uncompressed rows that a compression
+    // dictionary is trained on. A Parquet Data file holds encoded and
+    // compressed pages instead.
+    bool can_sample_data_for_dictionary() const noexcept {
+        return !has_parquet_data_file(_version);
+    }
 
 private:
     future<summary_entry&> read_summary_entry(size_t i);
@@ -1003,7 +1054,7 @@ public:
     }
 
     bool has_correct_max_deletion_time() const {
-        return (_version >= sstable_version_types::mc) || has_scylla_component();
+        return sstables::has_correct_max_deletion_time(_version) || has_scylla_component();
     }
 
     bool filter_has_key(const key& key) const {
@@ -1082,7 +1133,7 @@ public:
         return _column_translation.get_for_schema(s, h, f);
     }
     column_translation get_column_translation(const schema& s) {
-        if (get_version() >= sstable_version_types::mc) [[likely]] {
+        if (has_serialization_header(get_version())) [[likely]] {
             return _column_translation.get_for_schema(s, get_serialization_header(), features());
         } else {
             return _column_translation.get_for_schema(s);
@@ -1113,8 +1164,14 @@ public:
         _run_identifier = run_id::create_random_id();
     }
 
+    // The size of the Data file on disk divided by its uncompressed size,
+    // or NO_COMPRESSION_RATIO for an sstable without compression.
+    // For a Parquet Data file, the ratio of the file size to the raw size,
+    // which the writer records in Statistics.db for a table with compression.
     double get_compression_ratio() const;
 
+    // CompressionInfo.db. It is empty for a Parquet Data file, whose pages
+    // carry their own compression.
     const sstables::compression& get_compression() const {
         return _components->compression;
     }
@@ -1159,7 +1216,7 @@ public:
     }
 
     bool has_correct_min_max_column_names() const noexcept {
-        return _version >= sstable_version_types::md;
+        return sstables::has_correct_min_max_column_names(_version);
     }
 
     // Return true if this sstable possibly stores clustering row(s) specified by ranges.
@@ -1251,6 +1308,9 @@ public:
     friend class test;
 
     friend class mc::writer;
+    friend class trie_index_writer;
+    friend class filter_writer;
+    friend class sstable_sealer;
     friend class index_reader;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
@@ -1334,6 +1394,13 @@ private:
 // Digest component.
 // `has_checksum` is `true` if the sstable is compressed or has a CRC
 // component.
+//
+// A Parquet Data file (has_parquet_data_file()) has neither, but its pages
+// carry their own checksums, so `has_checksum` is `true`. For it, this
+// function validates the digests of the components, the checksum of every
+// page, the checksum of the footer, and the digest of the whole Data file if
+// Digest.crc32 exists (see sstables/parquet/file_verifier.hh). The status is
+// `valid` or `invalid`, never `no_checksum`.
 //
 // Validation errors are logged individually.
 enum class validate_checksums_status {

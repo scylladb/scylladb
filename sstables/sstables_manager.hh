@@ -36,12 +36,15 @@ namespace db {
 class large_data_handler;
 class corrupt_data_handler;
 class config;
+class cluster_config_manager;
 
 }   // namespace db
 
 namespace s3 { class client; }
 
 namespace gms { class feature_service; }
+
+namespace sstables::parquet { class writer_memory_handle; }
 
 namespace sstables {
 
@@ -153,6 +156,20 @@ public:
         utils::updateable_value<uint32_t> large_data_records_per_sstable = utils::updateable_value<uint32_t>(10);
         bool ignore_component_digest_mismatch = false;
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
+        // The tunables of the Parquet writer (see sstable_writer_config).
+        utils::updateable_value<uint32_t> parquet_row_group_size_in_kb = utils::updateable_value<uint32_t>(8192);
+        utils::updateable_value<uint32_t> parquet_page_set_size_in_kb = utils::updateable_value<uint32_t>(128);
+        utils::updateable_value<uint32_t> parquet_min_page_size_in_kb = utils::updateable_value<uint32_t>(8);
+        utils::updateable_value<uint32_t> parquet_dictionary_page_size_limit_in_kb = utils::updateable_value<uint32_t>(4);
+        // The fraction of available_memory that the Parquet writers share
+        // for their row group buffers. See register_parquet_writer().
+        utils::updateable_value<double> parquet_writer_memory_fraction = utils::updateable_value<double>(0.05);
+        // For tests only: the data format of new sstables of a table for which
+        // no scope stores the `sstable_data_format` cluster config option.
+        // See choose_sstable_version().
+        utils::updateable_value<sstring> test_sstable_data_format_default = utils::updateable_value<sstring>("native");
+        // Registers the metrics of the manager, labeled with its name.
+        bool register_metrics = false;
     };
 
 private:
@@ -188,6 +205,9 @@ private:
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
     std::unique_ptr<sstables::sstables_registry> _sstables_registry;
+    // The source of the `sstable_data_format` option. Null until the cluster
+    // config manager starts, and in the tools.
+    const db::cluster_config_manager* _cluster_config_manager = nullptr;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
     // after system_keyspace initialization.
@@ -201,6 +221,14 @@ private:
 
     named_gate _signal_gate;
     signal_type _signal_source;
+
+    // The Parquet writers that hold a handle from register_parquet_writer().
+    uint64_t _active_parquet_writers = 0;
+    // The sum of their last memory reports.
+    uint64_t _parquet_writer_memory_used = 0;
+    seastar::metrics::metric_groups _metrics;
+
+    class parquet_writer_memory_handle;
 
 public:
     explicit sstables_manager(
@@ -225,7 +253,6 @@ public:
             optimized_optional<sstable_id> sstable_identifier,
             sstable_state state = sstable_state::normal,
             sstable_version_types v = get_highest_sstable_version(),
-            sstable_format_types f = sstable_format_types::big,
             db_clock::time_point now = db_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
@@ -234,11 +261,10 @@ public:
             generation_type generation,
             sstable_state state = sstable_state::normal,
             sstable_version_types v = get_highest_sstable_version(),
-            sstable_format_types f = sstable_format_types::big,
             db_clock::time_point now = db_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size) {
-        return make_sstable(std::move(schema), storage, generation, std::nullopt, state, v, f, now, std::move(error_handler_gen), buffer_size);
+        return make_sstable(std::move(schema), storage, generation, std::nullopt, state, v, now, std::move(error_handler_gen), buffer_size);
     }
 
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint) const {
@@ -253,14 +279,68 @@ public:
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const config& get_config() const noexcept { return _config; }
+
+    // The writer memory budget of the Parquet writers.
+    //
+    // A writer of a Parquet Data file buffers a whole row group. The writers
+    // that use this manager share a budget of parquet_writer_memory_fraction
+    // of available_memory for these buffers. In production, every Parquet
+    // writer of the shard uses the manager of user tables, because system
+    // tables never use Parquet, so the budget is per shard.
+    //
+    // Nothing waits for the budget. A writer asks for its row group target
+    // at each page set boundary, and ends its row group early when it is
+    // above the target. The target is the budget divided by the number of
+    // active writers, capped above by the writer's row group size and below
+    // by its page set size. A new writer therefore shrinks the target of the
+    // others, but no writer stops.
+    //
+    // Each writer also reports the memory that it holds, which includes
+    // what the target does not limit, such as its footer records. The
+    // manager sums the reports, for the metrics. See
+    // parquet::writer::memory_usage().
+
+    // The budget, in bytes.
+    uint64_t parquet_writer_memory_budget() const noexcept;
+    // The number of writers that hold a handle.
+    uint64_t active_parquet_writers() const noexcept { return _active_parquet_writers; }
+    // The sum of the last memory reports of the writers that hold a handle.
+    uint64_t parquet_writer_memory_used() const noexcept { return _parquet_writer_memory_used; }
+    // The row group target of a writer with the given page set size and row
+    // group size, for the current number of active writers.
+    uint64_t parquet_row_group_target(uint64_t page_set_size, uint64_t row_group_size) const noexcept;
+    // Registers a Parquet writer. The writer holds the handle for its
+    // lifetime, and the handle unregisters it when it is destroyed. The
+    // handle must not outlive the manager.
+    std::unique_ptr<parquet::writer_memory_handle> register_parquet_writer(uint64_t page_set_size, uint64_t row_group_size);
+
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
     const gms::feature_service& get_features() const noexcept { return _features; }
     const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }
 
     // Get the highest supported sstable version, according to cluster features.
     sstables::sstable::version_types get_highest_supported_format() const noexcept;
-    // Get the preferred sstable version for writing new sstables,
-    // according to cluster features and database config.
+    // Decides the version, and so the format (see format_of()), of a new
+    // sstable of the table with schema `s`. Every path that creates an
+    // sstable for a table calls it: flush, compaction, streaming, repair,
+    // upload, reshape, `upgradesstables`, and the tools. It is the only code
+    // that reads the `sstable_format` node option and the
+    // `sstable_data_format` cluster config option. The sstable and its writer
+    // receive the version and never read configuration.
+    //
+    // The format is Parquet (version `aa`) when the `sstable_data_format`
+    // option of the table resolves to `parquet`, and `big` otherwise. The
+    // option resolves through the table, its keyspace, and the cluster, in
+    // this order. A materialized view or a secondary index follows the
+    // table scope of its base table. When no scope stores the option, the
+    // test-only `test_sstable_data_format_default` applies. Some tables never
+    // get Parquet: see may_use_parquet(). The option is read for every new
+    // sstable, so a change takes effect on the next one. At startup, until
+    // the cluster config manager has loaded the option, every table gets the
+    // native format. This covers the resharding of sstables and the flush
+    // after the commitlog replay.
+    //
+    // The version within the `big` format follows these rules.
     //
     // 1. The choice must be new enough to support existing data.
     //    (For example, range tombstones with infinite endpoints were added in version "mc",
@@ -269,15 +349,28 @@ public:
     // 2. The choice must be old enough to be supported by cluster features.
     // 3. The choice should respect the config, as long as it doesn't contradict (1) and (2).
     //    The user might wish to use an older format, and we should respect that if possible.
-    sstables::sstable::version_types get_preferred_sstable_version() const;
-    // Like get_sstable_version_for_write(), but additionally assume that
-    // all features implied by `existing_version` are enabled. 
     //
-    // This is used when rewriting (reshaping or resharding) system sstables
-    // during startup. At this point cluster features aren't known to `feature_service` yet.
+    // `existing_versions` are the versions of sstables found on disk. The
+    // choice assumes that the features they imply are enabled. This is used
+    // when rewriting (reshaping or resharding) system sstables during startup.
+    // At this point cluster features aren't known to `feature_service` yet.
     // But we must still pick some format compatible with the existing data.
     // So use existing sstables to infer the set of enabled features.
-    sstables::sstable::version_types get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const;
+    sstables::sstable::version_types choose_sstable_version(const schema& s, sstable_version_set existing_versions = {}) const;
+    // The version that choose_sstable_version() picks for a table that makes
+    // no choice of its own. The REST API reports it.
+    sstables::sstable::version_types choose_default_sstable_version() const;
+    // Whether a new sstable of the table may be a Parquet sstable at all.
+    // System tables ignore the `sstable_data_format` option, and the Parquet
+    // writer does not support compact storage tables, nor column or field
+    // names whose Parquet names are longer than a reader accepts.
+    static bool may_use_parquet(const schema& s) noexcept;
+
+    // Connects choose_sstable_version() to the `sstable_data_format` option.
+    // Until then, and after unplug_cluster_config_manager(), no table gets
+    // Parquet. The manager must stay alive until it is unplugged.
+    void plug_cluster_config_manager(const db::cluster_config_manager& ccm) noexcept;
+    void unplug_cluster_config_manager() noexcept;
 
     locator::host_id get_local_host_id() const;
 
@@ -334,6 +427,13 @@ public:
     void subscribe(sstables_manager_event_handler& handler);
 
 private:
+    // The part of choose_sstable_version() that picks a version of the
+    // `big` format.
+    sstables::sstable::version_types choose_big_sstable_version(sstable_version_set existing_versions) const;
+    // The part of choose_sstable_version() that decides whether the table
+    // gets Parquet.
+    bool table_uses_parquet(const schema& s) const;
+
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
     // visible references at this point, and only waits for its

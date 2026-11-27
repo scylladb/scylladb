@@ -62,6 +62,7 @@
 #include "replica/mutation_dump.hh"
 #include "test/boost/database_test.hh"
 #include "test/lib/random_schema.hh"
+#include "test/lib/sstable_utils.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/with_scheduling_group.hh>
@@ -525,15 +526,15 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
     auto temp_sst_dir_3 = fmt::format("{}/{}{}", sst_dir, generation_from_value(3), tempdir_extension);
     touch_dir(temp_sst_dir_3);
 
-    auto temp_file_name = sst::filename(temp_sst_dir_3, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(3), sst::format_types::big, component_type::TemporaryTOC);
+    auto temp_file_name = sst::filename(temp_sst_dir_3, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(3), component_type::TemporaryTOC);
     touch_file(temp_file_name);
 
-    temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::TemporaryTOC);
+    temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), component_type::TemporaryTOC);
     touch_file(temp_file_name);
     // Reproducer for #scylladb/scylladb#26393
-    temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::TemporaryHashes);
+    temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), component_type::TemporaryHashes);
     touch_file(temp_file_name);
-    temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::Data);
+    temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), component_type::Data);
     touch_file(temp_file_name);
 
     auto test_config = cql_test_config(db_cfg_ptr);
@@ -542,9 +543,9 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
         require_exist(temp_sst_dir_2, false);
         require_exist(temp_sst_dir_3, false);
 
-        require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::TemporaryTOC), false);
-        require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::TemporaryHashes), false);
-        require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::Data), false);
+        require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), component_type::TemporaryTOC), false);
+        require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), component_type::TemporaryHashes), false);
+        require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), component_type::Data), false);
     }, test_config).get();
 }
 
@@ -573,11 +574,11 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
     };
 
     auto component_basename = [&ks, &cf] (sstables::generation_type gen, component_type ctype) {
-        return sst::component_basename(ks, cf, sstables::get_highest_sstable_version(), gen, sst::format_types::big, ctype);
+        return sst::component_basename(ks, cf, sstables::get_highest_sstable_version(), gen, ctype);
     };
 
     auto gen_filename = [&sst_dir, &ks, &cf] (sstables::generation_type gen, component_type ctype) {
-        return sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), gen, sst::format_types::big, ctype);
+        return sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), gen, ctype);
     };
 
     touch_dir(pending_delete_dir);
@@ -2622,8 +2623,11 @@ struct scoped_execption_log_level {
     }
 };
 
-SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
+// The sstable format of the table decides which reader reads it from disk,
+// and each reader has its own injection point.
+static future<> test_replica_read_timeout_no_exception(sstring ks_name, sstring data_format) {
     cql_test_config cfg;
+    cfg.db_config->test_sstable_data_format_default.set(sstring(data_format));
     cfg.db_config->reader_concurrency_semaphore_preemptive_abort_factor.set(0.0);
     const auto read_timeout = 10ms;
     const auto write_timeout = 10s;
@@ -2636,8 +2640,7 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             .cas_timeout = write_timeout,
             .other_timeout = read_timeout});
 
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        const sstring ks_name = get_name();
+    return do_with_cql_env_thread([ks_name, data_format] (cql_test_env& e) {
         const sstring tbl_name = "tbl";
 
         // Disable tablets because we want to exercise the legacy range-scan path too.
@@ -2715,7 +2718,8 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             // The injection has to be armed on every shard: the partition may be
             // owned by a shard other than the one running this test (that depends
             // on the shard count), and the read happens on the owning shard.
-            scoped_error_injection injection("sstables_mx_reader_fill_buffer_timeout", {{"table", format("{}.{}", ks_name, tbl_name)}});
+            const auto injection_name = data_format == "parquet" ? "sstables_parquet_reader_fill_buffer_timeout" : "sstables_mx_reader_fill_buffer_timeout";
+            scoped_error_injection injection(injection_name, {{"table", format("{}.{}", ks_name, tbl_name)}});
             execute_test("disk reads", false);
             execute_test("disk reads", true);
         }
@@ -2744,6 +2748,14 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             execute_test("queued reads", true);
         }
     }, cfg);
+}
+
+SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
+    return test_replica_read_timeout_no_exception(get_name(), "native");
+}
+
+SEASTAR_TEST_CASE(replica_read_timeout_no_exception_parquet) {
+    return test_replica_read_timeout_no_exception(get_name(), "parquet");
 }
 
 SEASTAR_THREAD_TEST_CASE(test_full_position_cmp_ring_order) {
@@ -3026,6 +3038,46 @@ SEASTAR_TEST_CASE(test_update_cache_error_handling) {
         check_rows();
     });
 #endif
+}
+
+// The Data file of an `aa` sstable holds encoded and compressed Parquet
+// pages, which are no sample of the data for dictionary training. Only the
+// other sstables of a table are sampled.
+SEASTAR_TEST_CASE(test_sample_data_files_skips_parquet_data_files) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_sample WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE ks_sample.t (pk int PRIMARY KEY, v text)").get();
+        auto& db = e.local_db();
+        auto& t = db.find_column_family("ks_sample", "t");
+        auto s = t.schema();
+        constexpr uint64_t chunk_size = 4096;
+        constexpr uint64_t n_chunks = 16;
+
+        utils::chunked_vector<mutation> muts;
+        const auto& v = *s->get_column_definition("v");
+        for (const auto& dk : tests::generate_partition_keys(100, s)) {
+            mutation m(s, dk);
+            m.set_clustered_cell(clustering_key::make_empty(), v, atomic_cell::make_live(*utf8_type, 1, utf8_type->decompose(sstring(1000, 'x'))));
+            muts.push_back(std::move(m));
+        }
+        auto sst = make_sstable_containing(t.get_sstables_manager().make_sstable(s, t.get_storage_options(), t.get_sstable_generation_generator()(),
+                sstables::sstable_state::normal, sstables::sstable_version_types::aa), std::move(muts)).get();
+        BOOST_REQUIRE_GE(sst->data_size(), n_chunks * chunk_size);
+        t.add_sstable_and_update_cache(sst).get();
+        BOOST_REQUIRE(db.sample_data_files(s->id(), chunk_size, n_chunks).get().empty());
+
+        for (int i = 0; i < 100; ++i) {
+            e.execute_cql(format("INSERT INTO ks_sample.t (pk, v) VALUES ({}, '{}')", i, sstring(1000, 'y'))).get();
+        }
+        t.flush().get();
+        const auto samples = db.sample_data_files(s->id(), chunk_size, n_chunks).get();
+        BOOST_REQUIRE_EQUAL(samples.size(), n_chunks);
+    }, [] {
+        // The flush above must write a native sstable.
+        cql_test_config cfg;
+        cfg.db_config->test_sstable_data_format_default.set("native");
+        return cfg;
+    }());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

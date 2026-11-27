@@ -280,6 +280,14 @@ find_package(RapidJSON REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(zstd REQUIRED)
 find_package(lz4 REQUIRED)
+# Arrow C++ is the reference Parquet implementation in tests.
+# It is linked into test binaries only, never into scylla. It is optional.
+# Without it, the tests that use it are not built, and test.py skips them.
+# See optional_tests in test/boost/test_config.yaml.
+find_package(Parquet CONFIG)
+if(NOT Parquet_FOUND)
+  message(STATUS "Parquet (Arrow C++) not found, the tests that use it will not be built")
+endif()
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")

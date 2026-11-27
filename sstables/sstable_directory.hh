@@ -206,7 +206,7 @@ private:
     std::unique_ptr<dht::sharder> _sharder_ptr;
     const dht::sharder& _sharder;
 
-    sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
+    sstables::sstable_version_set _versions_seen;
 
     // SSTables that are unshared and belong to this shard. They are already stored as an
     // SSTable object.
@@ -286,8 +286,8 @@ public:
     // moves unshared SSTables that don't belong to this shard to the right shards.
     future<> move_foreign_sstables(sharded<sstable_directory>& source_directory);
 
-    // returns what is the highest version seen in this directory.
-    sstables::sstable_version_types highest_version_seen() const;
+    // returns the versions of the sstables seen in this directory.
+    sstables::sstable_version_set versions_seen() const;
 
     future<> prepare(process_flags flags);
 

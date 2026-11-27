@@ -118,12 +118,9 @@ distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<r
     co_await task->done();
 }
 
-future<sstables::sstable::version_types>
-highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstable_version_types system_version) {
-    using version = sstables::sstable_version_types;
-    return dir.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_version_seen), system_version, [] (version a, version b) {
-        return std::max(a, b);
-    });
+future<sstables::sstable_version_set>
+versions_seen(sharded<sstables::sstable_directory>& dir) {
+    return dir.map_reduce0(std::mem_fn(&sstables::sstable_directory::versions_seen), sstables::sstable_version_set(), std::bit_or<>());
 }
 
 future<>
@@ -204,8 +201,8 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
             auto& gen = global_table->get_sstable_generation_generator();
             auto generation = gen();
             return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
-                                     generation, sstables::sstable_state::upload, sstm.get_preferred_sstable_version(),
-                                     sstables::sstable_format_types::big, db_clock::now(), &error_handler_gen_for_upload_dir);
+                                     generation, sstables::sstable_state::upload, sstm.choose_sstable_version(*global_table->schema()),
+                                     db_clock::now(), &error_handler_gen_for_upload_dir);
         };
         // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
         // Note that needs_cleanup() is inaccurate and may return false positives,
@@ -411,12 +408,12 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
     // in the system tables. In that case we'll rely on what we find on disk: we'll
     // at least not downgrade any files. If we already know that we support a higher
     // format than the one we see then we use that.
-    auto sst_version = co_await highest_version_seen(directory, sstables::oldest_writable_sstable_format);
-    _version_for_reshaping = _global_table->get_sstables_manager().get_safe_sstable_version_for_rewrites(sst_version);
+    auto sst_versions = co_await versions_seen(directory);
+    _version_for_reshaping = _global_table->get_sstables_manager().choose_sstable_version(*_global_table->schema(), sst_versions);
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, sstables::sstable_version_types v) {
-    return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
+    return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), generation, state, v);
 }
 
 future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& directory) {

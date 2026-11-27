@@ -161,6 +161,7 @@ class large_data_handler;
 class system_table_corrupt_data_handler;
 class nop_corrupt_data_handler;
 class system_keyspace;
+class cluster_config_manager;
 
 struct snapshot_entries;
 
@@ -2240,6 +2241,12 @@ public:
     }
 
     sstables::sstables_manager& get_sstables_manager(const schema& s) const;
+
+    // Lets the sstables managers read the cluster config options that decide
+    // the format of new sstables (see sstables_manager::choose_sstable_version()).
+    // The cluster config manager must stay alive until it is unplugged.
+    void plug_cluster_config_manager(const db::cluster_config_manager& ccm) noexcept;
+    void unplug_cluster_config_manager() noexcept;
 
     // Selects the sstables_manager by keyspace name alone, so it's possible to
     // get an sstables manager even if the live table doesnt exist anymore (but its snapshots do).

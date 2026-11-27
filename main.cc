@@ -2054,6 +2054,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
                 cluster_config_manager.stop().get();
             });
+            db.invoke_on_all([] (replica::database& db) {
+                db.plug_cluster_config_manager(cluster_config_manager.local());
+            }).get();
+            auto unplug_cluster_config_manager = defer_verbose_shutdown("cluster config manager in the database", [&db] {
+                db.invoke_on_all([] (replica::database& db) { db.unplug_cluster_config_manager(); }).get();
+            });
             // Stopped before the manager, which unregisters its callbacks.
             static sharded<db::cluster_config_db_config_bridge> cluster_config_db_config_bridge;
             cluster_config_db_config_bridge.start(std::ref(cluster_config_manager), std::ref(*cfg)).get();
@@ -2361,6 +2367,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                             "system tables").get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
                 }
+            }
+
+            if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete() && group0_service.joined_group0()) {
+                // The persisted group0 state is applied (setup_group0_if_exist()
+                // above), so the cluster config tables are authoritative. They are
+                // read before the non-system sstables are loaded, because loading
+                // reshards and reshapes, and the flush after the commitlog replay
+                // below writes sstables, all in the format that each table chooses
+                // from the cluster config (sstables_manager::choose_sstable_version()).
+                // Until the first read, every table chooses the native format.
+                // A node that is joining has neither sstables nor a commitlog to
+                // replay, so it reads the cluster config later, as before.
+                checkpoint(stop_signal, "loading cluster config");
+                cluster_config_manager.local().refresh().get();
             }
 
             checkpoint(stop_signal, "loading non-system sstables");
@@ -3100,6 +3120,7 @@ int main(int ac, char** av) {
         {"perf-load-balancing", perf::scylla_tablet_load_balancing_main, "run tablet load balancer tests"},
         {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
         {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
+        {"perf-sstable-datasets", perf::scylla_sstable_datasets_main, "compare sstable formats and compression on a dataset loaded from JSON lines"},
         {"perf-compaction-efficiency", perf::scylla_compaction_efficiency_main, "benchmark compaction strategy efficiency with simulated workloads"},
         {"perf-alternator", perf::alternator(scylla_main, &after_init_func), "run performance tests on full alternator stack"},
         {"perf-cql-raw", perf::perf_cql_raw(scylla_main, &after_init_func), "run performance tests using raw CQL protocol frames"}

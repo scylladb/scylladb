@@ -5,19 +5,42 @@ target_sources(sstables
     compressor.cc
     checksummed_data_source.cc
     dictionary_service.cc
+    filter_writer.cc
     digest_checked_data_source.cc
     integrity_checked_file_impl.cc
     kl/reader.cc
+    large_data_tracker.cc
     metadata_collector.cc
     m_format_read_helpers.cc
     mx/partition_reversing_data_source.cc
     mx/reader.cc
     mx/writer.cc
     object_storage_client.cc
+    parquet/bit_util.cc
+    parquet/compression.cc
+    parquet/encoding.cc
+    parquet/fetcher.cc
+    parquet/file_summary.cc
+    parquet/file_verifier.cc
+    parquet/mapping.cc
+    parquet/mapping_reader.cc
+    parquet/mapping_writer.cc
+    parquet/metadata.cc
+    parquet/page_decoder.cc
+    parquet/reader.cc
+    parquet/reader_cache.cc
+    parquet/rle.cc
+    parquet/schema.cc
+    parquet/sstable_reader.cc
+    parquet/sstable_writer.cc
+    parquet/thrift.cc
+    parquet/writer.cc
     prepended_input_stream.cc
     random_access_reader.cc
+    serialization_header_builder.cc
     sstable_directory.cc
     sstable_mutation_reader.cc
+    sstable_sealer.cc
     sstables.cc
     sstable_set.cc
     sstables_manager.cc
@@ -30,6 +53,7 @@ target_sources(sstables
     trie/bti_partition_index_writer.cc
     trie/bti_row_index_writer.cc
     trie/trie_writer.cc
+    trie_index_writer.cc
     writer.cc)
 target_include_directories(sstables
   PUBLIC

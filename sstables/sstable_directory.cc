@@ -236,7 +236,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc,
         const data_dictionary::storage_options& storage_opts, sstables::sstable_open_config cfg) const {
-    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, desc.sid, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, desc.sid, _state, desc.version, db_clock::now(), _error_handler_gen);
     co_await sst->load(_sharder, cfg);
     co_return sst;
 }
@@ -262,13 +262,11 @@ future<>
 sstable_directory::do_process_descriptor(sstables::entry_descriptor desc,
         process_flags flags,
         noncopyable_function<data_dictionary::storage_options()>&& get_storage_options) {
-    if (desc.version > _max_version_seen) {
-        _max_version_seen = desc.version;
-    }
+    _versions_seen.insert(desc.version);
 
     if (!flags.allow_numerical_generations && !desc.generation.is_uuid_based()) {
         throw_malformed_sstable_exception(format("{}: numerical SSTable generations are not supported",
-                sstable::component_basename(_schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.format, desc.component)));
+                sstable::component_basename(_schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.component)));
     }
 
     auto storage_opts = get_storage_options();
@@ -277,7 +275,7 @@ sstable_directory::do_process_descriptor(sstables::entry_descriptor desc,
         // identified a remote unshared sstable
         dirlog.trace("{} identified as a remote unshared SSTable, shard={}", seastar::value_of([this, &desc] {
                 return sstable::component_basename(_schema->ks_name(), _schema->cf_name(),
-                        desc.version, desc.generation, desc.format, component_type::Data);
+                        desc.version, desc.generation, component_type::Data);
             }), shards[0]);
         _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
         co_return;
@@ -292,7 +290,7 @@ sstable_directory::do_process_descriptor(sstables::entry_descriptor desc,
             new_sst.mutate_sstable_level(0);
         };
         auto sst_creator = [&](shared_sstable) {
-            return _manager.make_sstable(_schema, storage_opts, sstables::sstable_generation_generator{}(), _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+            return _manager.make_sstable(_schema, storage_opts, sstables::sstable_generation_generator{}(), _state, desc.version, db_clock::now(), _error_handler_gen);
         };
         auto new_sst = co_await sst->link_with_rewritten_component(std::move(sst_creator), component_type::Statistics, std::move(modifier), sstables::update_sstable_id::no);
         co_await sst->unlink();
@@ -314,9 +312,9 @@ sstable_directory::do_process_descriptor(sstables::entry_descriptor desc,
     }
 }
 
-sstables::sstable_version_types
-sstable_directory::highest_version_seen() const {
-    return _max_version_seen;
+sstables::sstable_version_set
+sstable_directory::versions_seen() const {
+    return _versions_seen;
 }
 
 future<> sstable_directory::prepare(process_flags flags) {
@@ -593,7 +591,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 }
 
 future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_open_info& info) {
-    auto sst = _manager.make_sstable(_schema, *_storage_opts, info.generation, _state, info.version, info.format, db_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, info.generation, _state, info.version, db_clock::now(), _error_handler_gen);
     co_await sst->load(std::move(info));
     co_return sst;
 }
@@ -610,7 +608,7 @@ sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_ve
 
 future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(
         const sstables::entry_descriptor& desc, const data_dictionary::storage_options& storage_opts, process_flags flags) const {
-    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, desc.sid, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, desc.sid, _state, desc.version, db_clock::now(), _error_handler_gen);
     co_await sst->load_owner_shards(_sharder);
     validate(sst, flags);
     co_return sst->get_shards_for_this_sstable();

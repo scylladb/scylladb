@@ -16,6 +16,16 @@ run_first:
 no_parallel_cases:
     - logalloc_test
     - logalloc_standard_allocator_segment_pool_backend_test
+# These tests need an optional dependency, Arrow C++. When it is missing,
+# the build system does not build them, and they are skipped
+optional_tests:
+    - parquet_codec_test
+    - parquet_encoding_test
+    - parquet_end_to_end_test
+    - parquet_mapping_test
+    - parquet_reader_test
+    - parquet_sstable_writer_test
+    - parquet_writer_test
 # Enable compaction groups on tests except on a few, listed below
 all_can_run_compaction_groups_except:
     - exceptions_optimized_test

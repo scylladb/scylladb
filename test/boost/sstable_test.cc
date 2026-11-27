@@ -22,8 +22,10 @@
 #include "sstables/key.hh"
 #include "sstables/open_info.hh"
 #include "sstables/version.hh"
+#include "sstables/sstable_version.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -35,6 +37,8 @@
 #include "replica/database.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"
+#include "test/lib/simple_schema.hh"
+#include "readers/from_mutations.hh"
 #include "partition_slice_builder.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/binary_search.hh"
@@ -190,8 +194,8 @@ static future<> check_component_integrity(component_type component) {
     tmpdir tmp;
     auto load_gen = sstables::generation_type(1);
     auto [gen1, gen2] = co_await write_sst_info(make_schema_for_compressed_sstable(), "test/resource/sstables/compressed", tmp.path().string(), load_gen);
-    auto file_path_a = sstable::filename("test/resource/sstables/compressed", "ks", "cf", la, load_gen, big, component);
-    auto file_path_b = sstable::filename(tmp.path().string(), "ks", "cf", la, gen2, big, component);
+    auto file_path_a = sstable::filename("test/resource/sstables/compressed", "ks", "cf", la, load_gen, component);
+    auto file_path_b = sstable::filename(tmp.path().string(), "ks", "cf", la, gen2, component);
     auto eq = co_await tests::compare_files(file_path_a, file_path_b);
     BOOST_REQUIRE(eq);
 }
@@ -855,7 +859,7 @@ BOOST_AUTO_TEST_CASE(test_empty_key_view_comparison) {
     BOOST_CHECK(lf.begin() == lf.end());
 }
 
-static sstables::entry_descriptor make_entry_descriptor(sstables::generation_type gen, sstables::sstable_version_types version, sstables::sstable_format_types format, sstables::component_type component) {
+static sstables::entry_descriptor make_entry_descriptor(sstables::generation_type gen, sstables::sstable_version_types version, sstables::component_type component) {
     optimized_optional<sstables::sstable_id> sid;
     if (gen.is_uuid_based()) {
         sid = sstables::sstable_id(gen.as_uuid());
@@ -864,7 +868,6 @@ static sstables::entry_descriptor make_entry_descriptor(sstables::generation_typ
         gen,
         sid,
         version,
-        format,
         component
     };
 }
@@ -885,7 +888,6 @@ BOOST_AUTO_TEST_CASE(test_parse_path_good) {
             make_entry_descriptor(
                 generation_type{2},
                 sstable_version_types::mc,
-                sstable_format_types::big,
                 component_type::Data
             )
         },
@@ -896,7 +898,6 @@ BOOST_AUTO_TEST_CASE(test_parse_path_good) {
             make_entry_descriptor(
                 generation_type{3},
                 sstable_version_types::mc,
-                sstable_format_types::big,
                 component_type::Summary
             )
         },
@@ -907,7 +908,6 @@ BOOST_AUTO_TEST_CASE(test_parse_path_good) {
             make_entry_descriptor(
                 generation_type::from_string("3g9p_0938_0ecz429c6f019i7yuf"),
                 sstable_version_types::me,
-                sstable_format_types::big,
                 component_type::Index
             )
          },
@@ -918,7 +918,6 @@ BOOST_AUTO_TEST_CASE(test_parse_path_good) {
             make_entry_descriptor(
                 generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok"),
                 sstable_version_types::md,
-                sstable_format_types::big,
                 component_type::Statistics
             )
         },
@@ -929,7 +928,27 @@ BOOST_AUTO_TEST_CASE(test_parse_path_good) {
             make_entry_descriptor(
                 generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok"),
                 sstable_version_types::md,
-                sstable_format_types::big,
+                component_type::Unknown
+            )
+        },
+        {
+            "/scylla/ks/cf-38c19fd0fb863310a4b70d0cc66628aa/aa-3g9r_04ux_4be4w2d7t8bg6u7nok-pq-Data.db",
+            "ks",
+            "cf",
+            make_entry_descriptor(
+                generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok"),
+                sstable_version_types::aa,
+                component_type::Data
+            )
+        },
+        {
+            // `aa` has no CRC.db.
+            "/scylla/ks/cf-38c19fd0fb863310a4b70d0cc66628aa/aa-3g9r_04ux_4be4w2d7t8bg6u7nok-pq-CRC.db",
+            "ks",
+            "cf",
+            make_entry_descriptor(
+                generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok"),
+                sstable_version_types::aa,
                 component_type::Unknown
             )
         }
@@ -940,7 +959,7 @@ BOOST_AUTO_TEST_CASE(test_parse_path_good) {
         BOOST_CHECK_EQUAL(cf, expected_cf);
         BOOST_CHECK_EQUAL(expected_desc.generation, desc.generation);
         BOOST_CHECK_EQUAL(expected_desc.version, desc.version);
-        BOOST_CHECK_EQUAL(expected_desc.format, desc.format);
+        BOOST_CHECK_EQUAL(expected_desc.format(), desc.format());
         BOOST_CHECK_EQUAL(expected_desc.component, desc.component);
     }
 }
@@ -966,10 +985,108 @@ BOOST_AUTO_TEST_CASE(test_parse_path_bad) {
         "/scylla/system/truncated-38c19fd0fb863310a4b70d0cc66628aa/mc-i~am~not~an~id-big-Data.db",
         "/scylla/system/truncated~38c19fd0fb863310a4b70d0cc66628aa/mc-2--Data.db",
         "/scylla/system/truncated~38c19fd0fb863310a4b70d0cc66628aa/mc-2-grand-Data.db",
+        // The format in the name must be the format of the version.
+        "/scylla/system/truncated-38c19fd0fb863310a4b70d0cc66628aa/me-3g9r_04ux_4be4w2d7t8bg6u7nok-pq-Data.db",
+        "/scylla/system/truncated-38c19fd0fb863310a4b70d0cc66628aa/aa-3g9r_04ux_4be4w2d7t8bg6u7nok-big-Data.db",
     };
     for (auto path : paths) {
         BOOST_CHECK(!parse_path(path).has_value());
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_format_of_version) {
+    for (auto v : all_sstable_versions) {
+        BOOST_CHECK_EQUAL(format_of(v), has_parquet_data_file(v) ? sstable_format_types::pq : sstable_format_types::big);
+    }
+    BOOST_CHECK_EQUAL(format_of(sstable_version_types::aa), sstable_format_types::pq);
+    BOOST_CHECK_EQUAL(version_and_format_from_strings("aa", "pq"), sstable_version_types::aa);
+    BOOST_CHECK_EQUAL(version_and_format_from_strings("me", "big"), sstable_version_types::me);
+    BOOST_CHECK_THROW(version_and_format_from_strings("aa", "big"), std::invalid_argument);
+    BOOST_CHECK_THROW(version_and_format_from_strings("mt", "pq"), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(test_is_older_within_format) {
+    BOOST_CHECK(is_older_within_format(sstable_version_types::me, sstable_version_types::mt));
+    BOOST_CHECK(!is_older_within_format(sstable_version_types::mt, sstable_version_types::me));
+    BOOST_CHECK(!is_older_within_format(sstable_version_types::mt, sstable_version_types::mt));
+    BOOST_CHECK(!is_older_within_format(sstable_version_types::mt, sstable_version_types::aa));
+    BOOST_CHECK(!is_older_within_format(sstable_version_types::aa, sstable_version_types::mt));
+}
+
+// `aa` has the index and the metadata of `mt`, but a Parquet Data file.
+BOOST_AUTO_TEST_CASE(test_aa_predicates) {
+    constexpr auto aa = sstable_version_types::aa;
+    constexpr auto mt = sstable_version_types::mt;
+    BOOST_CHECK(has_parquet_data_file(aa));
+    BOOST_CHECK(!has_parquet_data_file(mt));
+    BOOST_CHECK(!has_mx_data_file(aa));
+    BOOST_CHECK(!has_kl_data_file(aa));
+    BOOST_CHECK(!has_compression_info_or_crc(aa));
+    BOOST_CHECK(has_compression_info_or_crc(mt));
+    BOOST_CHECK(!has_m_format_checksums(aa));
+    BOOST_CHECK(!supports_compact_storage(aa));
+    BOOST_CHECK(is_writable(aa));
+    for (auto pred : {has_summary_and_index, has_mx_promoted_index, has_serialization_header, has_compaction_ancestors,
+            has_correct_max_deletion_time, has_correct_min_max_column_names, has_originating_host_id, has_m_format_filter,
+            uses_legacy_dk_order}) {
+        BOOST_CHECK_EQUAL(pred(aa), pred(mt));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_aa_file_names) {
+    const auto gen = generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok");
+    const auto aa = sstable_version_types::aa;
+    const auto mt = sstable_version_types::mt;
+    BOOST_CHECK_EQUAL(sstable::component_basename("ks", "cf", aa, gen, component_type::Data), "aa-3g9r_04ux_4be4w2d7t8bg6u7nok-pq-Data.db");
+    BOOST_CHECK_EQUAL(sstable::component_basename("ks", "cf", mt, gen, component_type::Data), "mt-3g9r_04ux_4be4w2d7t8bg6u7nok-big-Data.db");
+
+    const auto& aa_components = sstable_version_constants::get_component_map(aa);
+    for (const auto& [type, name] : sstable_version_constants::get_component_map(mt)) {
+        auto expect = type != component_type::CompressionInfo && type != component_type::CRC;
+        BOOST_CHECK_EQUAL(aa_components.contains(type), expect);
+        if (!expect) {
+            continue;
+        }
+        BOOST_CHECK_EQUAL(aa_components.at(type), name);
+        auto path = sstable::filename("/scylla/ks/cf-38c19fd0fb863310a4b70d0cc66628aa", "ks", "cf", aa, gen, type);
+        auto [desc, ks, cf] = parse_path(std::string(path)).value();
+        BOOST_CHECK_EQUAL(desc.version, aa);
+        BOOST_CHECK_EQUAL(desc.format(), sstable_format_types::pq);
+        BOOST_CHECK_EQUAL(desc.generation, gen);
+        BOOST_CHECK_EQUAL(desc.component, type);
+    }
+    BOOST_CHECK_EQUAL(aa_components.size() + 2, sstable_version_constants::get_component_map(mt).size());
+}
+
+// An `aa` sstable loads and reads back what was written. A compact storage
+// table cannot load it, because the reader takes the column names from the
+// serialization header, which a dense table does not follow.
+SEASTAR_TEST_CASE(test_aa_load) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build();
+        auto mut = mutation(s, partition_key::from_single_value(*s, int32_type->decompose(1)));
+        mut.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(2)), "v", data_value(3), api::new_timestamp());
+
+        auto sst = env.make_sstable(s, sstable_version_types::aa);
+        BOOST_CHECK_EQUAL(sst->get_format(), sstable_format_types::pq);
+        auto rd = make_mutation_reader_from_mutations(s, env.make_reader_permit(), mut);
+        sst->write_components(std::move(rd), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
+
+        auto sst2 = env.make_sstable(s, sst->generation(), sstable_version_types::aa);
+        sst2->load(s->get_sharder()).get();
+        assert_that(sst2->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()))
+                .produces(mut)
+                .produces_end_of_stream();
+
+        auto compact = schema_builder(s).with(schema_builder::compact_storage::yes).build();
+        auto sst3 = env.make_sstable(compact, sst->generation(), sstable_version_types::aa);
+        BOOST_REQUIRE_EXCEPTION(sst3->load(compact->get_sharder()).get(), std::runtime_error,
+                exception_predicate::message_contains("compact storage table"));
+    });
 }
 
 using compress_sstable = tests::random_schema_specification::compress_sstable;
@@ -1014,7 +1131,7 @@ static future<> test_component_digest_persistence(component_type component, ssta
 
         sst_original = nullptr;
 
-        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version);
         sst_reopened->load(schema->get_sharder()).get();
 
         auto loaded_digest = sst_reopened->get_component_digest(component);
@@ -1235,7 +1352,7 @@ static future<> test_component_digest_validation(component_type component, sstab
         BOOST_REQUIRE(sstables::validate_checksums_and_digests(sst, env.make_reader_permit()).get().status == validate_checksums_status::invalid);
 
         // Loading the sstable should detect the digest mismatch
-        auto sst_corrupted = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        auto sst_corrupted = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version);
         BOOST_REQUIRE_EXCEPTION(sst_corrupted->load(schema->get_sharder()).get(), malformed_sstable_exception,
             exception_predicate::message_contains(expected_message));
     });

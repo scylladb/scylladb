@@ -736,6 +736,23 @@ struct convert<compression_parameters> {
 static const db::config::value_status error_injection_value_status =
         ENABLE_ERROR_INJECTION_OPTIONS ? db::config::value_status::Used : db::config::value_status::Unused;
 
+// The environment variable that sets the default of test_sstable_data_format_default.
+// A test runner sets it once, and every node and every cql_test_env that the runner
+// starts inherits it. This is how a test suite runs with Parquet as the default.
+static constexpr const char* test_sstable_data_format_default_env = "SCYLLA_TEST_SSTABLE_DATA_FORMAT_DEFAULT";
+
+static sstring test_sstable_data_format_default_from_env() {
+    const char* value = std::getenv(test_sstable_data_format_default_env);
+    if (!value || !*value) {
+        return "native";
+    }
+    const std::string_view v(value);
+    if (v != "native" && v != "parquet") {
+        throw std::invalid_argument(fmt::format("{}: expected 'native' or 'parquet', got '{}'", test_sstable_data_format_default_env, v));
+    }
+    return sstring(v);
+}
+
 static db::tri_mode_restriction_t::mode strict_allow_filtering_default() {
     return db::tri_mode_restriction_t::mode::WARN; // TODO: make it TRUE after Scylla 4.6.
 }
@@ -1531,6 +1548,31 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Hard limit on the number of partition keys covered by a single sstable summary entry. "
         "A summary entry is forced (breaking the index page) once this many partitions accumulate, which prevents "
         "pathologically large index pages.")
+    , parquet_row_group_size_in_kb(this, "parquet_row_group_size_in_kb", liveness::LiveUpdate, value_status::Used, 8192,
+        "The largest row group of a new sstable whose Data file is a Parquet file, in KiB of buffered data. "
+        "The writer buffers a whole row group in memory, so the memory budget of the writers may make row groups smaller. "
+        "Values above 1048576 (1 GiB) are treated as 1048576. "
+        "It affects only sstables written after the change.")
+    , parquet_page_set_size_in_kb(this, "parquet_page_set_size_in_kb", liveness::LiveUpdate, value_status::Used, 128,
+        "The size of a page set of a new sstable whose Data file is a Parquet file, in KiB of raw data. "
+        "A page set is the group of pages of all columns that cover the same rows. "
+        "It bounds the work of a point read, and the row index has an entry at each page set boundary inside a partition. "
+        "Values above 1024 (1 MiB) are treated as 1024. "
+        "It affects only sstables written after the change.")
+    , parquet_min_page_size_in_kb(this, "parquet_min_page_size_in_kb", liveness::LiveUpdate, value_status::Used, 8,
+        "The smallest page of a column of a new sstable whose Data file is a Parquet file, in KiB. "
+        "A column skips a page set boundary while its pending page is smaller than this. "
+        "Values above 1024 (1 MiB) are treated as 1024. "
+        "It affects only sstables written after the change.")
+    , parquet_dictionary_page_size_limit_in_kb(this, "parquet_dictionary_page_size_limit_in_kb", liveness::LiveUpdate, value_status::Used, 4,
+        "The size limit of a dictionary page of a new sstable whose Data file is a Parquet file, in KiB. "
+        "A column chunk whose dictionary would grow beyond it uses another encoding. Set to 0 to disable dictionaries. "
+        "Values above 1024 (1 MiB) are treated as 1024. "
+        "It affects only sstables written after the change.")
+    , parquet_writer_memory_fraction(this, "parquet_writer_memory_fraction", liveness::LiveUpdate, value_status::Used, 0.05,
+        "The fraction of the shard's memory that the writers of sstables whose Data file is a Parquet file share for their row group buffers. "
+        "Each writer's row group target is this budget divided by the number of such writers on the shard, "
+        "capped above by parquet_row_group_size_in_kb and below by parquet_page_set_size_in_kb. Nothing waits for the budget.")
     , components_memory_reclaim_threshold(this, "components_memory_reclaim_threshold", liveness::LiveUpdate, value_status::Used, .2, "Ratio of available memory for all in-memory components of SSTables in a shard beyond which the memory will be reclaimed from components until it falls back under the threshold. Currently, this limit is only enforced for bloom filters.")
     , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, (size_t(128) << 10) + 1, "Warn about memory allocations above this size; set to zero to disable.")
     , enable_deprecated_partitioners(this, "enable_deprecated_partitioners", value_status::Used, false, "Enable the byteordered and random partitioners. These partitioners are deprecated and will be removed in a future version.")
@@ -1548,6 +1590,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Unused, true, "Enable SSTables 'mc' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , sstable_format(this, "sstable_format", liveness::LiveUpdate, value_status::Used, "mt", "Default sstable file format", {"md", "me", "ms", "mt"})
+    , test_sstable_data_format_default(this, "test_sstable_data_format_default", liveness::LiveUpdate, value_status::Used, test_sstable_data_format_default_from_env(),
+        "For tests only! The data format of new sstables of a table for which no scope stores the sstable_data_format cluster config option: "
+        "'native' or 'parquet'. Tests use it to run with Parquet as the default. "
+        "The environment variable SCYLLA_TEST_SSTABLE_DATA_FORMAT_DEFAULT sets its default. "
+        "System tables and compact storage tables ignore it, and it has no effect until every node knows the sstable_data_format option.",
+        {"native", "parquet"})
     , sstable_compression_user_table_options(this, "sstable_compression_user_table_options", value_status::Used, compression_parameters{compression_parameters::algorithm::lz4_with_dicts},
         "Server-global user table compression options. If enabled, all user tables"
         "will be compressed using the provided options, unless overridden"

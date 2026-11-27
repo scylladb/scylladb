@@ -12,6 +12,8 @@
 #include <seastar/core/weak_ptr.hh>
 
 #include "compress.hh"
+#include "sstables/parquet/file_summary.hh"
+#include "sstables/parquet/stats.hh"
 #include "sstables/types.hh"
 #include "utils/i_filter.hh"
 
@@ -26,6 +28,12 @@ struct shareable_components {
     std::optional<sstables::scylla_metadata> scylla_metadata;
     weak_ptr<sstables::checksum> checksum;
     std::optional<uint32_t> digest;
+    // What the reader keeps from the footer of a Parquet Data file
+    // (has_parquet_data_file()). It holds no shard-local state, so the
+    // shards that load the sstable read the copy of the owner shard.
+    std::optional<sstables::parquet::file_summary> parquet_summary;
+    // Counts the memory of parquet_summary in the metrics of its shard.
+    sstables::parquet::accounted_memory parquet_summary_memory;
 };
 
 }   // namespace sstables

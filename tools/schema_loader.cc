@@ -42,6 +42,9 @@
 #include "partition_slice_builder.hh"
 #include "readers/combined.hh"
 #include "replica/database.hh"
+#include "sstables/compressor.hh"
+#include "sstables/parquet/file_summary.hh"
+#include "sstables/parquet/sstable_writer.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/exceptions.hh"
@@ -668,16 +671,29 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     const auto ed = std::move(*ed_result);
     const auto dir_path = sstable_path.parent_path();
     auto local = data_dictionary::make_local_options(dir_path);
-    auto bootstrap_sst = sst_man.make_sstable(bootstrap_schema, local, ed.generation, ed.sid, sstables::sstable_state::normal, ed.version, ed.format);
+    auto bootstrap_sst = sst_man.make_sstable(bootstrap_schema, local, ed.generation, ed.sid, sstables::sstable_state::normal, ed.version);
 
     bootstrap_sst->load_metadata().get();
 
     const auto scylla_metadata = bootstrap_sst->get_scylla_metadata();
+    schema_ptr schema;
     if (scylla_metadata && scylla_metadata->data.get<sstables::scylla_metadata_type::Schema, sstables::scylla_metadata::sstable_schema>()) {
-        return load_schema_from_scylla_metadata(bootstrap_sst);
+        schema = load_schema_from_scylla_metadata(bootstrap_sst);
+    } else {
+        schema = load_schema_from_statistics(keyspace, table, bootstrap_sst);
     }
 
-    return load_schema_from_statistics(keyspace, table, bootstrap_sst);
+    // A Parquet Data file has no CompressionInfo.db: its footer records the
+    // compression codec of each column chunk. The footer is read when the
+    // sstable is opened, which needs the schema.
+    if (sstables::has_parquet_data_file(ed.version)) {
+        auto sst = sst_man.make_sstable(schema, local, ed.generation, ed.sid, sstables::sstable_state::normal, ed.version);
+        sst->load(schema->get_sharder(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false}).get();
+        const auto& columns = sst->get_parquet_file_summary().columns();
+        const auto codec = columns.empty() ? sstables::parquet::compression_codec::uncompressed : columns.front().codec;
+        schema = schema_builder(schema).set_compressor_params(sstables::parquet::compression_parameters_of(codec)).build();
+    }
+    return schema;
 }
 
 } // anonymous namespace

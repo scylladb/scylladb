@@ -8,6 +8,7 @@ For more information on each of the SSTable formats, see below:
 
 * :doc:`SSTable 2.x </architecture/sstable/sstable2/index>`
 * :doc:`SSTable 3.x </architecture/sstable/sstable3/index>`
+* :doc:`Parquet SSTables </architecture/sstable/sstable-parquet>`
 
 SSTable Version Support
 ------------------------

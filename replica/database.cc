@@ -398,6 +398,13 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .large_data_records_per_sstable = cfg.compaction_large_data_records_per_sstable,
         .ignore_component_digest_mismatch = cfg.ignore_component_digest_mismatch(),
         .enable_dangerous_direct_import_of_cassandra_counters = cfg.enable_dangerous_direct_import_of_cassandra_counters(),
+        .parquet_row_group_size_in_kb = cfg.parquet_row_group_size_in_kb,
+        .parquet_page_set_size_in_kb = cfg.parquet_page_set_size_in_kb,
+        .parquet_min_page_size_in_kb = cfg.parquet_min_page_size_in_kb,
+        .parquet_dictionary_page_size_limit_in_kb = cfg.parquet_dictionary_page_size_limit_in_kb,
+        .parquet_writer_memory_fraction = cfg.parquet_writer_memory_fraction,
+        .test_sstable_data_format_default = cfg.test_sstable_data_format_default,
+        .register_metrics = true,
     };
 }
 
@@ -1129,6 +1136,16 @@ static bool is_system_table(std::string_view ks_name) {
 
 static bool is_system_table(const schema& s) {
     return is_system_table(s.ks_name());
+}
+
+void database::plug_cluster_config_manager(const db::cluster_config_manager& ccm) noexcept {
+    _user_sstables_manager->plug_cluster_config_manager(ccm);
+    _system_sstables_manager->plug_cluster_config_manager(ccm);
+}
+
+void database::unplug_cluster_config_manager() noexcept {
+    _user_sstables_manager->unplug_cluster_config_manager();
+    _system_sstables_manager->unplug_cluster_config_manager();
 }
 
 sstables::sstables_manager& database::get_sstables_manager(const schema& s) const {
@@ -4488,7 +4505,12 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         std::vector<uint64_t> global_offset(this_smp_shard_count() + 1);
 
         // Watch out: static lambda. Don't add captures to it.
-        static auto size_in_chunks = [] (const sstables::shared_sstable& sst, uint64_t chunk_size) {
+        static auto size_in_chunks = [] (const sstables::shared_sstable& sst, uint64_t chunk_size) -> uint64_t {
+            // A Parquet Data file is not sampled. Its bytes are encoded and
+            // compressed pages, and there are no trained dictionaries for it.
+            if (!sst->can_sample_data_for_dictionary()) {
+                return 0;
+            }
             return sst->data_size() / chunk_size;
         };
 

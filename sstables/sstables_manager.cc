@@ -24,14 +24,22 @@
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
+#include "sstables/parquet/mapping.hh"
+#include "sstables/parquet/writer.hh"
 #include "object_storage_client.hh"
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
+#include "view_info.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
 #include "utils/http.hh"
 #include "exceptions/exceptions.hh"
+
+// Defined in replica/distributed_loader.cc.
+bool is_internal_keyspace(std::string_view name);
 
 namespace sstables {
 
@@ -115,6 +123,23 @@ sstables_manager::sstables_manager(
     , _signal_gate("sstables_manager::signal")
 {
     _components_reloader_status = components_reclaim_reload_fiber();
+
+    if (_config.register_metrics) {
+        namespace sm = seastar::metrics;
+        const auto manager_label = sm::label("manager")(name);
+        _metrics.add_group("sstables_manager", {
+            sm::make_gauge("parquet_active_writers", [this] { return _active_parquet_writers; },
+                    sm::description("The number of writers of Parquet Data files that share the writer memory budget"), {manager_label}),
+            sm::make_gauge("parquet_writer_memory_budget", [this] { return parquet_writer_memory_budget(); },
+                    sm::description("The memory, in bytes, that the writers of Parquet Data files share for their row group buffers"), {manager_label}),
+            sm::make_gauge("parquet_writer_memory_used", [this] { return _parquet_writer_memory_used; },
+                    sm::description("The memory, in bytes, that the writers of Parquet Data files reported to hold"), {manager_label}),
+            sm::make_gauge("parquet_row_group_target", [this] {
+                        return parquet_row_group_target(uint64_t(_config.parquet_page_set_size_in_kb()) << 10, uint64_t(_config.parquet_row_group_size_in_kb()) << 10);
+                    },
+                    sm::description("The row group target, in bytes, of a writer of Parquet Data files with the configured sizes"), {manager_label}),
+        });
+    }
 }
 
 sstables_manager::~sstables_manager() {
@@ -385,28 +410,73 @@ sstables::sstable::version_types sstables_manager::get_highest_supported_format(
      }
 }
 
-sstables::sstable::version_types sstables_manager::get_preferred_sstable_version() const {
-    auto preferred_format = sstables::version_from_string(_config.format());
-    auto mt_supported = bool(_features.mt_sstable);
-    if (mt_supported && preferred_format == sstable_version_types::mt) {
-        return sstable_version_types::mt;
+sstables::sstable::version_types sstables_manager::choose_sstable_version(const schema& s, sstable_version_set existing_versions) const {
+    if (table_uses_parquet(s)) {
+        return sstable_version_types::aa;
     }
-    // `mt` supersedes `ms` (it's just `ms`, but with a problem fixed), so
-    // if `ms` is chosen, but `mt` is available, we assume that the user
-    // wants `mt` and we silently pick that instead.
-    if (mt_supported && preferred_format == sstable_version_types::ms) {
-        return sstable_version_types::mt;
-    }
-    auto ms_supported = bool(_features.ms_sstable);
-    if (ms_supported && preferred_format == sstable_version_types::ms) {
-        return sstable_version_types::ms;
-    }
-    return sstable_version_types::me;
+    return choose_big_sstable_version(existing_versions);
 }
 
-sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const {
+bool sstables_manager::may_use_parquet(const schema& s) noexcept {
+    // The system keyspaces, and the keyspaces of the tracing, auth, and
+    // encryption key tables, hold the node's own state.
+    // A compact storage table is rejected by the Parquet writer: the `mx`
+    // reader ignores the column names of its serialization header, so the
+    // header cannot be the authority for the column names of the Parquet file.
+    // A column or field name whose Parquet name is longer than the reader
+    // accepts makes the writer fail, so such a table keeps the `big` format.
+    return !is_internal_keyspace(s.ks_name()) && !s.is_compact_table() && parquet::parquet_names_fit(s);
+}
+
+bool sstables_manager::table_uses_parquet(const schema& s) const {
+    if (!_cluster_config_manager || !may_use_parquet(s)) {
+        return false;
+    }
+    const auto* opt = db::cluster_config_registry::find(db::cluster_config_registry::option_name::sstable_data_format);
+    // The option's cluster feature is the only gate of the Parquet format.
+    // A node advertises the feature only if it can read and write Parquet
+    // sstables, and the feature is enabled only when every node in the
+    // cluster advertises it. Until then the option cannot be set at any
+    // scope, and this check makes the test-only default wait as well.
+    // So no node creates a Parquet sstable while some node could not read
+    // one, and file-based streaming, which sends sstables as they are, never
+    // sends one to such a node. A node without the feature cannot join a
+    // cluster that has enabled it, so this holds for joining nodes too.
+    // Downgrading the cluster, and restoring Parquet sstables into an older
+    // cluster, are not supported.
+    if (!opt || !db::cluster_config_registry::is_supported(*opt, _features)) {
+        return false;
+    }
+    // A view has no table scope of its own (CQL rejects cluster config
+    // options on views), so it follows the table scope of its base table.
+    // A secondary index is a view too.
+    const auto& table_name = s.is_view() ? s.view_info()->base_name() : s.cf_name();
+    const auto value = _cluster_config_manager->resolve_config(opt->name, db::cluster_config_manager::lookup_context{
+        .keyspace_name = s.ks_name(),
+        .table_name = table_name,
+    });
+    // A stored value passed validation, so it is one of the two formats. A
+    // value written out of band falls back to the native format.
+    return value.value_or(_config.test_sstable_data_format_default()) == "parquet";
+}
+
+void sstables_manager::plug_cluster_config_manager(const db::cluster_config_manager& ccm) noexcept {
+    _cluster_config_manager = &ccm;
+}
+
+void sstables_manager::unplug_cluster_config_manager() noexcept {
+    _cluster_config_manager = nullptr;
+}
+
+sstables::sstable::version_types sstables_manager::choose_default_sstable_version() const {
+    return choose_big_sstable_version({});
+}
+
+sstables::sstable::version_types sstables_manager::choose_big_sstable_version(sstable_version_set existing_versions) const {
     auto preferred_format = sstables::version_from_string(_config.format());
-    auto mt_supported = bool(_features.mt_sstable) || existing_version >= sstable_version_types::mt;
+    // An existing sstable proves that the cluster supports its version.
+    // Support for `mt` implies support for `ms`, which `mt` supersedes.
+    auto mt_supported = bool(_features.mt_sstable) || existing_versions.contains(sstable_version_types::mt);
     if (mt_supported && preferred_format == sstable_version_types::mt) {
         return sstable_version_types::mt;
     }
@@ -416,7 +486,8 @@ sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_
     if (mt_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::mt;
     }
-    auto ms_supported = bool(_features.ms_sstable) || existing_version >= sstable_version_types::ms;
+    auto ms_supported = bool(_features.ms_sstable) || existing_versions.contains(sstable_version_types::ms)
+            || existing_versions.contains(sstable_version_types::mt);
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
     }
@@ -433,11 +504,10 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         optimized_optional<sstable_id> sid,
         sstable_state state,
         sstable_version_types v,
-        sstable_format_types f,
         db_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
-    return shared_sstable(new sstable(std::move(schema), storage, generation, sid, state, v, f, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size));
+    return shared_sstable(new sstable(std::move(schema), storage, generation, sid, state, v, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size));
 }
 
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
@@ -457,7 +527,54 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     cfg.origin = std::move(origin);
     cfg.large_data_records_per_sstable = _config.large_data_records_per_sstable();
 
+    cfg.parquet_row_group_size = uint64_t(_config.parquet_row_group_size_in_kb()) << 10;
+    cfg.parquet_page_set_size = uint64_t(_config.parquet_page_set_size_in_kb()) << 10;
+    cfg.parquet_min_page_size = uint64_t(_config.parquet_min_page_size_in_kb()) << 10;
+    cfg.parquet_dictionary_page_limit = uint64_t(_config.parquet_dictionary_page_size_limit_in_kb()) << 10;
+
     return cfg;
+}
+
+// Counts the writer as active, and its last memory report as used, for its lifetime.
+class sstables_manager::parquet_writer_memory_handle final : public parquet::writer_memory_handle {
+    sstables_manager& _manager;
+    const uint64_t _page_set_size;
+    const uint64_t _row_group_size;
+    uint64_t _reported = 0;
+public:
+    parquet_writer_memory_handle(sstables_manager& manager, uint64_t page_set_size, uint64_t row_group_size) noexcept
+        : _manager(manager)
+        , _page_set_size(page_set_size)
+        , _row_group_size(row_group_size)
+    {
+        ++_manager._active_parquet_writers;
+    }
+    ~parquet_writer_memory_handle() {
+        --_manager._active_parquet_writers;
+        _manager._parquet_writer_memory_used -= _reported;
+    }
+    uint64_t row_group_target() override {
+        return _manager.parquet_row_group_target(_page_set_size, _row_group_size);
+    }
+    void report_memory_usage(uint64_t bytes) noexcept override {
+        _manager._parquet_writer_memory_used = _manager._parquet_writer_memory_used - _reported + bytes;
+        _reported = bytes;
+    }
+};
+
+uint64_t sstables_manager::parquet_writer_memory_budget() const noexcept {
+    const double fraction = std::clamp(_config.parquet_writer_memory_fraction(), 0.0, 1.0);
+    return uint64_t(double(_config.available_memory) * fraction);
+}
+
+uint64_t sstables_manager::parquet_row_group_target(uint64_t page_set_size, uint64_t row_group_size) const noexcept {
+    const uint64_t share = parquet_writer_memory_budget() / std::max<uint64_t>(_active_parquet_writers, 1);
+    // The lower cap wins if the configuration puts it above the upper one.
+    return std::max(std::min(share, row_group_size), page_set_size);
+}
+
+std::unique_ptr<parquet::writer_memory_handle> sstables_manager::register_parquet_writer(uint64_t page_set_size, uint64_t row_group_size) {
+    return std::make_unique<parquet_writer_memory_handle>(*this, page_set_size, row_group_size);
 }
 
 void sstables_manager::increment_total_reclaimable_memory(sstable* sst) {
