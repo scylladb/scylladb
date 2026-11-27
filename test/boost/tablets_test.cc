@@ -8777,6 +8777,247 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_threshold_cluster_config) {
     }, std::move(cfg_in)).get();
 }
 
+// Three nodes in three racks with four shards each and twelve RF=3 tablets, tablet i on shard
+// i % 4 of every node, so every tablet repair involves every node and, without a per-node
+// limit, the per-shard streaming limit allows four repairs per node. plan() runs the repair
+// scheduler once and applies the repairs it schedules.
+class repair_concurrency_checker {
+    cql_test_env& _e;
+    topology_builder _topo;
+    std::vector<host_id> _hosts;
+    table_id _table;
+    static constexpr unsigned shard_count = 4;
+    static constexpr size_t tablet_count = 12;
+public:
+    explicit repair_concurrency_checker(cql_test_env& e)
+        : _e(e)
+        , _topo(e)
+    {
+        auto dc1 = _topo.dc();
+        for (int i = 0; i < 3; ++i) {
+            if (i) {
+                _topo.start_new_rack();
+            }
+            _hosts.push_back(_topo.add_node(node_state::normal, shard_count));
+        }
+        auto ks_name = add_keyspace(_e, {{dc1, 3}}, tablet_count);
+        _table = add_table(_e, ks_name).get();
+    }
+
+    host_id host(size_t i) const {
+        return _hosts.at(i);
+    }
+
+    void refresh_config() {
+        _e.cluster_config_manager().local().refresh().get();
+    }
+
+    // Rebuilds the tablet map with no repair in progress.
+    void reset() {
+        mutate_tablets(_e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(tablet_count);
+            for (auto tid : tmap.tablet_ids()) {
+                tablet_replica_set replicas;
+                for (auto h : _hosts) {
+                    replicas.push_back(tablet_replica{h, shard_id(tid.value() % shard_count)});
+                }
+                tmap.set_tablet(tid, tablet_info{std::move(replicas)});
+            }
+            tmeta.set_tablet_map(_table, std::move(tmap));
+            co_return;
+        });
+    }
+
+    // Returns the number of repairs the plan scheduled per host.
+    std::unordered_map<host_id, size_t> plan() {
+        auto& stm = _e.shared_token_metadata().local();
+        auto& topology = _e.get_topology_state_machine().local()._topology;
+        auto plan = _e.get_tablet_allocator().local().balance_tablets(stm.get(), &topology,
+                &_e.get_system_keyspace().local(), _topo.get_load_stats()).get();
+        BOOST_REQUIRE(plan.migrations().empty());
+        std::unordered_map<host_id, size_t> repairs;
+        auto& tmap = stm.get()->tablets().get_tablet_map(_table);
+        for (const auto& gid : plan.repair_plan().repairs()) {
+            for (const auto& r : tmap.get_tablet_info(gid.tablet).replicas) {
+                ++repairs[r.host];
+            }
+        }
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            return apply_repair_transitions(tm, plan);
+        }).get();
+        return repairs;
+    }
+
+    // True if the plan scheduled n repairs on every host.
+    bool plan_has(size_t n) {
+        auto repairs = plan();
+        return std::ranges::all_of(_hosts, [&] (host_id h) { return repairs[h] == n; });
+    }
+};
+
+// tablet_repair_max_per_node bounds the tablet repairs a node takes part in, counting both the
+// repairs a plan schedules and those already in progress, and a node-scope value applies to
+// every repair involving that node.
+SEASTAR_THREAD_TEST_CASE(test_tablet_repair_max_per_node) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        repair_concurrency_checker checker(e);
+
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(4));
+
+        e.execute_cql("ALTER CLUSTER WITH tablet_repair_max_per_node = 2").get();
+        checker.refresh_config();
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(2));
+        // Shards 2 and 3 are free, but every node is already in two repairs.
+        BOOST_REQUIRE(checker.plan_has(0));
+
+        e.execute_cql(format("ALTER NODE {} WITH tablet_repair_max_per_node = 1", checker.host(0))).get();
+        checker.refresh_config();
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(1));
+
+        e.execute_cql(format("ALTER NODE {} WITH tablet_repair_max_per_node = null", checker.host(0))).get();
+        e.execute_cql("ALTER CLUSTER WITH tablet_repair_max_per_node = null").get();
+        checker.refresh_config();
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(4));
+    }, std::move(cfg_in)).get();
+}
+
+// Six nodes, two per rack, with RF=3 tablets ordered by age, oldest first. placement gives the
+// index of the replica host in each rack, per tablet; tablet i is on shard i of its hosts, so
+// the per-shard streaming limit rejects nothing. plan() runs the repair scheduler once and
+// applies the repairs it schedules.
+class repair_reservation_checker {
+    cql_test_env& _e;
+    topology_builder _topo;
+    // _hosts[rack][i]
+    std::vector<std::vector<host_id>> _hosts;
+    std::vector<std::array<size_t, 3>> _placement;
+    std::vector<db_clock::time_point> _repair_times;
+    table_id _table;
+    static constexpr unsigned shard_count = 8;
+public:
+    repair_reservation_checker(cql_test_env& e, std::vector<std::array<size_t, 3>> placement)
+        : _e(e)
+        , _topo(e)
+        , _placement(std::move(placement))
+    {
+        BOOST_REQUIRE(_placement.size() <= shard_count);
+        auto dc1 = _topo.dc();
+        for (int rack = 0; rack < 3; ++rack) {
+            if (rack) {
+                _topo.start_new_rack();
+            }
+            _hosts.push_back({_topo.add_node(node_state::normal, shard_count), _topo.add_node(node_state::normal, shard_count)});
+        }
+        auto ks_name = add_keyspace(_e, {{dc1, 3}}, _placement.size());
+        _table = add_table(_e, ks_name).get();
+        auto now = db_clock::now();
+        for (size_t i = 0; i < _placement.size(); ++i) {
+            _repair_times.push_back(now - std::chrono::seconds(1000 * (_placement.size() - i)));
+        }
+    }
+
+    void set_max_per_node(size_t limit) {
+        _e.execute_cql(format("ALTER CLUSTER WITH tablet_repair_max_per_node = {}", limit)).get();
+        _e.cluster_config_manager().local().refresh().get();
+    }
+
+    void set_repaired_now(size_t tablet) {
+        _repair_times.at(tablet) = db_clock::now();
+    }
+
+    // Rebuilds the tablet map with no repair in progress.
+    void reset() {
+        mutate_tablets(_e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(_placement.size());
+            for (auto tid : tmap.tablet_ids()) {
+                tablet_replica_set replicas;
+                for (size_t rack = 0; rack < 3; ++rack) {
+                    replicas.push_back(tablet_replica{_hosts[rack][_placement[tid.value()][rack]], shard_id(tid.value())});
+                }
+                tablet_info ti{std::move(replicas)};
+                ti.repair_time = _repair_times[tid.value()];
+                tmap.set_tablet(tid, std::move(ti));
+            }
+            tmeta.set_tablet_map(_table, std::move(tmap));
+            co_return;
+        });
+    }
+
+    // Returns the tablets the plan scheduled for repair.
+    std::set<size_t> plan() {
+        auto& stm = _e.shared_token_metadata().local();
+        auto& topology = _e.get_topology_state_machine().local()._topology;
+        auto plan = _e.get_tablet_allocator().local().balance_tablets(stm.get(), &topology,
+                &_e.get_system_keyspace().local(), _topo.get_load_stats()).get();
+        BOOST_REQUIRE(plan.migrations().empty());
+        std::set<size_t> repairs;
+        for (const auto& gid : plan.repair_plan().repairs()) {
+            repairs.insert(gid.tablet.value());
+        }
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            return apply_repair_transitions(tm, plan);
+        }).get();
+        return repairs;
+    }
+};
+
+// A candidate rejected by tablet_repair_max_per_node reserves a repair slot on its replica
+// hosts, so a candidate repaired more recently cannot take the last free one.
+//
+//   t0 {a0, b1, c1}, t1 {a0, b0, c0}, t2 {a1, b0, c0}, t3 {a1, b1, c1}
+// With a limit of 1 the first plan repairs t0. t1 waits for a0 and reserves b0 and c0, so t2 is
+// not scheduled although all its hosts are free. Once t0 is repaired, t1 is scheduled.
+SEASTAR_THREAD_TEST_CASE(test_tablet_repair_max_per_node_reserves_hosts) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        repair_reservation_checker checker(e, {{0, 1, 1}, {0, 0, 0}, {1, 0, 0}, {1, 1, 1}});
+        checker.set_max_per_node(1);
+
+        checker.reset();
+        BOOST_REQUIRE(checker.plan() == std::set<size_t>{0});
+        // t1 still waits for a0 and keeps its reservation.
+        BOOST_REQUIRE(checker.plan().empty());
+
+        checker.set_repaired_now(0);
+        checker.reset();
+        BOOST_REQUIRE(checker.plan() == std::set<size_t>{1});
+    }, std::move(cfg_in)).get();
+}
+
+// The reservation takes one slot per host, not the whole host.
+//
+//   t0 {a0, b1, c1}, t1 {a0, b1, c1}, t2 {a0, b0, c0}, t3 {a1, b0, c0}, t4 {a1, b0, c0}
+// With a limit of 2 the plan repairs t0 and t1. t2 waits for a0 and reserves one slot on b0 and
+// c0. t3 takes the other slot of b0 and c0, and t4 is not scheduled.
+SEASTAR_THREAD_TEST_CASE(test_tablet_repair_max_per_node_reserves_one_slot) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        repair_reservation_checker checker(e, {{0, 1, 1}, {0, 1, 1}, {0, 0, 0}, {1, 0, 0}, {1, 0, 0}});
+        checker.set_max_per_node(2);
+
+        checker.reset();
+        BOOST_REQUIRE(checker.plan() == (std::set<size_t>{0, 1, 3}));
+        BOOST_REQUIRE(checker.plan().empty());
+
+        // With t0 and t1 repaired, t2 is scheduled before t4.
+        checker.set_repaired_now(0);
+        checker.set_repaired_now(1);
+        checker.reset();
+        BOOST_REQUIRE(checker.plan() == (std::set<size_t>{2, 3}));
+    }, std::move(cfg_in)).get();
+}
+
 void run_tablet_manual_repair_rf1(cql_test_env& e) {
     topology_builder topo(e);
 
