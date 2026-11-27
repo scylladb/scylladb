@@ -203,7 +203,7 @@ def new_test_table(cql, keyspace, schema, extra=""):
     try:
         yield table
     finally:
-        cql.execute("DROP TABLE " + table)
+        cql.execute("DROP TABLE IF EXISTS " + table)
         previously_used_table_names.append(table_name)
 
 # A utility function for creating a new temporary user-defined type.

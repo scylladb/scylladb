@@ -5891,6 +5891,34 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        // These checks run under the guard, on every retry, so that they and the
+        // update below see the same group0 state. The table can be dropped
+        // concurrently, and vnodes-to-tablets migration creates tablet maps when
+        // it's prepared and removes them when it's rolled back.
+        //
+        // A table under migration already has a tablet map, but its keyspace
+        // keeps using vnodes until the migration is finalized, and repair isn't
+        // allowed during the migration. So the test is whether the keyspace uses
+        // tablets, not whether the table has a tablet map.
+        {
+            auto t = _db.local().get_tables_metadata().get_table_if_exists(table);
+            if (!t) {
+                throw std::invalid_argument(::format(
+                    "Cannot repair table {} with tablet repair because it doesn't exist.", table));
+            }
+            const auto& s = *t->schema();
+            if (!_db.local().find_keyspace(s.ks_name()).uses_tablets()) {
+                if (get_token_metadata().tablets().has_tablet_map(table)) {
+                    throw std::invalid_argument(::format(
+                        "Cannot repair table '{}'.'{}' with tablet repair because it is being migrated from vnodes to tablets.",
+                        s.ks_name(), s.cf_name()));
+                }
+                throw std::invalid_argument(::format(
+                    "Cannot repair table '{}'.'{}' with tablet repair because it doesn't use tablets.",
+                    s.ks_name(), s.cf_name()));
+            }
+        }
+
         // we don't allow requesting repair on tablets of colocated tables, because the repair task info
         // is stored on the base table's tablet map which is shared by all the tables that are colocated with it.
         // we don't have a way currently to store the repair task info for a specific colocated table.
@@ -5975,8 +6003,14 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
 
     // Wait until no tablet of the table carries the request. The whole map is
     // scanned because a split copies the request to both new tablets, and a
-    // requested token covers only one of them.
+    // requested token covers only one of them. If the table is dropped, its
+    // tablet map and the request with it are gone.
+    bool table_dropped = false;
     co_await _topology_state_machine.event.wait([&] {
+        if (!get_token_metadata().tablets().has_tablet_map(table)) {
+            table_dropped = true;
+            return true;
+        }
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         auto is_ours = [&] (const std::unique_ptr<locator::tablet_task_info>& info) {
             return info && info->tablet_task_id == repair_task_info.tablet_task_id;
@@ -5988,6 +6022,11 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     });
 
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start);
+    if (table_dropped) {
+        slogger.info("Stopped waiting for tablet repair by API request table_id={} tablet_task_id={} duration={}: the table was dropped",
+                table, repair_task_info.tablet_task_id, duration);
+        co_return res;
+    }
     slogger.info("Finished tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={} duration={}",
             table, tokens, all_tokens, repair_task_info.tablet_task_id, duration);
 
@@ -6013,6 +6052,15 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     slogger.info("Deleting tablet repair request by API request table_id={} tablet_task_id={}", table, tablet_task_id);
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
+
+        // The request is stored in the tablet map. If the table was dropped, or a
+        // rolled-back vnodes-to-tablets migration removed its tablet map, after
+        // the request was found, the request is gone with it.
+        if (!get_token_metadata().tablets().has_tablet_map(table)) {
+            slogger.info("Tablet repair request table_id={} tablet_task_id={} no longer exists: the table has no tablet map",
+                    table, tablet_task_id);
+            co_return;
+        }
 
         // see add_repair_tablet_request. repair requests can only be added on base tables.
         if (!get_token_metadata().tablets().is_base_table(table)) {

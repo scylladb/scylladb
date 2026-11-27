@@ -332,8 +332,11 @@ async def test_migration(manager: ScyllaClusterManager, scale_timeout):
     5. Restart the node (triggers resharding on vnode boundaries).
        - Verify that the new SSTables are properly segregated within vnode boundaries.
        - Verify data integrity.
+       - Verify that tablet repair of the table is refused.
     6. Finalize the migration.
        - Verify that the keyspace schema has tablets enabled.
+    7. Repair the table with tablet repair.
+       - Verify that the request is accepted and the data is intact.
     """
     num_shards = 3
     tokens_per_node = 16
@@ -435,6 +438,13 @@ async def test_migration(manager: ScyllaClusterManager, scale_timeout):
             expected_status='migrating_to_tablets',
             expected_node_statuses={host_id: ('tablets', 'tablets')})
 
+        # The table now uses a tablet-based ERM on the node, but the keyspace
+        # still uses vnodes. Reproduces SCYLLADB-6707.
+        logger.info("Verifying that tablet repair of the table is refused before finalization")
+        with pytest.raises(HTTPError, match="because it is being migrated from vnodes to tablets") as e:
+            await manager.api.tablet_repair(server.ip_addr, ks, "test", "all")
+        assert e.value.code == 400
+
         logger.info("Finalizing tablets migration")
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
@@ -447,6 +457,10 @@ async def test_migration(manager: ScyllaClusterManager, scale_timeout):
 
         logger.info("Waiting for pow2 convergence to complete")
         await wait_for_pow2_convergence(manager, server, ks, 'test', timeout=scale_timeout(120))
+
+        logger.info("Verifying that tablet repair of the migrated table is accepted")
+        await manager.api.tablet_repair(server.ip_addr, ks, "test", "all")
+        await verify_data_integrity(cql, ks, "test", num_keys)
 
 
 async def test_migration_rollback(manager: ScyllaClusterManager):
@@ -1289,6 +1303,23 @@ async def test_migration_task_not_abortable(manager: ScyllaClusterManager):
         # Rollback: schema changes are not yet supported for migrating keyspaces.
         # TODO: Remove this once support is added.
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+
+async def test_migration_tablet_repair_refused(manager: ScyllaClusterManager):
+    """Verify that tablet repair of a table under migration is refused.
+
+    The table already has a tablet map, but its keyspace still uses vnodes,
+    and repair isn't allowed during the migration. Reproduces SCYLLADB-6707.
+    """
+    server, cql = await setup_single_node(manager)
+
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}")
+    await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
+    await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+    with pytest.raises(HTTPError, match="because it is being migrated from vnodes to tablets") as e:
+        await manager.api.tablet_repair(server.ip_addr, ks, "t", "all")
+    assert e.value.code == 400
 
 
 async def test_migration_wait_task(manager: ScyllaClusterManager):

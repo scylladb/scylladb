@@ -12,6 +12,7 @@ import time
 from ..cqlpy.util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
 from test.rest_api.rest_util import new_test_snapshot, scylla_inject_error, ThreadWrapper, set_logger_level
 from test.cqlpy.test_logs import wait_for_log, logfile, logfile_path
+from test.cqlpy.rest_api import wait_for_injection_enter, message_injection
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
@@ -877,6 +878,105 @@ def test_storage_service_repair_parallelism_invalid(rest_api, parallelism):
 def test_storage_service_repair_int_option_invalid(rest_api, option, value):
     resp = rest_api.send("POST", "storage_service/repair_async/system", {option: value})
     assert resp.status_code == requests.codes.bad_request
+
+# A tablet repair request for a table that doesn't use tablets is refused
+# with 400, not a 500 from the missing tablet map. Reproduces SCYLLADB-6707.
+def test_storage_service_tablet_repair_vnode_table(cql, test_keyspace_vnodes, rest_api, skip_without_tablets):
+    with new_test_table(cql, test_keyspace_vnodes, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        resp = rest_api.send("POST", "storage_service/tablets/repair", {"ks": test_keyspace_vnodes, "table": table, "tokens": "all"})
+        assert resp.status_code == requests.codes.bad_request
+        assert "doesn't use tablets" in resp.text
+
+# The task manager finds a repair task in system.repair_tasks even when no
+# tablet map carries it, and that table outlives the tablet map of a dropped
+# table. Reproduces SCYLLADB-6708.
+def test_storage_service_tablet_repair_abort_after_table_drop(cql, test_keyspace, rest_api, skip_without_tablets):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        resp = rest_api.send("POST", "storage_service/tablets/repair", {"ks": test_keyspace, "table": table, "tokens": "all", "await_completion": "true"})
+        resp.raise_for_status()
+        task_id = resp.json()["tablet_task_id"]
+        cql.execute(f"DROP TABLE {t}")
+
+        resp = rest_api.send("POST", f"task_manager/abort_task/{task_id}")
+        assert resp.status_code == requests.codes.ok, resp.text
+
+# Getting the status of a repair task checks that the table has a tablet map,
+# and then uses the map. A drop of the table in between, while the call
+# yields, used to fail it with 500. Reproduces SCYLLADB-6708.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+def test_storage_service_tablet_repair_status_table_drop_race(cql, test_keyspace, rest_api, skip_without_tablets):
+    injection = "tablet_virtual_task_get_status_wait"
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        resp = rest_api.send("POST", "storage_service/tablets/repair", {"ks": test_keyspace, "table": table, "tokens": "all", "await_completion": "true"})
+        resp.raise_for_status()
+        task_id = resp.json()["tablet_task_id"]
+
+        with scylla_inject_error(rest_api, injection):
+            # The call has a timeout, so that the thread ends even if the node doesn't answer.
+            status = ThreadWrapper(target=lambda: rest_api.send("GET", f"task_manager/task_status/{task_id}", timeout=120))
+            status.start()
+            try:
+                wait_for_injection_enter(cql, injection)
+                cql.execute(f"DROP TABLE {t}")
+            finally:
+                message_injection(cql, injection)
+                # Wait without re-raising the call's error, which would hide a failure above.
+                threading.Thread.join(status)
+    resp = status.join()
+    assert resp.status_code == requests.codes.ok, resp.text
+
+# The status of the repair task of a dropped table comes from
+# system.repair_tasks, so a finished repair is reported as done, by both
+# status and wait. Reproduces SCYLLADB-6708.
+def test_storage_service_tablet_repair_status_after_table_drop(cql, test_keyspace, rest_api, skip_without_tablets):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        resp = rest_api.send("POST", "storage_service/tablets/repair", {"ks": test_keyspace, "table": table, "tokens": "all", "await_completion": "true"})
+        resp.raise_for_status()
+        task_id = resp.json()["tablet_task_id"]
+        cql.execute(f"DROP TABLE {t}")
+
+        for path in (f"task_manager/task_status/{task_id}", f"task_manager/wait_task/{task_id}"):
+            resp = rest_api.send("GET", path)
+            assert resp.status_code == requests.codes.ok, resp.text
+            assert resp.json()["state"] == "done", f"{path}: {resp.text}"
+
+# A tablet repair call waiting for completion returns when the table is
+# dropped. Reproduces SCYLLADB-6725.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+def test_storage_service_tablet_repair_await_completion_table_drop(cql, test_keyspace, rest_api, skip_without_tablets):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        table_id = cql.execute(f"SELECT id FROM system_schema.tables "
+                               f"WHERE keyspace_name = '{test_keyspace}' "
+                               f"AND table_name = '{table}'").one().id
+
+        def request_queued():
+            rows = cql.execute(f"SELECT pending_repair_request, repair_task_info FROM system.tablets "
+                               f"WHERE table_id = {table_id}")
+            return any(row.pending_repair_request or row.repair_task_info for row in rows)
+
+        # Keep the request from being scheduled, so that the call waits until the table is dropped.
+        with scylla_inject_error(rest_api, "tablet_skip_repair_plan"):
+            # The call has a timeout, so that the thread ends even if the node doesn't answer.
+            repair = ThreadWrapper(target=lambda: rest_api.send("POST", "storage_service/tablets/repair",
+                    {"ks": test_keyspace, "table": table, "tokens": "all", "await_completion": "true"}, timeout=120))
+            repair.start()
+            try:
+                deadline = time.time() + 60
+                while not request_queued():
+                    assert repair.is_alive() and time.time() < deadline, "the repair request wasn't queued"
+                    time.sleep(0.1)
+            finally:
+                # Dropping the table ends the call whether or not the request was queued.
+                cql.execute(f"DROP TABLE {t}")
+                # Wait without re-raising the call's error, which would hide a failure above.
+                threading.Thread.join(repair)
+    resp = repair.join()
+    assert resp.status_code == requests.codes.ok, resp.text
 
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
