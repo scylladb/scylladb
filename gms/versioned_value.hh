@@ -145,6 +145,10 @@ public:
         return versioned_value(to_sstring(int(value)));
     };
 
+    static versioned_value services_not_ready(const std::set<std::string_view>& services) {
+        return versioned_value(fmt::to_string(fmt::join(services, ",")));
+    }
+
     static versioned_value state_id(const service::state_id& state_id) {
         return versioned_value(state_id.to_sstring());
     }

@@ -56,6 +56,14 @@ Cluster state
 * Disk utilization on every node should be **below 50%**. This headroom helps
   prevent problems during the migration's resharding phase, which temporarily
   requires additional disk space.
+* If tables in the keyspace use LWT, each node also needs room for a copy of
+  their Paxos state. When a node restarts into tablets, it copies the state
+  from ``system.paxos`` into ``<table>$paxos`` tables, and the old state stays
+  in ``system.paxos`` until it expires,
+  `paxos_grace_seconds <https://docs.scylladb.com/stable/cql/cql-extensions.html#paxos-grace-seconds-per-table-option>`_
+  (10 days by default) after its last write. ``nodetool tablestats system.paxos``
+  shows an upper bound for the size of that state, as ``system.paxos`` also holds
+  the state of tables in other keyspaces.
 
 Keyspace and table configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -113,14 +121,14 @@ The current migration procedure has the following limitations:
   Do not take snapshots, run backups, or restore into the migrating keyspace
   while the migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
-* Only **CQL tables, materialized views, and secondary indexes** can be
-  migrated. CDC tables and Alternator tables are not supported. Views whose
+* Only **CQL tables, materialized views, secondary indexes, and Paxos state
+  tables (LWT)** can be migrated. CDC tables and Alternator tables are not
+  supported. Views whose
   partition key consists of exactly the base table's partition key columns,
   in the same order, including the backing views of local secondary indexes,
   are migrated as :term:`co-located tables <Colocated Table>` with their base
   table (sharing its tablets). Other views, including the backing views of
   global secondary indexes, get tablets of their own.
-* Tables with **LWTs** cannot be migrated.
 * Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
   Other compaction strategies are not supported.
 
@@ -131,6 +139,9 @@ The migration consists of three phases:
 
 1. **Prepare**: Create tablet maps for all tables in the keyspace. Each tablet
    inherits its token range and replica set from the corresponding vnode range.
+   A table that uses LWT during the migration, or has Paxos state when a node
+   is upgraded, also gets the table that holds its Paxos state on tablets,
+   ``<table>$paxos``.
 2. **Storage upgrade**: Restart each node one at a time, upgrading its storage
    from vnodes to tablets. Upon restart, the node begins resharding data into
    tablets. This is a storage-layer operation and is unrelated to ScyllaDB
@@ -149,6 +160,18 @@ vnodes. However, once the migration is finalized, it cannot be reversed.
 
 Procedure
 ---------
+
+#. If any table in the cluster uses LWT, check its
+   `paxos_grace_seconds <https://docs.scylladb.com/stable/cql/cql-extensions.html#paxos-grace-seconds-per-table-option>`_
+   (10 days by default). LWT needs a repair at least once every
+   ``paxos_grace_seconds``, and repairs don't run during the migration. Run a
+   full cluster repair right before the migration, so that it has a full
+   ``paxos_grace_seconds``. If the migration may take longer, increase
+   ``paxos_grace_seconds`` before that repair.
+
+   To estimate how long the migration takes, time the upgrade of a single node
+   in a trial run (steps 2 to 4 below, for one node only), then roll it back
+   (see :ref:`Rollback Procedure <rollback-procedure>`).
 
 #. If the cluster is managed by `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_,
    `suspend <https://manager.docs.scylladb.com/stable/sctool/suspend-resume.html>`_
@@ -321,6 +344,49 @@ Procedure
          process and both appear in ``nodetool tasks list compaction``. Wait for
          both to complete before proceeding to the next step.
 
+         If tables in the keyspace use LWT, the node copies their Paxos state
+         from ``system.paxos`` into ``<table>$paxos`` tables after resharding and
+         reshaping. The copy appears as a ``paxos_state_copy`` task. Wait for it
+         to complete too:
+
+         .. code-block:: console
+
+            nodetool tasks list vnodes_to_tablets_migration
+
+         **Example:**
+
+         .. code-block:: console
+
+            $ nodetool tasks list vnodes_to_tablets_migration
+            task_id                              type                        kind    scope    state   sequence_number keyspace table entity shard start_time           end_time
+            b25f5c70-b98e-4566-8147-e14039c2f2b3 paxos_state_copy            node    node     running 1                                     0     2026-11-24T19:58:21Z
+            1747b573-6cd6-312d-abb1-9b66c1c2d81f vnodes_to_tablets_migration cluster keyspace running 0               ks                    0
+
+         Use ``nodetool tasks status`` to see its progress, the percentage of
+         the Paxos state the node has copied:
+
+         .. code-block:: console
+
+            $ nodetool tasks status b25f5c70-b98e-4566-8147-e14039c2f2b3
+            id: b25f5c70-b98e-4566-8147-e14039c2f2b3
+            type: paxos_state_copy
+            kind: node
+            scope: node
+            state: running
+            is_abortable: false
+            start_time: 2026-11-24T19:58:21Z
+            end_time:
+            error:
+            parent_id: none
+            sequence_number: 1
+            shard: 0
+            keyspace:
+            table:
+            entity:
+            progress_units: percent
+            progress_total: 100
+            progress_completed: 60.49
+
    #. Verify that the node status changed from ``migrating to tablets`` to ``uses tablets``:
 
       .. code-block:: console
@@ -408,7 +474,7 @@ Procedure
          t2      converging   2176      2048
          t3      converged    2048      -
 
-#. If you suspended ScyllaDB Manager in the first step, resume it:
+#. If you suspended ScyllaDB Manager in step 2, resume it:
 
    .. code-block:: console
 
@@ -447,6 +513,11 @@ Procedure
       nodetool cluster repair
 
    Run both if the cluster has keyspaces of both kinds.
+
+   If you increased ``paxos_grace_seconds`` before the migration, restore its
+   previous value after this repair.
+
+.. _rollback-procedure:
 
 Rollback Procedure
 ------------------
@@ -612,6 +683,49 @@ following:
             process and both appear in ``nodetool tasks list compaction``. Wait for
             both to complete before proceeding to the next node.
 
+            If tables in the keyspace use LWT, the node copies their Paxos state
+            from the ``<table>$paxos`` tables into ``system.paxos`` after
+            resharding and reshaping. The copy appears as a ``paxos_state_copy``
+            task. Wait for it to complete too:
+
+            .. code-block:: console
+
+               nodetool tasks list vnodes_to_tablets_migration
+
+            **Example:**
+
+            .. code-block:: console
+
+               $ nodetool tasks list vnodes_to_tablets_migration
+               task_id                              type                        kind    scope    state   sequence_number keyspace table entity shard start_time           end_time
+               b25f5c70-b98e-4566-8147-e14039c2f2b3 paxos_state_copy            node    node     running 1                                     0     2026-11-24T19:58:21Z
+               1747b573-6cd6-312d-abb1-9b66c1c2d81f vnodes_to_tablets_migration cluster keyspace running 0               ks                    0
+
+            Use ``nodetool tasks status`` to see its progress, the percentage of
+            the Paxos state the node has copied:
+
+            .. code-block:: console
+
+               $ nodetool tasks status b25f5c70-b98e-4566-8147-e14039c2f2b3
+               id: b25f5c70-b98e-4566-8147-e14039c2f2b3
+               type: paxos_state_copy
+               kind: node
+               scope: node
+               state: running
+               is_abortable: false
+               start_time: 2026-11-24T19:58:21Z
+               end_time:
+               error:
+               parent_id: none
+               sequence_number: 1
+               shard: 0
+               keyspace:
+               table:
+               entity:
+               progress_units: percent
+               progress_total: 100
+               progress_completed: 60.49
+
       #. Verify that the node status changed from ``migrating to vnodes`` to ``uses vnodes``:
 
          .. code-block:: console
@@ -674,6 +788,9 @@ following:
       nodetool cluster repair
 
    Run both if the cluster has keyspaces of both kinds.
+
+   If you increased ``paxos_grace_seconds`` before the migration, restore its
+   previous value after this repair.
 
 Migrating multiple keyspaces
 ----------------------------

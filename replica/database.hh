@@ -1899,9 +1899,11 @@ private:
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
-    // The mode this node applied when it built its tables at boot, i.e. the one it is
-    // actually running in. A change of intent only takes effect on the next restart.
-    std::optional<service::storage_mode> _boot_storage_mode;
+    // The storage mode in which this node runs the tables under vnodes-to-tablets migration.
+    // Set at boot from the node's intended mode: a change of intent only takes effect on the
+    // next restart. Cleared once the node has no intended mode any more, i.e. no migration
+    // is in progress.
+    std::optional<service::storage_mode> _node_storage_mode;
     std::vector<std::any> _listeners;
     locator::shared_token_metadata& _shared_token_metadata;
     lang::manager& _lang_manager;
@@ -2055,7 +2057,8 @@ public:
         return _compaction_manager;
     }
 
-    std::optional<service::storage_mode> get_boot_storage_mode() const noexcept { return _boot_storage_mode; }
+    std::optional<service::storage_mode> get_node_storage_mode() const noexcept { return _node_storage_mode; }
+    void clear_node_storage_mode() noexcept { _node_storage_mode = std::nullopt; }
 
     locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     locator::token_metadata_ptr get_token_metadata_ptr() const { return _shared_token_metadata.get(); }
@@ -2080,9 +2083,9 @@ public:
     void init_schema_commitlog();
 
     using is_new_cf = bool_class<struct is_new_cf_tag>;
-    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr, std::optional<service::storage_mode> storage_mode = std::nullopt);
+    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr);
     future<> make_column_family_directory(schema_ptr schema);
-    future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new, std::optional<service::storage_mode> storage_mode = std::nullopt);
+    future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new);
 
 
     /* throws no_such_column_family if missing */

@@ -597,6 +597,8 @@ public:
     bool is_shutdown(const endpoint_state& eps) const;
     bool is_normal(const locator::host_id& endpoint) const;
     bool is_cql_ready(const locator::host_id& endpoint) const;
+    // Whether the node is ready for `service`, see endpoint_state::is_ready_for().
+    bool is_ready_for(const locator::host_id& endpoint, std::string_view service) const;
     void force_newer_generation();
 public:
     sstring get_gossip_status(const endpoint_state& ep_state) const noexcept;

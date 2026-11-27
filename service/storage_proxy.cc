@@ -335,6 +335,10 @@ public:
         return _gossiper.is_alive(ep);
     }
 
+    bool is_ready_for(const locator::host_id& ep, std::string_view service) const {
+        return _gossiper.is_ready_for(ep, service);
+    }
+
     db::system_keyspace& system_keyspace() {
         return _sys_ks.local();
     }
@@ -3490,6 +3494,10 @@ storage_proxy::storage_proxy(sharded<replica::database>& db, storage_proxy::conf
     }
 }
 
+paxos::paxos_store& storage_proxy::get_paxos_store() {
+    return remote().paxos_store();
+}
+
 struct storage_proxy::remote& storage_proxy::remote() {
     return const_cast<struct remote&>(const_cast<const storage_proxy*>(this)->remote());
 }
@@ -4332,8 +4340,12 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
     live_endpoints.reserve(participants);
 
     auto all_as_spans = std::array{std::span(natural_endpoints), std::span(pending_endpoints)};
+    // A node which copies its Paxos state after a storage mode switch lists Paxos in its
+    // SERVICES_NOT_READY. Count it as down.
     std::ranges::copy(all_as_spans | std::views::join |
-            std::views::filter(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm))), std::back_inserter(live_endpoints));
+            std::views::filter([&] (const locator::host_id& ep) {
+                return is_alive(erm, ep) && (!_remote || _remote->is_ready_for(ep, gms::service_paxos));
+            }), std::back_inserter(live_endpoints));
 
     if (live_endpoints.size() < required_participants) {
         throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
@@ -7081,7 +7093,9 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
     // Take the guardrail before the first co_await: a concurrent DROP TABLE can
     // destroy the table while cas() is suspended.
     auto ld_guardrail = bypass_large_data_guardrails ? db::noop_large_data_guardrail::instance() : table.get_large_data_guardrail();
-    if (table.uses_tablets()) {
+    const bool migrating_to_tablets = !table.uses_tablets()
+            && cas_shard.get_erm()->get_token_metadata().tablets().has_tablet_map(schema->id());
+    if (table.uses_tablets() || migrating_to_tablets) {
         if (!_features.lwt_with_tablets) {
             auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
             co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));

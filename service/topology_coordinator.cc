@@ -82,6 +82,7 @@
 #include "service/strong_consistency/serving_set.hh"
 #include "idl/storage_service.dist.hh"
 #include "replica/exceptions.hh"
+#include "service/paxos/paxos_state.hh"
 #include "service/paxos/prepare_response.hh"
 #include "idl/storage_proxy.dist.hh"
 #include "utils/updateable_value.hh"
@@ -1917,6 +1918,21 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         // Rollback: delete tablet maps for all tables in the keyspace.
                         for (const auto& schema : tables) {
                             updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
+                        }
+                        // Drop the Paxos state tables LWT coordinators made during the migration.
+                        // Every node copied their state back into system.paxos when it restarted
+                        // into vnodes, so nothing uses them any more. Coordinators make no new
+                        // ones once the maps are gone.
+                        // The schema change goes in directly: the keyspace still has tablet
+                        // maps, so the regular path would reject it.
+                        for (const auto& schema : tables) {
+                            if (!paxos::paxos_store::try_get_base_table(schema->cf_name())) {
+                                continue;
+                            }
+                            rtlogger.info("finalize_migration: dropping Paxos state table {}.{}", ks_name, schema->cf_name());
+                            for (auto& m : db::schema_tables::make_drop_table_mutations(ks.metadata(), schema, guard.write_timestamp())) {
+                                updates.emplace_back(std::move(m));
+                            }
                         }
                     }
                 } catch (const std::exception& e) {
@@ -3958,6 +3974,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // in the same command as the base table's map.
         std::unordered_map<table_id, std::vector<std::pair<table_id, sstring>>> tables_to_colocate;
         for (const auto& [name, schema] : ks.metadata()->cf_meta_data()) {
+            if (paxos::paxos_store::try_get_base_table(name)) {
+                // LWT coordinators make Paxos state tables while the keyspace migrates, each
+                // with the tablet map of its base table (see paxos_store::ensure_initialized()).
+                // Counting them would make the total grow between passes.
+                continue;
+            }
             ++all_tables;
             if (tmptr->tablets().has_tablet_map(schema->id())) {
                 continue;
@@ -4120,6 +4142,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // A keyspace which uses tablets by now is not this request's any more, and its maps
         // are all its tables have, so it is left alone.
         const bool ks_uses_tablets = _db.has_keyspace(ks_name) && _db.find_keyspace(ks_name).uses_tablets();
+        // Whether the updates drop tables, which the nodes must merge into their schema.
+        bool changes_schema = false;
         if (!error.empty() && req.prepare_migration_tables && !ks_uses_tablets) {
             // The request fails as a whole, so drop the maps its earlier commands wrote, in
             // the command which fails it. These are the maps of the tables it records: it
@@ -4129,11 +4153,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             // request may have written for it.
             const auto tmptr = get_token_metadata_ptr();
             size_t dropped = 0;
-            for (const auto& [tid, _] : *req.prepare_migration_tables) {
+            auto drop_map = [&] (table_id tid) {
                 if (tmptr->tablets().has_tablet_map(tid)) {
                     updates.emplace_back(replica::make_drop_tablet_map_mutation(tid, guard.write_timestamp()));
                     ++dropped;
                 }
+            };
+            for (const auto& [tid, _] : *req.prepare_migration_tables) {
+                if (_db.column_family_exists(tid)) {
+                    // An LWT coordinator may have made the Paxos state table of `tid` since its
+                    // map was written. It shares that map, so drop it too.
+                    const auto& s = *_db.find_schema(tid);
+                    const auto state_table_name = paxos::paxos_store::paxos_state_table_name(s.cf_name());
+                    if (_db.has_schema(ks_name, state_table_name)) {
+                        const auto state_schema = _db.find_schema(ks_name, state_table_name);
+                        drop_map(state_schema->id());
+                        for (auto& m : db::schema_tables::make_drop_table_mutations(_db.find_keyspace(ks_name).metadata(),
+                                state_schema, guard.write_timestamp())) {
+                            updates.emplace_back(std::move(m));
+                        }
+                        changes_schema = true;
+                        rtlogger.info("Dropping the Paxos state table {}.{} of the failed preparation", ks_name, state_table_name);
+                    }
+                }
+                drop_map(tid);
             }
             if (dropped) {
                 rtlogger.info("Dropping the {} tablet map(s) the failed preparation of keyspace '{}' wrote",
@@ -4164,6 +4207,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
 
         sstring reason = fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name);
+        if (complete && error.empty()) {
+            // Nodes may switch to tablets once the request is done. Make every coordinator
+            // see the maps first, so that it creates the Paxos state tables (see
+            // paxos_store::ensure_initialized()). Down nodes are covered by the fence.
+            updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                                      .set_version(_topo_sm._topology.version + 1)
+                                      .build());
+            co_await update_topology_state(std::move(guard), std::move(updates), reason + ", last part");
+            updates = {};
+            guard = co_await start_operation();
+            auto exclude_nodes = _topo_sm._topology.ignored_nodes;
+            for (const auto& host : get_dead_nodes()) {
+                exclude_nodes.insert(raft::server_id{host.uuid()});
+            }
+            guard = co_await global_token_metadata_barrier(std::move(guard), std::move(exclude_nodes));
+        }
         if (complete) {
             updates.emplace_back(topology_request_tracking_mutation_builder(req_id)
                                       .done(error)
@@ -4176,7 +4235,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             reason += fmt::format(", part: {} of {} table(s) prepared", progress.prepared, progress.total);
         }
 
-        co_await update_topology_state(std::move(guard), std::move(updates), reason);
+        if (changes_schema) {
+            // A topology change would write the schema mutations without dropping the
+            // tables on the nodes.
+            co_await update_topology_state_with_mixed_change(std::move(guard), std::move(updates), reason);
+        } else {
+            co_await update_topology_state(std::move(guard), std::move(updates), reason);
+        }
 
         if (!complete) {
             // After the command is applied, so it stands for a part really committed.

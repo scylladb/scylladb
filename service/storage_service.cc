@@ -687,6 +687,14 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
 
+    if (_db.local().get_node_storage_mode()) {
+        const auto* rs = topology.find(raft::server_id{get_token_metadata().get_my_id().uuid()});
+        if (!rs || !rs->second.intended_storage_mode) {
+            rtlogger.info("topology_state_load: no vnodes-to-tablets migration in progress, clearing the node's storage mode");
+            co_await _db.invoke_on_all(&replica::database::clear_node_storage_mode);
+        }
+    }
+
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(topology.enabled_features | std::ranges::to<std::set<std::string_view>>());
     });
@@ -1495,7 +1503,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     // either way, and that is what the node has to report.
     storage_mode local_storage_mode = storage_mode::vnodes;
     if (report_storage_mode) {
-        local_storage_mode = _db.local().get_boot_storage_mode().value_or(storage_mode::vnodes);
+        local_storage_mode = _db.local().get_node_storage_mode().value_or(storage_mode::vnodes);
     }
 
     // Reconcile only while the row still records an intent, or a node booting after
@@ -1611,6 +1619,12 @@ future<> storage_service::start_sys_dist_ks() const {
     return _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
 }
 
+future<> storage_service::mark_service_ready(std::string_view service) {
+    _services_not_ready.erase(service);
+    co_await _gossiper.add_local_application_state(gms::application_state::SERVICES_NOT_READY,
+            gms::versioned_value::services_not_ready(_services_not_ready));
+}
+
 future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
@@ -1686,6 +1700,11 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     app_states.emplace(gms::application_state::CACHE_HITRATES, versioned_value::cache_hitrates(""));
     app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
     app_states.emplace(gms::application_state::RPC_READY, versioned_value::cql_ready(false));
+    auto& paxos_store = proxy.local().get_paxos_store();
+    if (paxos_store.has_pending_copy()) {
+        _services_not_ready.insert(gms::service_paxos);
+    }
+    app_states.emplace(gms::application_state::SERVICES_NOT_READY, versioned_value::services_not_ready(_services_not_ready));
     app_states.emplace(gms::application_state::VIEW_BACKLOG, versioned_value(""));
     app_states.emplace(gms::application_state::SCHEMA, versioned_value::schema(_db.local().get_version()));
     if (restarting_normal_node) {
@@ -1811,6 +1830,16 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         }
     }
 
+    if (paxos_store.has_pending_copy()) {
+        // Perform the Paxos state copy.
+        // Do it before the node publishes its new storage mode, so that a crash in the middle
+        // copies again, and forward finalization waits for the copy.
+        auto task = co_await _vnodes_to_tablets_migration_module->start_paxos_state_copy(paxos_store);
+        co_await task->done();
+        co_await mark_service_ready(gms::service_paxos);
+        slogger.info("Copied the Paxos state after the storage mode switch, the node is ready to serve Paxos RPCs");
+    }
+
     co_await update_topology_with_local_metadata(raft_server);
 
     // Node state is enough to know that bootstrap has completed, but to make legacy code happy
@@ -1921,6 +1950,12 @@ future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id
         if (states.contains(application_state::RPC_READY)) {
             slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
             co_await notify_cql_change(endpoint, host_id, ep_state->is_cql_ready());
+        }
+        if (auto it = states.find(application_state::SERVICES_NOT_READY); it != states.end()) {
+            const auto services = it->second.value().linearize();
+            slogger.info("Node {}/{} {}", endpoint, host_id, services.empty()
+                    ? std::string("is ready for replica traffic")
+                    : fmt::format("is not ready for {}", services));
         }
         if (auto it = states.find(application_state::INTERNAL_IP); it != states.end()) {
             co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value().linearize()), host_id);
@@ -2282,19 +2317,15 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
                 if (auto pt_rs = rs->maybe_as_per_table()) {
                     erm = pt_rs->make_replication_map(id, tmptr);
                 } else {
-                    const locator::abstract_replication_strategy *old_rs = ss.get_database().column_family_exists(id)
-                            ? &ss.get_database().find_column_family(id).get_effective_replication_map()->get_replication_strategy()
-                            : nullptr;
-                    if (old_rs && old_rs->uses_tablets()) {
+                    auto table_is_migrating = tmptr->tablets().has_tablet_map(id);
+                    if (table_is_migrating && ss.get_database().get_node_storage_mode() == storage_mode::tablets) {
                         // The table is under vnodes-to-tablets migration:
                         // the keyspace uses vnodes, but the table uses a tablet-based ERM.
-                        // Preserve the tablet flavor of the ERM.
                         // The ERM flavor is a node-local setting that expresses
                         // the node's storage organization, which can change only
                         // on startup after resharding (while the node is offline).
-                        // It is determined on startup by the distributed loader.
-                        auto old_tablet_rs = old_rs->maybe_as_tablet_aware();
-                        locator::replication_strategy_params params(rs->get_config_options(), old_tablet_rs->get_initial_tablets(), old_tablet_rs->get_consistency());
+                        // It follows the node's storage mode, as in add_column_family().
+                        locator::replication_strategy_params params(rs->get_config_options(), 0, std::nullopt);
                         auto& ks = ss.get_database().find_keyspace(table_schema->ks_name());
                         auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(ks.metadata()->strategy_name(), params, tmptr->get_topology());
                         auto pt_rs = tablet_rs->maybe_as_per_table();
@@ -4195,6 +4226,10 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the"
                 " PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION cluster feature");
     }
+    if (!_feature_service.vnodes_to_tablets_migration_lwt) {
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the"
+                " VNODES_TO_TABLETS_MIGRATION_LWT cluster feature");
+    }
 
     slogger.info("Preparing vnodes-to-tablets migration for keyspace '{}'", ks_name);
 
@@ -4316,6 +4351,19 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     auto& raft_server = _group0->group0_server();
+
+    // Refuse until this node, during its boot, publishes the mode it runs in as its
+    // current_storage_mode. Without this check, a finalization would compare the new
+    // intended mode with a stale current mode.
+    if (_feature_service.topology_current_storage_mode) {
+        const auto booted = _db.local().get_node_storage_mode();
+        const auto* rs = _topology_state_machine._topology.find(raft_server.id());
+        if (booted && rs && rs->second.current_storage_mode != booted) {
+            throw std::runtime_error(::format("Cannot set intended storage mode to {}: this node is still starting up"
+                    " after a storage mode switch. Please wait for it to finish and retry.", mode));
+        }
+    }
+
     auto holder = _group0->hold_group0_gate();
 
     slogger.info("Setting intended storage mode for node {} to {}", raft_server.id(), mode);

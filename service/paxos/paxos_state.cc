@@ -18,6 +18,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/untyped_result_set_idl_utils.hh"
+#include "db/large_data_handler.hh"
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "replica/database.hh"
@@ -33,6 +34,10 @@
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/raft/raft_group_registry.hh"
+#include "cdc/log.hh"
+#include "readers/mutation_reader.hh"
+#include "locator/tablets.hh"
 
 namespace service::paxos {
 
@@ -121,6 +126,7 @@ future<token_guard> paxos_state::get_cas_lock(const dht::token& key, clock_type:
 future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
+    paxos_store.check_paxos_ready();
     dht::token token = dht::get_token(*schema, key);
     utils::latency_counter lc;
     lc.start();
@@ -212,6 +218,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
 future<bool> paxos_state::accept(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
     co_await utils::get_local_injector().inject("paxos_accept_proposal_wait", utils::wait_for_message(std::chrono::minutes(2)));
+    paxos_store.check_paxos_ready();
     utils::latency_counter lc;
     lc.start();
 
@@ -336,7 +343,7 @@ static sstring paxos_state_cf_filter(const schema& s, const schema& state_schema
 
 static const sstring paxos_state_table_suffix = "$paxos";
 
-static sstring paxos_state_table_name(std::string_view table_name) {
+sstring paxos_store::paxos_state_table_name(std::string_view table_name) {
     sstring result(sstring::initialized_later(), table_name.size() + paxos_state_table_suffix.size());
     auto it = result.begin();
     it = std::copy(table_name.begin(), table_name.end(), it);
@@ -367,6 +374,15 @@ future<> paxos_store::stop() {
         ? _mm.get_notifier().unregister_listener(this) 
         : make_ready_future<>();
     return stopped.then([this] { _stopped = true; });
+}
+
+future<double> paxos_store::get_copy_progress() {
+    const auto [completed, total] = co_await container().map_reduce0([] (const paxos_store& store) {
+        return std::pair(store._copy_progress.completed, store._copy_progress.total);
+    }, std::pair(0.0, 0.0), [] (std::pair<double, double> a, std::pair<double, double> b) {
+        return std::pair(a.first + b.first, a.second + b.second);
+    });
+    co_return total ? 100 * completed / total : 0;
 }
 
 void paxos_store::prune_invalid_prepared_statements() {
@@ -434,6 +450,14 @@ future<> paxos_store::create_paxos_state_table(const schema& s, db::timeout_cloc
 
                 break;
             }
+            if (!_db.find_keyspace(s.ks_name()).uses_tablets()
+                    && !_mm.get_storage_proxy().get_token_metadata_ptr()->tablets().has_tablet_map(s.id())) {
+                // The migration of the keyspace was rolled back meanwhile, so the nodes
+                // keep the Paxos state of the table in system.paxos again.
+                paxos_state::logger.info("Not creating paxos state table for \"{}.{}\": the keyspace rolled back to vnodes",
+                        s.ks_name(), s.cf_name());
+                break;
+            }
             const auto state_schema = create_paxos_state_schema(s);
             auto muts = co_await prepare_new_column_family_announcement(_mm.get_storage_proxy(), 
                 std::move(state_schema),
@@ -473,6 +497,12 @@ void paxos_store::on_before_drop_column_family(const schema& schema, utils::chun
             drop_views::yes,
             true).get();
         mutations.insert(mutations.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
+    }
+}
+
+void paxos_store::check_paxos_ready() const {
+    if (has_pending_copy()) {
+        throw std::runtime_error("This node is not ready for Paxos: it copies its Paxos state after a storage mode switch");
     }
 }
 
@@ -768,6 +798,313 @@ future<> paxos_store::delete_paxos_decision(const schema& s, const partition_key
             utils::UUID_gen::micros_timestamp(ballot),
             to_legacy(*key.get_compound_type(s), key.representation())
         );
+}
+
+// Copies into `dst` the row marker and cells of `src` which are live at `now` under
+// `tomb`, keeping their timestamps and expiry. Returns whether it copied anything.
+static bool copy_live_row(const schema& dst_schema, deletable_row& dst, const schema& src_schema, const deletable_row& src,
+        tombstone tomb, gc_clock::time_point now) {
+    bool copied = false;
+    if (src.marker().is_live(tomb, now)) {
+        dst.apply(src.marker());
+        copied = true;
+    }
+    src.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+        const auto& src_def = src_schema.regular_column_at(id);
+        if (!c.as_atomic_cell(src_def).is_live(tomb, now, false)) {
+            return;
+        }
+        // Both Paxos state schemas are expected to have the same regular columns.
+        dst.cells().apply(dst_schema.regular_column_at(id), c.copy(*src_def.type));
+        copied = true;
+    });
+    return copied;
+}
+
+namespace internal {
+
+utils::chunked_vector<mutation> system_paxos_to_paxos_state_tables(const mutation& system_paxos_mutation,
+        const std::unordered_map<table_id, schema_ptr>& state_schemas, gc_clock::time_point now) {
+    const auto& src_schema = *system_paxos_mutation.schema();
+    const auto& src = system_paxos_mutation.partition();
+    utils::chunked_vector<mutation> result;
+    for (const auto& e : src.clustered_rows()) {
+        const auto base = table_id(value_cast<utils::UUID>(uuid_type->deserialize(e.key().explode(src_schema).front())));
+        const auto it = state_schemas.find(base);
+        if (it == state_schemas.end()) {
+            continue;
+        }
+        const auto& dst_schema = *it->second;
+        // Both tables are keyed by the same row_key blob.
+        mutation m(it->second, system_paxos_mutation.key());
+        auto& row = m.partition().clustered_row(dst_schema, clustering_key::make_empty());
+        if (copy_live_row(dst_schema, row, src_schema, e.row(), src.tombstone_for_row(src_schema, e).tomb(), now)) {
+            result.push_back(std::move(m));
+        }
+    }
+    return result;
+}
+
+std::optional<mutation> paxos_state_table_to_system_paxos(const mutation& state_table_mutation, table_id base,
+        gc_clock::time_point now) {
+    const auto& src_schema = *state_table_mutation.schema();
+    const auto& src = state_table_mutation.partition();
+    const auto dst_schema = db::system_keyspace::paxos();
+    mutation m(dst_schema, state_table_mutation.key());
+    auto& row = m.partition().clustered_row(*dst_schema,
+            clustering_key::from_single_value(*dst_schema, uuid_type->decompose(base.uuid())));
+    bool copied = false;
+    for (const auto& e : src.clustered_rows()) {
+        copied |= copy_live_row(*dst_schema, row, src_schema, e.row(), src.tombstone_for_row(src_schema, e).tomb(), now);
+    }
+    if (!copied) {
+        return std::nullopt;
+    }
+    return m;
+}
+
+} // namespace internal
+
+namespace {
+
+struct copy_stats {
+    size_t copied = 0;
+    size_t skipped = 0;
+
+    copy_stats& operator+=(const copy_stats& o) {
+        copied += o.copied;
+        skipped += o.skipped;
+        return *this;
+    }
+};
+
+} // anonymous namespace
+
+// Applies `convert` to every partition of the table `source_id` stored on this shard and
+// writes what it returns to the memtables of this node, skipping the commitlog. Counts the
+// table in `progress` as it goes: the reader returns the partitions in token order.
+template <typename Convert>
+static future<copy_stats> copy_local_partitions(replica::database& db, table_id source_id,
+        paxos_state_copy_progress& progress, Convert convert) {
+    const auto tables_done = progress.completed;
+    auto& table = db.find_column_family(source_id);
+    auto s = table.schema();
+    auto permit = co_await db.obtain_reader_permit(table, "paxos_state_migration", db::no_timeout, {});
+    auto reader = table.make_streaming_reader(s, std::move(permit), query::full_partition_range, gc_clock::now());
+    copy_stats stats;
+    // Keep several writes in flight, to overlap the applies on other shards, but a bounded
+    // number, as each holds its mutation in memory and waits when memtables are full.
+    constexpr size_t max_writes_in_flight = 64;
+    semaphore writes(max_writes_in_flight);
+    std::exception_ptr write_ex;
+    std::exception_ptr ex;
+    try {
+        while (auto mo = co_await read_mutation_from_mutation_reader(reader)) {
+            progress.completed = tables_done + double(dht::unbias(mo->token())) / 0x1p64;
+            for (auto& m : co_await convert(*mo)) {
+                // system.paxos is in a local keyspace, which cleanup skips, so it keeps the state of
+                // ranges this node no longer replicates, e.g. after another node bootstrapped, until
+                // that state expires. This node has no tablet replica for such ranges, so skip them.
+                const auto& target = db.find_column_family(m.schema());
+                auto shards = target.get_effective_replication_map()->get_sharder(*m.schema()).shard_for_writes(m.token());
+                if (shards.empty()) {
+                    ++stats.skipped;
+                    continue;
+                }
+                if (write_ex) {
+                    break;
+                }
+                auto units = co_await get_units(writes, 1);
+                auto fm = make_lw_shared<const frozen_mutation>(freeze(m));
+                auto gs = make_lw_shared<const global_schema_ptr>(m.schema());
+                // Waited for below, by taking all the units.
+                (void)parallel_for_each(std::move(shards), [&db, fm = fm.get(), gs = gs.get()] (shard_id shard) {
+                    return db.container().invoke_on(shard, [fm, gs] (replica::database& local_db) {
+                        return gs->get(db::no_timeout).then([&local_db, fm] (schema_ptr s) {
+                            return local_db.apply_in_memory(*fm, std::move(s), db::rp_handle(), db::no_timeout,
+                                    db::noop_large_data_guardrail::instance());
+                        });
+                    });
+                }).then_wrapped([fm, gs, units = std::move(units), &write_ex] (future<> f) {
+                    if (f.failed()) {
+                        write_ex = f.get_exception();
+                    }
+                });
+                ++stats.copied;
+            }
+            if (write_ex) {
+                break;
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await writes.wait(max_writes_in_flight);
+    co_await reader.close();
+    if (!ex) {
+        ex = std::move(write_ex);
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    progress.completed = tables_done + 1;
+    co_return stats;
+}
+
+// Whether LWT can run on `s`, so that `s` may get a Paxos state table. Mirrors what
+// storage_proxy::cas() and modification_statement reject.
+static bool supports_lwt(const schema& s) {
+    return !s.is_view() && !s.is_counter() && !cdc::is_log_schema(s) && !paxos_store::try_get_base_table(s.cf_name());
+}
+
+std::optional<paxos_state_copy> plan_paxos_state_copy(replica::database& db, std::optional<storage_mode> current_storage_mode) {
+    // Copy on the restart that switches storage mode, i.e., when the published mode differs from
+    // the one this node booted with. The node publishes its new mode only after the copy, so a
+    // crash in the middle copies again. That's harmless: Paxos never deletes a promise or a commit
+    // ballot, so copying live data again can't bring back state that matters.
+    const auto intended = db.get_node_storage_mode();
+    if (!intended || current_storage_mode.value_or(storage_mode::vnodes) == *intended) {
+        return std::nullopt;
+    }
+
+    paxos_state_copy copy{.to_tablets = *intended == storage_mode::tablets};
+    const auto& tablets = db.get_token_metadata().tablets();
+    for (const auto& ks_name : db.get_non_system_keyspaces()) {
+        const auto& ks = db.find_keyspace(ks_name);
+        if (ks.uses_tablets()) {
+            continue;
+        }
+        for (const auto& s : ks.metadata()->tables()) {
+            if (!tablets.has_tablet_map(s->id()) || !supports_lwt(*s)) {
+                continue;
+            }
+            // A switch back to vnodes only has the state of the tables which have a Paxos
+            // state table to copy.
+            if (copy.to_tablets || db.has_schema(ks_name, paxos_store::paxos_state_table_name(s->cf_name()))) {
+                copy.tables.insert(s->id());
+            }
+        }
+    }
+    if (copy.tables.empty()) {
+        return std::nullopt;
+    }
+    return copy;
+}
+
+// Creates the Paxos state table of `base`, retrying until it succeeds. The copy needs it, and
+// the node can't serve Paxos for `base` without its state.
+static future<> create_paxos_state_table_for_copy(paxos_store& store, const schema& base) {
+    constexpr auto attempt_timeout = std::chrono::seconds(60);
+    while (true) {
+        try {
+            co_await store.ensure_initialized(base, db::timeout_clock::now() + attempt_timeout);
+            co_return;
+        } catch (const raft_operation_timeout_error& e) {
+            paxos_state::logger.warn("Timed out creating the Paxos state table of {}.{} to copy its Paxos state into,"
+                    " retrying: {}", base.ks_name(), base.cf_name(), e.what());
+        } catch (const group0_concurrent_modification& e) {
+            // Other nodes' group0 commands kept conflicting with the creation, beyond the
+            // retries of create_paxos_state_table().
+            paxos_state::logger.warn("Concurrent group0 changes while creating the Paxos state table of {}.{} to copy"
+                    " its Paxos state into, retrying: {}", base.ks_name(), base.cf_name(), e.what());
+        }
+    }
+}
+
+// The schemas of the Paxos state tables of the tables in `copy` which exist on this shard,
+// keyed by their base table.
+static std::unordered_map<table_id, schema_ptr> get_paxos_state_schemas(replica::database& db, const paxos_state_copy& copy) {
+    std::unordered_map<table_id, schema_ptr> result;
+    for (const auto& base : copy.tables) {
+        const auto base_schema = db.find_schema(base);
+        const auto name = paxos_store::paxos_state_table_name(base_schema->cf_name());
+        if (db.has_schema(base_schema->ks_name(), name)) {
+            result.emplace(base, db.find_schema(base_schema->ks_name(), name));
+        }
+    }
+    return result;
+}
+
+future<> paxos_store::copy_pending_state() {
+    const auto copy = *_pending_copy;
+    paxos_state::logger.info("Copying the Paxos state of {} table(s) under vnodes-to-tablets migration from {} to {}",
+            copy.tables.size(), copy.to_tablets ? "system.paxos" : "$paxos tables",
+            copy.to_tablets ? "$paxos tables" : "system.paxos");
+
+    // Only live data is copied. That's enough: Paxos deletes only an accepted proposal and a
+    // commit value, both just to save space, and never a promise or a commit ballot, which it
+    // only overwrites with newer ones. So the copy always carries the latest of them.
+    const auto now = gc_clock::now();
+    const auto stats = co_await container().map_reduce0([&] (paxos_store& store) -> future<copy_stats> {
+        auto& db = store._db;
+        copy_stats stats;
+        auto& progress = store._copy_progress;
+        if (copy.to_tablets) {
+            progress = {.total = 1};
+            auto state_schemas = get_paxos_state_schemas(db, copy);
+            std::unordered_map<table_id, schema_ptr> missing_state_schemas;
+            std::unordered_map<table_id, table_id> base_of_missing;
+            for (const auto& base : copy.tables) {
+                if (!state_schemas.contains(base)) {
+                    auto s = paxos_store::create_paxos_state_schema(*db.find_schema(base));
+                    base_of_missing.emplace(s->id(), base);
+                    missing_state_schemas.emplace(base, std::move(s));
+                }
+            }
+            stats += co_await copy_local_partitions(db, db::system_keyspace::paxos()->id(), progress,
+                    [&] (const mutation& m) -> future<utils::chunked_vector<mutation>> {
+                // A table that saw no LWT since the migration started has no $paxos table yet. Create it
+                // once a partition has live state of the table, which a conversion into its missing
+                // schema detects.
+                if (!missing_state_schemas.empty()) {
+                    for (const auto& converted : internal::system_paxos_to_paxos_state_tables(m, missing_state_schemas, now)) {
+                        const auto base = base_of_missing.at(converted.schema()->id());
+                        co_await create_paxos_state_table_for_copy(store, *db.find_schema(base));
+                        state_schemas = get_paxos_state_schemas(db, copy);
+                        missing_state_schemas.erase(base);
+                    }
+                }
+                co_return internal::system_paxos_to_paxos_state_tables(m, state_schemas, now);
+            });
+        } else {
+            const auto state_schemas = get_paxos_state_schemas(db, copy);
+            progress = {.total = double(state_schemas.size())};
+            for (const auto& [base, state_schema] : state_schemas) {
+                stats += co_await copy_local_partitions(db, state_schema->id(), progress,
+                        [base, now] (const mutation& m) -> future<utils::chunked_vector<mutation>> {
+                    utils::chunked_vector<mutation> result;
+                    if (auto converted = internal::paxos_state_table_to_system_paxos(m, base, now)) {
+                        result.push_back(std::move(*converted));
+                    }
+                    co_return result;
+                });
+            }
+        }
+        co_return stats;
+    }, copy_stats{}, [] (copy_stats a, const copy_stats& b) { return a += b; });
+
+    // The copy skips the commitlog, so flush it before the node takes part in Paxos. A crash
+    // before then leaves the copy pending, and the node makes it again on restart.
+    std::vector<table_id> targets;
+    if (copy.to_tablets) {
+        for (const auto& [base, state_schema] : get_paxos_state_schemas(_db, copy)) {
+            targets.push_back(state_schema->id());
+        }
+    } else {
+        targets.push_back(db::system_keyspace::paxos()->id());
+    }
+    co_await container().invoke_on_all([&targets] (paxos_store& store) -> future<> {
+        for (const auto& id : targets) {
+            co_await store._db.find_column_family(id).flush();
+        }
+    });
+    co_await container().invoke_on_all([] (paxos_store& store) {
+        store._pending_copy.reset();
+    });
+
+    paxos_state::logger.info("Copied the Paxos state of {} table(s) under vnodes-to-tablets migration: {} row(s),"
+            " skipped {} row(s) of ranges this node does not replicate",
+            copy.tables.size(), stats.copied, stats.skipped);
 }
 
 } // end of namespace "service::paxos"

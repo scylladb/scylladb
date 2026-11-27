@@ -4977,6 +4977,25 @@ public:
                     create_colocated_tablet_maps(base_map);
                 }
             }
+        } else if (locator::is_keyspace_undergoing_tablets_migration(tm->tablets(), ksm)) {
+            // A keyspace under vnodes-to-tablets migration uses vnodes, but its tables have
+            // tablet maps. Only new tables co-located with one of them are supported for now.
+            for (const auto& s : cfms) {
+                const auto base_id = _db.get_base_table_for_tablet_colocation(*s, {});
+                // Without a map the table breaks the migration, so the schema change path
+                // must have rejected it.
+                if (!base_id) {
+                    on_internal_error(lblogger, format("Creating non-co-located table {}.{} during vnodes-to-tablets migration is not supported yet",
+                            s->ks_name(), s->cf_name()));
+                }
+                if (!tm->tablets().has_tablet_map(*base_id)) {
+                    on_internal_error(lblogger, format("Base table {} has no tablet map, cannot co-locate table {}.{} with it",
+                            *base_id, s->ks_name(), s->cf_name()));
+                }
+                lblogger.debug("Creating tablets for {}.{} id={} with base={}", s->ks_name(), s->cf_name(), s->id(), *base_id);
+                muts.emplace_back(colocated_tablet_map_to_mutation(s->id(), s->ks_name(), s->cf_name(), *base_id, ts));
+                _db.get_notifier().before_allocate_tablet_map_in_notification(tm->tablets().get_tablet_map(*base_id), *s, muts, ts);
+            }
         }
     }
 

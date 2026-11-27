@@ -880,7 +880,7 @@ bool database::is_in_critical_disk_utilization_mode() const {
 
 future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::optional<service::storage_mode> storage_mode) {
     using namespace db::schema_tables;
-    _boot_storage_mode = storage_mode;
+    _node_storage_mode = storage_mode;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = co_await create_keyspace_metadata(v, scylla_specific_rs);
@@ -917,7 +917,7 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
     co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(tables, [&] (auto& t) -> future<> {
-            co_await this->add_column_family_and_make_directory(t.second, replica::database::is_new_cf::no, storage_mode);
+            co_await this->add_column_family_and_make_directory(t.second, replica::database::is_new_cf::no);
             auto s = t.second;
             // Recreate missing column mapping entries in case
             // we failed to persist them for some reason after a schema change
@@ -932,7 +932,7 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
         std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(views, [&] (auto&& v) -> future<> {
             check_no_legacy_secondary_index_mv_schema(*this, v, nullptr);
-            co_await this->add_column_family_and_make_directory(v, replica::database::is_new_cf::no, storage_mode);
+            co_await this->add_column_family_and_make_directory(v, replica::database::is_new_cf::no);
         });
     }));
 }
@@ -1274,7 +1274,7 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata, std::optional<service::storage_mode> storage_mode) {
+void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1288,7 +1288,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     } else {
         auto metadata_ptr = not_commited_new_metadata ? not_commited_new_metadata : _shared_token_metadata.get();
         auto table_is_migrating = metadata_ptr->tablets().has_tablet_map(schema->id());
-        if (table_is_migrating && storage_mode.has_value() && storage_mode.value() == service::storage_mode::tablets) {
+        if (table_is_migrating && _node_storage_mode == service::storage_mode::tablets) {
             // Table under vnode-to-tablet migration: the keyspace uses vnode-based
             // replication but this table already has a tablet map persisted in group0.
             // Build a tablet-aware RS with the same replication options so the table
@@ -1338,12 +1338,12 @@ future<> database::make_column_family_directory(schema_ptr schema) {
     co_await cf.init_storage();
 }
 
-future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new, std::optional<service::storage_mode> storage_mode) {
+future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
     auto lock = co_await get_tables_metadata().hold_write_lock();
     auto& ks = find_keyspace(schema->ks_name());
     std::exception_ptr ex;
     try {
-        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new, nullptr, storage_mode);
+        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new, nullptr);
     } catch (...) {
         ex = std::current_exception();
     }
