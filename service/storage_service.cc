@@ -6003,8 +6003,14 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
 
     // Wait until no tablet of the table carries the request. The whole map is
     // scanned because a split copies the request to both new tablets, and a
-    // requested token covers only one of them.
+    // requested token covers only one of them. If the table is dropped, its
+    // tablet map and the request with it are gone.
+    bool table_dropped = false;
     co_await _topology_state_machine.event.wait([&] {
+        if (!get_token_metadata().tablets().has_tablet_map(table)) {
+            table_dropped = true;
+            return true;
+        }
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         auto is_ours = [&] (const std::unique_ptr<locator::tablet_task_info>& info) {
             return info && info->tablet_task_id == repair_task_info.tablet_task_id;
@@ -6016,6 +6022,11 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     });
 
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start);
+    if (table_dropped) {
+        slogger.info("Stopped waiting for tablet repair by API request table_id={} tablet_task_id={} duration={}: the table was dropped",
+                table, repair_task_info.tablet_task_id, duration);
+        co_return res;
+    }
     slogger.info("Finished tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={} duration={}",
             table, tokens, all_tokens, repair_task_info.tablet_task_id, duration);
 

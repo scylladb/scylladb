@@ -944,6 +944,40 @@ def test_storage_service_tablet_repair_status_after_table_drop(cql, test_keyspac
             assert resp.status_code == requests.codes.ok, resp.text
             assert resp.json()["state"] == "done", f"{path}: {resp.text}"
 
+# A tablet repair call waiting for completion returns when the table is
+# dropped. Reproduces SCYLLADB-6725.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+def test_storage_service_tablet_repair_await_completion_table_drop(cql, test_keyspace, rest_api, skip_without_tablets):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        table_id = cql.execute(f"SELECT id FROM system_schema.tables "
+                               f"WHERE keyspace_name = '{test_keyspace}' "
+                               f"AND table_name = '{table}'").one().id
+
+        def request_queued():
+            rows = cql.execute(f"SELECT pending_repair_request, repair_task_info FROM system.tablets "
+                               f"WHERE table_id = {table_id}")
+            return any(row.pending_repair_request or row.repair_task_info for row in rows)
+
+        # Keep the request from being scheduled, so that the call waits until the table is dropped.
+        with scylla_inject_error(rest_api, "tablet_skip_repair_plan"):
+            # The call has a timeout, so that the thread ends even if the node doesn't answer.
+            repair = ThreadWrapper(target=lambda: rest_api.send("POST", "storage_service/tablets/repair",
+                    {"ks": test_keyspace, "table": table, "tokens": "all", "await_completion": "true"}, timeout=120))
+            repair.start()
+            try:
+                deadline = time.time() + 60
+                while not request_queued():
+                    assert repair.is_alive() and time.time() < deadline, "the repair request wasn't queued"
+                    time.sleep(0.1)
+            finally:
+                # Dropping the table ends the call whether or not the request was queued.
+                cql.execute(f"DROP TABLE {t}")
+                # Wait without re-raising the call's error, which would hide a failure above.
+                threading.Thread.join(repair)
+    resp = repair.join()
+    assert resp.status_code == requests.codes.ok, resp.text
+
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
