@@ -21,12 +21,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from test import DEBUG_AND_SANITIZE_MODES
-from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
+from test.cluster.dtest.ccmlib.common import ArgumentError, Blocking, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
 
 if TYPE_CHECKING:
     from test.pylib.internal_types import ServerInfo
-    from test.pylib.log_browsing import ScyllaLogFile
     from test.cluster.dtest.ccmlib.scylla_cluster import ScyllaCluster
 
 
@@ -177,8 +176,10 @@ class ScyllaNode:
     is_live = is_running
 
     @cached_property
-    def scylla_log_file(self) -> ScyllaLogFile:
-        return self.cluster.manager.server_open_log(server_id=self.server_id)
+    def scylla_log_file(self) -> Blocking:
+        """Blocking view of the node's ScyllaLogFile."""
+
+        return Blocking(self.cluster.manager.server_open_log(server_id=self.server_id))
 
     def grep_log(self,
                  expr: str,

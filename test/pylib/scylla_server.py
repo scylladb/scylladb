@@ -564,29 +564,6 @@ class ScyllaServer:
 
         return size
 
-    async def install_and_start(self,
-                                api: ScyllaRESTAPIClient,
-                                expected_error: Optional[str] = None,
-                                expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> None:
-        """Setup and start this server."""
-
-        await self.install()
-
-        self.logger.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
-
-        try:
-            await self.start(api, expected_error, expected_server_up_state)
-        except:
-            await self.stop()
-            raise
-
-        if self.cmd:
-            self.logger.info("started server at host %s in %s, pid %d", self.ip_addr,
-                         self.workdir.name, self.cmd.pid)
-        elif expected_error:
-            self.logger.info("starting server at host %s in %s failed with an expected error",
-                             self.ip_addr, self.workdir.name)
-
     @property
     def is_running(self) -> bool:
         """Check the server subprocess is up"""
@@ -1158,6 +1135,7 @@ class ScyllaServer:
             return
 
         self.shutdown_control_connection()
+        cancelled = False
         try:
             self.cmd.terminate()
         except ProcessLookupError:
@@ -1170,13 +1148,23 @@ class ScyllaServer:
                     raise RuntimeError(f"Server {self} exited with non-zero exit code: {self.cmd.returncode}")
             except asyncio.TimeoutError:
                 self.cmd.kill()
-                await self.cmd.wait()
+                try:
+                    await self.cmd.wait()
+                except asyncio.CancelledError:
+                    cancelled = True
+                    raise
                 raise RuntimeError(
                     f"Stopping server {self} gracefully took longer than {timeout}s")
+            except asyncio.CancelledError:
+                # The process may still be up, e.g. paused and not acting on
+                # SIGTERM: keep it, so that stop() can still kill it.
+                cancelled = True
+                raise
         finally:
-            if self.cmd:
-                self.logger.info("gracefully stopped %s", self)
-            self.cmd = None
+            if not cancelled:
+                if self.cmd:
+                    self.logger.info("gracefully stopped %s", self)
+                self.cmd = None
 
     def process_status(self) -> str:
         """Return the status of the server's process, as reported by psutil.

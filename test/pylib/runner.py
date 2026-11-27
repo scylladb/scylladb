@@ -18,7 +18,7 @@ import sys
 import time
 from argparse import BooleanOptionalAction
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from itertools import chain, count
 from functools import cache, cached_property
 from random import randint
@@ -58,8 +58,6 @@ if TYPE_CHECKING:
     import _pytest.nodes
     import _pytest.scope
     from _pytest.terminal import TerminalReporter
-
-    from test.pylib.scylla_cluster import ClusterFactory
 
 
 TEST_CONFIG_FILENAME = "test_config.yaml"
@@ -303,6 +301,11 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     return scale_timeout_inner
 
 
+# Returns a context manager leasing a cluster to one test: entering it creates
+# the cluster and stashes it on the given node, exiting recycles it.
+type ClusterFactory = Callable[[_pytest.nodes.Node, str], AbstractAsyncContextManager[ScyllaCluster]]
+
+
 @pytest.fixture(scope="module")
 def testpy_cluster_factory(request: pytest.FixtureRequest,
                            build_mode: str,
@@ -327,6 +330,7 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
     @asynccontextmanager
     async def cluster_for_test(node: _pytest.nodes.Node, test_name: str) -> AsyncGenerator[ScyllaCluster]:
         node.stash[CLUSTER_KEY] = cluster = ScyllaCluster(
+            test_name=test_name,
             logger=testpy_logger,
             vardir=suite_log_dir,
             mode=build_mode,
@@ -366,19 +370,19 @@ def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
 async def scylla_cluster(request: pytest.FixtureRequest,
                          testpy_cluster_factory: ClusterFactory,
                          testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
-    """A ScyllaCluster with one server, shared by the tests in a module."""
+    """A ScyllaCluster with one server, running on its own thread, shared by the tests in a module."""
 
-    async with testpy_cluster_factory(request.node, testpy_uname) as cluster:
+    async with testpy_cluster_factory(request.node, testpy_uname) as cluster, cluster.run_in_thread():
         await cluster.add_server()
         cluster.take_log_savepoint()
         yield cluster
         processes = [(server, server.cmd) for server in cluster.running.values() if server.cmd]
 
-    # Nothing stops these servers before recycle() does, and it kills each one
-    # still running with SIGKILL and waits for it, so any other exit status
-    # means the server died, which would otherwise pass unnoticed.  0 follows
-    # a shutdown asked for from outside, e.g. a Ctrl-C that reaches the
-    # servers too.
+    # Nothing stops these servers before the cluster thread's final stop(),
+    # which kills each one still running with SIGKILL and waits for it, so
+    # any other exit status means the server died, which would otherwise pass
+    # unnoticed.  0 follows a shutdown asked for from outside, e.g. a Ctrl-C
+    # that reaches the servers too.
     if exits := [f"{server} exited with status code {process.returncode}" for server, process in processes
                  if process.returncode not in (0, -signal.SIGKILL)]:
         raise RuntimeError("; ".join(exits))

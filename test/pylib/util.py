@@ -23,10 +23,9 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from functools import cache, partial
 from pathlib import Path
-from typing import Optional, TypeVar, Any, cast
+from typing import Optional, TypeVar, Any
 
 import colorama
-import universalasync
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
@@ -607,10 +606,6 @@ def execute_with_tracing(cql : Session, statement : str | Statement, log : bool 
         logger.debug("Tracing {}:\n{}\n".format(statement, "\n".join(page_traces)))
 
     return ret
-
-
-def universalasync_typed_wrap(cls: T) -> T:
-    return cast(T, universalasync.wrap(cls))
 
 
 output_is_a_tty = sys.stdout.isatty()

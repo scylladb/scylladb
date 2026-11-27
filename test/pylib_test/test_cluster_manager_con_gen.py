@@ -4,25 +4,26 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-"""Tests for the driver clusters created by ScyllaClusterManager."""
+"""Tests for the driver clusters created by ScyllaCluster."""
 
-import logging
 from types import SimpleNamespace
 
 import pytest
 from cassandra.cluster import EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
 
-from test.pylib import scylla_cluster_manager
+from test.pylib import scylla_cluster
 from test.pylib.internal_types import IPAddress
+from test.pylib.scylla_cluster import ScyllaCluster
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib_test._cluster import make_cluster
 
 
 @pytest.fixture
 def manager(monkeypatch) -> ScyllaClusterManager:
     """Exercise the factory without opening driver connections or threads."""
-    monkeypatch.setattr(scylla_cluster_manager, "CassandraCluster", lambda **kwargs: SimpleNamespace(**kwargs))
-    return object.__new__(ScyllaClusterManager)
+    monkeypatch.setattr(scylla_cluster, "CassandraCluster", lambda **kwargs: SimpleNamespace(**kwargs))
+    return object.__new__(ScyllaCluster)
 
 
 @pytest.mark.parametrize("options", [{}, {"load_balancing_policy": None}], ids=["omitted", "none"])
@@ -52,12 +53,11 @@ def test_explicit_policy_is_preserved(manager: ScyllaClusterManager) -> None:
 
 
 @pytest.mark.asyncio
-async def test_driver_reconnect_uses_fresh_policy(monkeypatch) -> None:
+async def test_driver_reconnect_uses_fresh_policy(monkeypatch, tmp_path) -> None:
     # Reconnecting must not carry mutable policy state between driver clusters (#32761).
-    monkeypatch.setattr(scylla_cluster_manager, "CassandraCluster", lambda **kwargs: SimpleNamespace(
+    monkeypatch.setattr(scylla_cluster, "CassandraCluster", lambda **kwargs: SimpleNamespace(
         **kwargs, connect=lambda: object(), shutdown=lambda: None))
-    cluster = SimpleNamespace(logger=logging.getLogger(__name__), api=None)
-    manager = ScyllaClusterManager("test_driver_reconnect_uses_fresh_policy", cluster, 9042, False)
+    manager = make_cluster(tmp_path)
     server = SimpleNamespace(rpc_address=IPAddress("127.0.0.1"))
     try:
         await manager.driver_connect(server)
@@ -71,5 +71,4 @@ async def test_driver_reconnect_uses_fresh_policy(monkeypatch) -> None:
         assert list(first_policy.make_query_plan()) == [first_host]
         assert list(second_policy.make_query_plan()) == [second_host]
     finally:
-        manager.driver_close()
-        manager.thread_pool.shutdown()
+        await manager.stop()

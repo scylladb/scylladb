@@ -395,7 +395,7 @@ def setup_worker_cgroup() -> None:
             group.mkdir()
     propagate_subtree_controls(worker_cgroup_path)
     # Move the current worker process into the worker's default leaf cgroup.
-    # Scylla processes spawned by the test (via ScyllaClusterManager) will inherit
+    # Scylla processes spawned by the test (via ScyllaCluster) will inherit
     # this cgroup. The worker-level cgroup (CGROUP_TESTS/{worker_id}) is used for
     # hierarchical memory monitoring and captures all descendant processes.
     try:

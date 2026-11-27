@@ -10,13 +10,12 @@ ScyllaServer to speak of, so the failure path has to cope with not having one.
 No Scylla process is involved here: the configuration error comes first.
 """
 
-import logging
 import pathlib
 
 import pytest
 
 from test.pylib.host_registry import Host
-from test.pylib.scylla_cluster import ScyllaCluster
+from test.pylib_test._cluster import make_cluster
 
 
 IP_ADDR = "127.0.0.99"
@@ -29,16 +28,7 @@ async def test_add_server_reports_why_the_server_was_not_built(tmp_path: pathlib
     "--smp" without its dashes is rejected by merge_cmdline_options, that is,
     while add_server() is still assembling the command line.
     """
-    cluster = ScyllaCluster(
-        logger=logging.getLogger(__name__),
-        vardir=tmp_path,
-        mode="dev",
-        cmdline_options=[],
-        cmdline_options_override=[],
-        config_options={},
-        append_env={},
-        scylla_exe="/nonexistent/scylla",
-    )
+    cluster = make_cluster(tmp_path)
 
     # Lease one address of our own, to watch it being released.
     leased = set[str]()
@@ -53,8 +43,9 @@ async def test_add_server_reports_why_the_server_was_not_built(tmp_path: pathlib
     monkeypatch.setattr(cluster.host_registry, "lease_host", lease_host)
     monkeypatch.setattr(cluster.host_registry, "release_host", release_host)
 
-    with pytest.raises(ValueError, match="invalid argument name smp=2"):
-        await cluster.add_server(cmdline=["smp=2"])
+    async with cluster.run_in_thread():
+        with pytest.raises(ValueError, match="invalid argument name smp=2"):
+            await cluster.add_server(cmdline=["smp=2"])
 
     assert not leased, "the address leased for the server was not released"
     assert not cluster.leased_ips
