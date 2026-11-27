@@ -40,7 +40,7 @@ rest_estimate_compression_ratios(http_context& ctx, sharded<sstables::dictionary
     auto cf = get_query_param<sstring>(*req, "cf");
     apilog.debug("estimate_compression_ratios: called with ks={} cf={}", ks, cf);
 
-    auto s = ctx.db.local().find_column_family(ks, cf).schema();
+    auto s = ctx.data_dict().find_schema(ks, cf);
 
     auto training_sample = co_await dicts.local().do_sample_sstables(s->id(), 4096, 4096);
     auto validation_sample = co_await dicts.local().do_sample_sstables(s->id(), 16*1024, 1024);
@@ -106,7 +106,7 @@ rest_retrain_dict(http_context& ctx, sharded<sstables::dictionary_service>& dict
     auto ks = get_query_param<sstring>(*req, "keyspace");
     auto cf = get_query_param<sstring>(*req, "cf");
     apilog.debug("retrain_dict: called with ks={} cf={}", ks, cf);
-    const auto t_id = ctx.db.local().find_column_family(ks, cf).schema()->id();
+    const auto t_id = ctx.data_dict().find_schema(ks, cf)->id();
     constexpr uint64_t chunk_size = 4096;
     constexpr uint64_t n_chunks = 4096;
     auto sample = co_await dicts.local().do_sample_sstables(t_id, chunk_size, n_chunks);

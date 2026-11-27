@@ -11,6 +11,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "api/api.hh"
+#include "api/data_dictionary.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "api/api-doc/compaction_manager.json.hh"
 #include "api/api-doc/storage_service.json.hh"
@@ -19,6 +20,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/http/exception.hh>
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "sstables/metadata_collector.hh"
 #include "utils/assert.hh"
 #include "utils/estimated_histogram.hh"
@@ -60,7 +62,7 @@ std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
 
 table_info parse_table_info(const sstring& name, const replica::database& db) {
     auto [ks, cf] = parse_fully_qualified_cf_name(name);
-    return table_info{ .name = cf, .id = validate_table(db, ks, cf) };
+    return table_info{ .name = cf, .id = validate_table(db.as_data_dictionary(), ks, cf) };
 }
 
 class autocompaction_toggle_guard {
@@ -1381,6 +1383,20 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         }) | std::ranges::to<std::vector>();
     });
 
+    hs::get_highest_supported_sstable_version.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return smp::submit_to(0, [&db] {
+            auto format = db.local().get_user_sstables_manager().get_highest_supported_format();
+            return make_ready_future<json::json_return_type>(seastar::to_sstring(format));
+        });
+    });
+
+    hs::get_chosen_sstable_version.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return smp::submit_to(0, [&db] {
+            auto format = db.local().get_user_sstables_manager().get_preferred_sstable_version();
+            return make_ready_future<json::json_return_type>(seastar::to_sstring(format));
+        });
+    });
+
     hs::drop_sstable_caches.set(r, [&db] (std::unique_ptr<http::request> req) {
         apilog.info("Dropping sstable caches");
         return db.invoke_on_all([] (replica::database& db) {
@@ -1615,6 +1631,8 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::get_load.unset(r);
     ss::get_metrics_load.unset(r);
     ss::get_keyspaces.unset(r);
+    hs::get_highest_supported_sstable_version.unset(r);
+    hs::get_chosen_sstable_version.unset(r);
     hs::drop_sstable_caches.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);

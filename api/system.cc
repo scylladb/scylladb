@@ -9,8 +9,6 @@
 #include "api/api_init.hh"
 #include "api/api-doc/system.json.hh"
 #include "api/api-doc/metrics.json.hh"
-#include "replica/database.hh"
-#include "sstables/sstables_manager.hh"
 
 #include <rapidjson/document.h>
 #include <boost/lexical_cast.hpp>
@@ -35,7 +33,7 @@ extern "C" void __attribute__((weak)) __llvm_profile_dump();
 extern "C" const char * __attribute__((weak)) __llvm_profile_get_filename();
 extern "C" void __attribute__((weak)) __llvm_profile_reset_counters();
 
-void set_system(http_context& ctx, routes& r) {
+void set_system(routes& r) {
     hm::get_metrics_config.set(r, [](const_req req) {
         std::vector<hm::metrics_config> res;
         res.resize(seastar::metrics::get_relabel_configs().size());
@@ -173,20 +171,6 @@ void set_system(http_context& ctx, routes& r) {
         apilog.info("Profile dumped to {}", profile_dest);
         return make_ready_future<json::json_return_type>(json::json_return_type(json::json_void()));
     }) ;
-
-    hs::get_highest_supported_sstable_version.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return smp::submit_to(0, [&ctx] {
-            auto format = ctx.db.local().get_user_sstables_manager().get_highest_supported_format();
-            return make_ready_future<json::json_return_type>(seastar::to_sstring(format));
-        });
-    });
-
-    hs::get_chosen_sstable_version.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return smp::submit_to(0, [&ctx] {
-            auto format = ctx.db.local().get_user_sstables_manager().get_preferred_sstable_version();
-            return make_ready_future<json::json_return_type>(seastar::to_sstring(format));
-        });
-    });
 
     hs::get_shard_to_numa_node_mapping.set(r, [](const_req req) {
         auto mapping = local_engine->smp().shard_to_numa_node_mapping();

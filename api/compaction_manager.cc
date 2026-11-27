@@ -20,7 +20,7 @@
 #include "db/system_keyspace.hh"
 #include "column_family.hh"
 #include "unimplemented.hh"
-#include "storage_service.hh"
+#include "api/data_dictionary.hh"
 
 #include <utility>
 

@@ -75,6 +75,7 @@ target_sources(api
     compaction_manager.cc
     config.cc
     cql_server_test.cc
+    data_dictionary.cc
     endpoint_snitch.cc
     error_injection.cc
     authorization_cache.cc

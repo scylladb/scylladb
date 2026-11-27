@@ -8,6 +8,7 @@
 
 #include "storage_service.hh"
 #include "api/api.hh"
+#include "api/data_dictionary.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/storage_proxy.json.hh"
@@ -75,76 +76,6 @@ namespace sp = httpd::storage_proxy_json;
 namespace t = httpd::tasks_json;
 namespace cf = httpd::column_family_json;
 using namespace json;
-
-sstring validate_keyspace(const http_context& ctx, sstring ks_name) {
-    if (ctx.db.local().has_keyspace(ks_name)) {
-        return ks_name;
-    }
-    throw bad_param_exception(replica::no_such_keyspace(ks_name).what());
-}
-
-sstring validate_keyspace(const http_context& ctx, const std::unique_ptr<http::request>& req) {
-    return validate_keyspace(ctx, req->get_path_param("keyspace"));
-}
-
-sstring validate_keyspace(const http_context& ctx, const http::request& req) {
-    return validate_keyspace(ctx, req.get_path_param("keyspace"));
-}
-
-table_id validate_table(const replica::database& db, sstring ks_name, sstring table_name) {
-    try {
-        return db.find_uuid(ks_name, table_name);
-    } catch (replica::no_such_column_family& e) {
-        throw bad_param_exception(e.what());
-    }
-}
-
-static void ensure_tablets_disabled(const http_context& ctx, const sstring& ks_name, const sstring& api_endpoint_path) {
-    if (ctx.db.local().find_keyspace(ks_name).uses_tablets()) {
-        throw bad_param_exception{fmt::format("{} is per-table in keyspace '{}'. Please provide table name using 'cf' parameter.", api_endpoint_path, ks_name)};
-    }
-}
-
-static bool any_of_keyspaces_use_tablets(const http_context& ctx) {
-    auto& db = ctx.db.local();
-    auto uses_tablets = [&db](const auto& ks_name) {
-        return db.find_keyspace(ks_name).uses_tablets();
-    };
-
-    auto keyspaces = db.get_all_keyspaces();
-    return std::any_of(std::begin(keyspaces), std::end(keyspaces), uses_tablets);
-}
-
-std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, sstring value) {
-    std::vector<table_info> res;
-    try {
-        if (value.empty()) {
-            const auto& cf_meta_data = ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data();
-            res.reserve(cf_meta_data.size());
-            for (const auto& [name, schema] : cf_meta_data) {
-                res.emplace_back(table_info{name, schema->id()});
-            }
-        } else {
-            std::vector<sstring> names = split(value, ",");
-            res.reserve(names.size());
-            const auto& db = ctx.db.local();
-            for (const auto& table_name : names) {
-                res.emplace_back(table_info{table_name, db.find_uuid(ks_name, table_name)});
-            }
-        }
-    } catch (const replica::no_such_keyspace& e) {
-        throw bad_param_exception(e.what());
-    } catch (const replica::no_such_column_family& e) {
-        throw bad_param_exception(e.what());
-    }
-    return res;
-}
-
-std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context& ctx, const http::request& req, sstring cf_param_name) {
-    auto keyspace = validate_keyspace(ctx, req);
-    auto tis = parse_table_infos(keyspace, ctx, req.get_query_param(cf_param_name));
-    return std::make_pair(std::move(keyspace), std::move(tis));
-}
 
 std::optional<std::chrono::seconds> validate_ttl(const std::string& value) {
     if (value.empty()) {
@@ -503,7 +434,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             });
         }
 
-        auto table_id = validate_table(ctx.db.local(), keyspace, table);
+        auto table_id = validate_table(ctx.data_dict(), keyspace, table);
         auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations));
         co_return json::json_return_type(fmt::to_string(task_id));
     });
@@ -539,7 +470,7 @@ void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_build
             }
         }
         replica::database& db = vb.local().get_db();
-        auto uuid = validate_table(db, ks, cf_name);
+        auto uuid = validate_table(db.as_data_dictionary(), ks, cf_name);
         replica::column_family& cf = db.find_column_family(uuid);
         co_return cf.get_index_manager().list_indexes()
                 | std::views::transform([] (const auto& i) { return i.metadata().name(); })
@@ -572,7 +503,7 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
 
         std::map<dht::token, gms::inet_address> token_endpoints;
         if (!keyspace_name.empty() && !table_name.empty()) {
-            auto& db = ctx.db.local();
+            auto db = ctx.data_dict();
             auto tid = validate_table(db, keyspace_name, table_name);
             // Vnode tables have no tablet map, so they get the vnode ring.
             if (db.find_column_family(tid).uses_tablets()) {
@@ -621,7 +552,7 @@ rest_get_range_to_endpoint_map(http_context& ctx, sharded<service::storage_servi
         if (table.empty()) {
             ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
         } else {
-            table_id = validate_table(ctx.db.local(), keyspace, table);
+            table_id = validate_table(ctx.data_dict(), keyspace, table);
         }
 
         co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace, table_id),
@@ -664,7 +595,7 @@ rest_describe_ring(http_context& ctx, sharded<service::storage_service>& ss, std
         auto table = req->get_query_param("table");
         utils::chunked_vector<dht::token_range_endpoints> ranges;
         if (!table.empty()) {
-            auto table_id = validate_table(ctx.db.local(), keyspace, table);
+            auto table_id = validate_table(ctx.data_dict(), keyspace, table);
             ranges = co_await ss.local().describe_ring_for_table(table_id);
         } else {
             ranges = co_await ss.local().describe_ring(keyspace);
@@ -1171,7 +1102,7 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
             if (table_name.empty()) {
                 ensure_tablets_disabled(ctx, keyspace_name, "storage_service/ownership");
             } else {
-                validate_table(ctx.db.local(), keyspace_name, table_name);
+                validate_table(ctx.data_dict(), keyspace_name, table_name);
             }
         }
 
@@ -1222,7 +1153,7 @@ rest_move_tablet(http_context& ctx, sharded<service::storage_service>& ss, std::
         auto token = dht::token::from_int64(require_query_param<int64_t>(*req, "token"));
         auto ks = req->get_query_param("ks");
         auto table = req->get_query_param("table");
-        auto table_id = validate_table(ctx.db.local(), ks, table);
+        auto table_id = validate_table(ctx.data_dict(), ks, table);
         auto force = get_query_param<service::loosen_constraints>(*req, "force");
 
         co_await ss.local().move_tablet(table_id, token,
@@ -1241,7 +1172,7 @@ rest_add_tablet_replica(http_context& ctx, sharded<service::storage_service>& ss
         auto token = dht::token::from_int64(require_query_param<int64_t>(*req, "token"));
         auto ks = req->get_query_param("ks");
         auto table = req->get_query_param("table");
-        auto table_id = validate_table(ctx.db.local(), ks, table);
+        auto table_id = validate_table(ctx.data_dict(), ks, table);
         auto force = get_query_param<service::loosen_constraints>(*req, "force");
 
         co_await ss.local().add_tablet_replica(table_id, token,
@@ -1259,7 +1190,7 @@ rest_del_tablet_replica(http_context& ctx, sharded<service::storage_service>& ss
         auto token = dht::token::from_int64(require_query_param<int64_t>(*req, "token"));
         auto ks = req->get_query_param("ks");
         auto table = req->get_query_param("table");
-        auto table_id = validate_table(ctx.db.local(), ks, table);
+        auto table_id = validate_table(ctx.data_dict(), ks, table);
         auto force = get_query_param<service::loosen_constraints>(*req, "force");
 
         co_await ss.local().del_tablet_replica(table_id, token,
@@ -1289,7 +1220,7 @@ rest_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std
         // Use regular mode if the incremental_mode option is not provided by user.
         auto incremental = req->get_query_param("incremental_mode");
         auto incremental_mode = incremental.empty() ? locator::default_tablet_repair_incremental_mode : locator::tablet_repair_incremental_mode_from_string(incremental);
-        auto table_id = validate_table(ctx.db.local(), ks, table);
+        auto table_id = validate_table(ctx.data_dict(), ks, table);
         std::variant<utils::chunked_vector<dht::token>, service::storage_service::all_tokens_tag> tokens_variant;
         if (all_tokens) {
             tokens_variant = service::storage_service::all_tokens_tag();
