@@ -255,7 +255,9 @@ def parse_cmd_line() -> argparse.Namespace:
                      help="Path to the executable to run. Not working with `mode`")
     parser.add_argument('--exe-url', default=False,
                      dest="exe_url", action="store",
-                     help="URL to download the relocatable executable. Not working with `mode`")
+                     help="URL of a relocatable server or unified package to download and run, "
+                          "or a shortcut: `latest` / `master:latest` / `branch-2026.3:latest` for a branch's "
+                          "latest build, `release:2026.1` / `release:2026.1.9` for a release. Not working with `mode`")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--extra-scylla-cmdline-options', action="store", default="", type=str,
                                            help="Passing extra scylla cmdline options for all tests. Options should be space separated:"
