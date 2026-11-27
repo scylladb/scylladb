@@ -31,9 +31,10 @@ import time
 import re
 
 from cassandra import InvalidRequest
+from cassandra.query import SimpleStatement
 
 from test.pylib.skip_types import skip_env
-from .util import new_test_keyspace, new_test_table, local_process_id
+from .util import config_value_context, new_test_keyspace, new_test_table, local_process_id
 from . import nodetool
 from .test_batch import generate_big_batch
 
@@ -162,3 +163,18 @@ def test_error_message_for_batch_exceeding_fail_threshold(cql, table_batch, logf
         wait_for_log(logfile, err_pattern, timeout=1)
     else:
         pytest.fail("Oversized batch didn't fail.")
+
+
+# An unpaged query whose result exceeds max_memory_for_unlimited_query_soft_limit
+# is not failed, but a warning is logged, both for a partition scan and for a
+# full scan.
+def test_log_unpaged_query_soft_limit(cql, test_keyspace, logfile, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v text, PRIMARY KEY (pk, ck)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
+        num_rows = 10
+        for ck in range(num_rows):
+            cql.execute(insert, [0, ck, 'a' * 1024])
+        with config_value_context(cql, 'max_memory_for_unlimited_query_soft_limit', '1024'):
+            for select in [f"SELECT * FROM {table} WHERE pk = 0", f"SELECT * FROM {table}"]:
+                assert len(list(cql.execute(SimpleStatement(select, fetch_size=None)))) == num_rows
+                wait_for_log(logfile, r"Memory usage of unpaged query exceeds soft limit of 1024 \(configured via max_memory_for_unlimited_query_soft_limit\)")

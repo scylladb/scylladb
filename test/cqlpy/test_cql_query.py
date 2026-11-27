@@ -3021,6 +3021,15 @@ def test_query_limit(cql, test_keyspace, scylla_only):
                     else:
                         assert list(cql.execute(select)) == expected_rows
 
+            # A full scan is limited the same way.
+            for is_paged in [True, False]:
+                select = SimpleStatement(f"SELECT * FROM {table}", fetch_size=10000 if is_paged else None)
+                if is_paged:
+                    assert list(cql.execute(select)) == normal_rows
+                else:
+                    with pytest.raises(ReadFailure):
+                        list(cql.execute(select))
+
 
 # Reproduces https://github.com/scylladb/scylla/issues/3552
 # when clustering-key filtering is enabled in filter_sstable_for_reader.
