@@ -497,6 +497,78 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_stop_at_static_row) {
         .no_evictions();
 }
 
+// Counts the clustering rows of a page, and the partitions which it emits.
+class counting_result_builder : public dummy_result_builder {
+    unsigned _rows = 0;
+    std::vector<dht::decorated_key> _partitions;
+public:
+    struct page {
+        unsigned rows;
+        std::vector<dht::decorated_key> partitions;
+    };
+
+    using dummy_result_builder::consume;
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _partitions.push_back(dk);
+        dummy_result_builder::consume_new_partition(dk);
+    }
+    stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_live) {
+        ++_rows;
+        return dummy_result_builder::consume(std::move(cr), t, is_live);
+    }
+    page consume_end_of_stream() {
+        return {_rows, std::move(_partitions)};
+    }
+};
+
+// A partition of a table without clustering columns has at most one row, so
+// the page after one which stopped at a row starts after the row's partition
+// (as the pager makes it) - and it reuses the querier of the previous page.
+SEASTAR_THREAD_TEST_CASE(lookup_without_clustering_columns_with_stop_at_row) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("v", int32_type)
+            .build();
+    utils::chunked_vector<mutation> mutations;
+    for (int32_t i = 0; i < 10; ++i) {
+        mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(i)));
+        m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(i), api::new_timestamp());
+        mutations.push_back(std::move(m));
+    }
+    std::ranges::sort(mutations, [] (const mutation& a, const mutation& b) {
+        return a.decorated_key().tri_compare(*a.schema(), b.decorated_key()) < 0;
+    });
+    const auto source = mutation_source([&] (schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
+        return make_mutation_reader_from_mutations(schema, std::move(permit), mutations, range);
+    });
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, "test", std::numeric_limits<int>::max(),
+            std::numeric_limits<ssize_t>::max());
+    auto stop_sem = deferred_stop(sem);
+    replica::querier_cache cache([] (const reader_concurrency_semaphore&) { return true; });
+    auto stop_cache = deferred_stop(cache);
+    const auto key = query_id(utils::UUID{1, 1});
+    const auto range = dht::partition_range::make_open_ended_both_sides();
+
+    auto q = replica::querier(source, s, sem.make_tracking_only_permit(s, "test", db::no_timeout, {}), range, s->full_slice(),
+            nullptr, tombstone_gc_state::no_gc());
+    auto [dk, ck] = q.consume_page(dummy_result_builder{}, 3, std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
+    BOOST_REQUIRE(dk && dk->equal(*s, mutations[2].decorated_key()));
+    cache.insert_data_querier(key, std::move(q), nullptr);
+
+    const auto next_range = dht::partition_range(dht::partition_range::bound(*dk, false), range.end());
+    auto reused = cache.lookup_data_querier(key, *s, next_range, s->full_slice(), sem, nullptr, db::no_timeout);
+    // Check that the next page reuses the querier.
+    BOOST_REQUIRE(reused);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().drops, 0);
+    // Check that the reused querier continues from the next partition, and
+    // returns all the remaining rows.
+    auto page = reused->consume_page(counting_result_builder{}, 100, std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
+    reused->close().get();
+    BOOST_REQUIRE_EQUAL(page.rows, 7);
+    BOOST_REQUIRE_EQUAL(page.partitions.size(), 7);
+    BOOST_REQUIRE(page.partitions.front().equal(*s, mutations[3].decorated_key()));
+}
+
 /*
  * Drop tests
  */
