@@ -515,8 +515,24 @@ SEASTAR_THREAD_TEST_CASE(test_segmented_dict_negotiation) {
         auto close_p = deferred_close(p);
 
         for (int dict_version = 1; dict_version <= 3; ++dict_version) {
-            // LZ4 only uses the first 64 kiB of the dict, so the message must fit in that.
-            const auto message = tests::random::get_bytes(60000);
+            // LZ4 only uses the last 64 kiB of the dict, so the message must fit in that.
+            //
+            // The message must also be much smaller than that if we want the compressor
+            // to reliably find matches in the dictionary. (Otherwise the test would be flaky).
+            // LZ4_loadDict() indexes every third position of the dict into a table of 4096 slots,
+            // where later positions overwrite earlier ones. So with a big dict, only a few
+            // positions from the front of the dict remain in the table.
+            // Since the message is the dict, the compressor finds a match only if it checks
+            // a position of the message which remains in the table.
+            // But on input which has no matches so far, the compressor skips bytes, and the
+            // longer it goes without a match, the more bytes it skips. (Also, each position
+            // it checks overwrites a slot in the table.)
+            // So with a 60000-byte dict, the compressor can skip every position from the front
+            // of the dict that remains in the table, and leave the first segment uncompressed.
+            // With a 20000-byte dict, many more positions remain in the table, so the compressor
+            // is almost sure to find a match near the start of each segment, before it skips
+            // many bytes.
+            const auto message = tests::random::get_bytes(20000);
             const auto message_view = std::as_bytes(std::span(message.data(), message.size()));
             // We will send messages which perfectly match the dict.
             // If dict negotiation succeeds as expected, this should result in very small messages.
@@ -528,7 +544,8 @@ SEASTAR_THREAD_TEST_CASE(test_segmented_dict_negotiation) {
                 std::make_pair(p.server.get(), p.client.get()),
                 std::make_pair(p.client.get(), p.server.get()),
             }) {
-                const auto compressed = strip_head_space(a->compress_async(test_head_space, bytes_to_snd_buf(message)).get());
+                // Two fragments, so that the message is split into two segments.
+                const auto compressed = strip_head_space(a->compress_async(test_head_space, bytes_to_snd_buf(message, message.size() / 2)).get());
                 BOOST_REQUIRE(has_more_segments(compressed));
                 // The dict negotiation should have settled after a few repeats.
                 if (repeat >= 5) {
