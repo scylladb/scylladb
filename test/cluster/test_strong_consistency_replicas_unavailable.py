@@ -110,7 +110,10 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
     config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 10000, 'read_request_timeout_in_ms': 10000}
     async with sc_table(manager, config) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
         coordinator = host_of[non_replica]
-        reads = [SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=cl)
+        # Observe the server's Unavailable directly, without a retry exhausting the host-pinned query plan.
+        no_retry = FallthroughRetryPolicy()
+        write = SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 2)", retry_policy=no_retry)
+        reads = [SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=cl, retry_policy=no_retry)
                  for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.ONE)]
 
         # Going through the non-replica also fills its leader cache, so the refusal below
@@ -119,7 +122,7 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
         errors_before = [await get_metric(manager, non_replica, name) for name in (WRITE_ERRORS, READ_ERRORS)]
 
         async with down(manager, list(host_of), [leader] + followers):
-            for query in (f"INSERT INTO {table} (pk, c) VALUES (0, 2)", *reads):
+            for query in (write, *reads):
                 e, elapsed = await expect_error(cql, query, coordinator, Unavailable)
                 assert e.alive_replicas == 0 and "All replicas" in str(e), str(e)
                 assert elapsed < 5.0, f"{query} took {elapsed:.1f}s to be refused"
