@@ -353,8 +353,9 @@ public:
     };
     // Disposed of in order; a file stays at the front until it is gone.
     std::deque<file_to_dispose> _files_to_dispose;
-    // min_position() never passes this id: a kept (Keep) segment file
-    // left _files_to_dispose but stays on disk under its own name.
+    // min_position() never passes this id: a segment file left _files_to_dispose
+    // but may stay on disk under its own name, because it is kept (Keep) or its
+    // unlink or recycle rename was not synced.
     std::optional<segment_id_type> _min_position_floor;
     void pin_min_position(segment_id_type id) noexcept {
         _min_position_floor = std::min(_min_position_floor.value_or(id), id);
@@ -613,7 +614,10 @@ future<> db::commitlog::segment_manager::named_file::rename(std::string_view to)
         auto s = sstring(to);
         auto dir = std::filesystem::path(to).parent_path();
         co_await seastar::rename_file(_name, s);
+        // Set before the sync: callers tell a failed sync from a failed
+        // rename_file() by the name.
         _name = std::move(s);
+        utils::get_local_injector().inject("commitlog_fail_rename_sync", [] { throw std::runtime_error("injected rename sync failure"); });
         co_await seastar::sync_directory(dir.string());
     } catch (...) {
         commit_error_handler(std::current_exception());
@@ -3161,6 +3165,7 @@ future<std::exception_ptr> db::commitlog::segment_manager::dispose_files() {
                 continue;
             }
 
+            bool unlinked = false;
             try {
                 if (exts && !exts->commitlog_file_extensions().empty()) {
                     for (auto& ext : exts->commitlog_file_extensions()) {
@@ -3188,6 +3193,11 @@ future<std::exception_ptr> db::commitlog::segment_manager::dispose_files() {
                     } catch (...) {
                         clogger.error("Could not recycle segment {}: {:t}", f.name(), std::current_exception());
                         recycle_error = std::current_exception();
+                        // The rename ran but its sync failed, so the old name may
+                        // come back after a crash.
+                        if (id && f.name() == dst) {
+                            pin_min_position(*id);
+                        }
                         // fallthrough
                     }
                 }
@@ -3196,9 +3206,16 @@ future<std::exception_ptr> db::commitlog::segment_manager::dispose_files() {
                 // last resort.
                 co_await f.remove_file();
                 totals.total_size_on_disk -= size;
+                unlinked = true;
                 // make the removal durable before disposing of any newer segment.
+                utils::get_local_injector().inject("commitlog_fail_dir_sync", [] { throw std::runtime_error("injected directory sync failure"); });
                 co_await seastar::sync_directory(cfg.commit_log_location);
             } catch (...) {
+                // Linux does not promise that a later successful sync persists
+                // an unlink whose sync failed, so the retry must not release it.
+                if (id && unlinked) {
+                    pin_min_position(*id);
+                }
                 // Newer segments may not go before this one, so all of them
                 // stay queued.
                 clogger.error("Could not delete segment {}, will retry: {:t}", f.name(), std::current_exception());

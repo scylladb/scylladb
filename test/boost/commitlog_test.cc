@@ -2639,6 +2639,161 @@ SEASTAR_TEST_CASE(test_min_position_covers_released_segments) {
     }
 }
 
+// A sync after a failed one need not persist the unlink, so the segment stays
+// pinned after the retry removes its entry from the disposal queue.
+SEASTAR_TEST_CASE(test_min_position_holds_when_dir_sync_fails) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#else
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // With a zero limit the unlink branch is taken while any other file is on disk.
+    cfg.commitlog_total_space_in_mb = 0;
+    cfg.metrics_category_name = "commitlog";
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+    auto write = [&] {
+        return log.add_mutation(uuid, 100, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+            dst.fill('1', 100);
+        });
+    };
+    auto file_of = [&] (segment_id_type id) {
+        return (tmp.path() / commitlog::descriptor(id, cfg.fname_prefix).filename()).string();
+    };
+
+    // A failed assertion must not leave the injection enabled for later tests.
+    std::exception_ptr error;
+    try {
+        rp_handle h1 = co_await write();           // S1
+        auto s1 = h1.rp().id;
+        co_await log.force_new_active_segment();
+        rp_handle h2 = co_await write();           // S2 stays dirty until the second pass
+        auto s2 = h2.rp().id;
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        utils::get_local_injector().enable("commitlog_fail_dir_sync");
+        rp_set rps1;
+        rps1.put(std::move(h1));
+        log.discard_completed_segments(uuid, rps1);
+        h1 = {};
+        // Closing S2 triggers a sweep, which unlinks S1's file; its sync fails.
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE_GE(utils::get_local_injector().enter_count("commitlog_fail_dir_sync"), 1);
+        utils::get_local_injector().disable("commitlog_fail_dir_sync");
+        BOOST_REQUIRE(!co_await file_exists(file_of(s1)));
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // The next pass finds S1's file gone, syncs, and goes on to S2. S2's file can
+        // only go after S1 left the queue, so its absence proves the retry released S1.
+        rp_handle h3 = co_await write();           // S3 stays dirty, so _segments never empties
+        auto s3 = h3.rp().id;
+        rp_set rps2;
+        rps2.put(std::move(h2));
+        log.discard_completed_segments(uuid, rps2);
+        h2 = {};
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE(!co_await file_exists(file_of(s2)));
+        BOOST_REQUIRE_GT(s3, s1);
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+    } catch (...) {
+        error = std::current_exception();
+    }
+    utils::get_local_injector().disable("commitlog_fail_dir_sync");
+    co_await log.shutdown();
+    co_await log.clear();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+#endif
+}
+
+// A failed sync inside named_file::rename() leaves the old name possibly on disk.
+// The recycled file falls through to an unlink, which must not release the segment.
+SEASTAR_TEST_CASE(test_min_position_holds_when_rename_sync_fails) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#else
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // Room under the limit, so disposal takes the recycle branch. A single reserve
+    // segment keeps the files on disk well under the limit.
+    cfg.commitlog_total_space_in_mb = 8 * this_smp_shard_count();
+    cfg.max_reserve_segments = 1;
+    cfg.metrics_category_name = "commitlog";
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+    auto write = [&] {
+        return log.add_mutation(uuid, 100, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+            dst.fill('1', 100);
+        });
+    };
+    auto file_of = [&] (segment_id_type id) {
+        return (tmp.path() / commitlog::descriptor(id, cfg.fname_prefix).filename()).string();
+    };
+
+    // A failed assertion must not leave the injection enabled for later tests.
+    std::exception_ptr error;
+    try {
+        rp_handle h1 = co_await write();           // S1
+        auto s1 = h1.rp().id;
+        co_await log.force_new_active_segment();
+        rp_handle h2 = co_await write();           // S2 stays dirty until the second pass
+        auto s2 = h2.rp().id;
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // S1's file is the first one recycled, so no other rename takes the injection.
+        utils::get_local_injector().enable("commitlog_fail_rename_sync");
+        rp_set rps1;
+        rps1.put(std::move(h1));
+        log.discard_completed_segments(uuid, rps1);
+        h1 = {};
+        // Closing S2 triggers a sweep, which recycles S1's file. The rename's sync
+        // fails, and the renamed file is unlinked instead.
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+        // Proves the recycle branch ran. Without the recycle the test degrades
+        // to the plain unlink case.
+        BOOST_REQUIRE_GE(utils::get_local_injector().enter_count("commitlog_fail_rename_sync"), 1);
+        utils::get_local_injector().disable("commitlog_fail_rename_sync");
+        BOOST_REQUIRE(!co_await file_exists(file_of(s1)));
+
+        // S2's file can only go after S1 left the queue, so its absence proves
+        // S1 was released from the queue.
+        rp_handle h3 = co_await write();           // S3 stays dirty, so _segments never empties
+        auto s3 = h3.rp().id;
+        rp_set rps2;
+        rps2.put(std::move(h2));
+        log.discard_completed_segments(uuid, rps2);
+        h2 = {};
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE(!co_await file_exists(file_of(s2)));
+        BOOST_REQUIRE_GT(s3, s1);
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+    } catch (...) {
+        error = std::current_exception();
+    }
+    utils::get_local_injector().disable("commitlog_fail_rename_sync");
+    co_await log.shutdown();
+    co_await log.clear();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+#endif
+}
+
 SEASTAR_TEST_CASE(test_commitlog_max_data_lifetime) {
     commitlog::config cfg;
 
