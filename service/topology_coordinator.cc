@@ -3790,6 +3790,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
         // TODO: Exclude nodes which don't contain replicas of the table we are truncating
+        // or of its views
         guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
 
         const utils::UUID& global_request_id = _topo_sm._topology.global_request_id.value();
@@ -4240,6 +4241,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     future<> handle_truncate_table(group0_guard guard) {
         std::string ks_name, cf_name;
+        table_id truncated_id;
         auto desc = [&] {
             return fmt::format("TRUNCATE on table {}.{}", ks_name, cf_name);
         };
@@ -4252,16 +4254,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 if (table) {
                     ks_name = table->schema()->ks_name();
                     cf_name = table->schema()->cf_name();
+                    truncated_id = id;
 
                     rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
 
-                    return std::unordered_set<table_id>({ id });
+                    // A replica truncates the table's views along with the table, but a view which
+                    // is not co-located with the table has a tablet map of its own, and its replicas
+                    // can be on nodes without a replica of the table. Send the truncate to those too.
+                    std::unordered_set<table_id> tables({ id });
+                    for (const view_ptr& view : table->views()) {
+                        tables.insert(view->id());
+                    }
+                    return tables;
                 }
                 throw std::invalid_argument(fmt::format("Cannot TRUNCATE table with UUID {} because it does not exist.", id));
             }
             , [&](const std::unordered_set<table_id>& tables, const service::frozen_topology_guard& frozen_guard, utils::UUID request_id) -> future<> {
                 auto tm = get_token_metadata_ptr();
-                const table_id id = *tables.begin();
+                const table_id id = truncated_id;
                 if (tm->tablets().get_tablet_map(id).has_raft_info()) {
                     // A strongly consistent table: the truncate is an entry in the raft log of each
                     // tablet, where its position decides which writes survive it.

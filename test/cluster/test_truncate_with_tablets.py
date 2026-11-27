@@ -540,3 +540,116 @@ async def test_truncate_by_stale_coordinator_with_foreign_session(manager: Scyll
 
         row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.tb', consistency_level=ConsistencyLevel.ALL))
         assert row[0].count == 0
+
+
+async def move_tablets_to(manager: ScyllaClusterManager, server, ks: str, table: str, dst_host) -> None:
+    """Moves every replica of every tablet of `table` (RF=1) to `dst_host`."""
+    for t in await get_all_tablet_replicas(manager, server, ks, table):
+        for (host, shard) in t.replicas:
+            if host != dst_host:
+                await manager.api.move_tablet(server.ip_addr, ks, table, host, shard, dst_host, 0, t.last_token)
+
+
+async def populate_view_apart_from_base(manager: ScyllaClusterManager, server, ks: str, view_kind: str,
+                                        base_host, view_host, keys) -> str:
+    """Creates table `test` and a view of it which is not co-located with it, a materialized view
+    or the backing view of a global secondary index, places the table's tablets on `base_host`
+    and the view's on `view_host`, writes `keys` and waits until the view has all of them.
+    Returns the name of the view."""
+    cql = manager.get_cql()
+    await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)')
+    # The view's partition key, c, differs from the table's, so the view has a tablet map of its own
+    if view_kind == 'mv':
+        view = 'mv'
+        await cql.run_async(f'CREATE MATERIALIZED VIEW {ks}.{view} AS SELECT * FROM {ks}.test'
+                            ' WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)')
+    else:
+        view = 'idx_index'
+        await cql.run_async(f'CREATE INDEX idx ON {ks}.test (c)')
+
+    await move_tablets_to(manager, server, ks, 'test', base_host)
+    await move_tablets_to(manager, server, ks, view, view_host)
+
+    await asyncio.gather(*[cql.run_async(SimpleStatement(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})',
+                                                         consistency_level=ConsistencyLevel.ALL)) for k in keys])
+
+    async def view_populated():
+        return await view_keys(cql, ks, view) == set(keys) or None
+    await wait_for(view_populated, time.time() + 60)
+    return view
+
+
+async def view_keys(cql, ks: str, view: str) -> set[int]:
+    rows = await cql.run_async(SimpleStatement(f'SELECT pk FROM {ks}.{view}', consistency_level=ConsistencyLevel.ALL))
+    return {row.pk for row in rows}
+
+
+@pytest.mark.parametrize("view_kind", ["mv", "index"])
+async def test_truncate_view_replica_on_node_without_base_replica(manager: ScyllaClusterManager, view_kind: str):
+    """TRUNCATE must truncate the views of the table on the nodes which hold view replicas
+    but no replica of the table itself.
+
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-6540: the truncate was sent
+    only to the replica hosts of the table, so a view which is not co-located with its table
+    kept the truncated rows on the other nodes.
+    """
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
+    servers = await manager.servers_add(2, config=cfg)
+    cql = manager.get_cql()
+    await manager.disable_tablet_balancing()
+    base_host, view_host = [await manager.get_host_id(s.server_id) for s in servers]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        keys = range(10)
+        view = await populate_view_apart_from_base(manager, servers[0], ks, view_kind, base_host, view_host, keys)
+        # Truncate sstables, not only memtables (auto_snapshot is off in tests, so nothing flushes them)
+        for s in servers:
+            await manager.api.keyspace_flush(s.ip_addr, ks)
+
+        await cql.run_async(f'TRUNCATE TABLE {ks}.test')
+
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == 0
+        assert await view_keys(cql, ks, view) == set()
+
+
+async def test_truncate_waits_for_down_view_replica_host(manager: ScyllaClusterManager):
+    """TRUNCATE must not complete without a down node which holds view replicas only,
+    the view on it must be truncated once it is back.
+
+    Today the coordinator's global barrier, which goes to every node, fails first, and the
+    truncate is retried until the node is back. The test guards against narrowing that
+    barrier, or the hosts which must be alive, to the replicas of the table alone.
+
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-6540.
+    """
+    # The TRUNCATE has to outlast a node restart, which can be slow in debug mode
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled', 'truncate_request_timeout_in_ms': 180000 }
+    # The third node keeps the group0 majority while the view replica's node is down
+    servers = await manager.servers_add(3, config=cfg)
+    cql = manager.get_cql()
+    await manager.disable_tablet_balancing()
+
+    (coord, coord_log) = await get_raft_leader_and_log(manager, servers)
+    view_server = next(s for s in servers if s != coord)
+    base_host = await manager.get_host_id(coord.server_id)
+    view_host = await manager.get_host_id(view_server.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        keys = range(10)
+        view = await populate_view_apart_from_base(manager, coord, ks, 'mv', base_host, view_host, keys)
+
+        coord_cql_host = (await wait_for_cql_and_get_hosts(cql, [coord], time.time() + 60))[0]
+        await manager.server_stop_gracefully(view_server.server_id)
+        mark = await coord_log.mark()
+        trunc_future = cql.run_async(f'TRUNCATE TABLE {ks}.test', host=coord_cql_host)
+        # The coordinator attempts the truncate while the node is down and has to give up and retry
+        await coord_log.wait_for(r'exec_global_command\(barrier_and_drain\) failed|Cannot perform TRUNCATE', from_mark=mark, timeout=60)
+        assert not trunc_future.done()
+        await manager.server_start(view_server.server_id)
+        await trunc_future
+
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == 0
+        assert await view_keys(cql, ks, view) == set()

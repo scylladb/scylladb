@@ -176,7 +176,7 @@ are the currently supported global topology operations:
    and avoid issues with data resurrection when truncate is executed during tablet
    migrations. Truncate has only one implicit transition stage. When the topology
    coordinator executes the truncate request, it issues truncate RPCs to nodes which
-   contain replicas of the table being truncated. It uses [sessions](#Topology guards)
+   contain replicas of the table being truncated or of its views. It uses [sessions](#Topology guards)
    to make sure that no stale RPCs are executed outside of the scope of the request.
 - `restore_tablets` See [Tablet restore transition](#tablet-restore-transition) below.
 - `prepare_migration` Creates a tablet map for every table of a keyspace, the first phase
