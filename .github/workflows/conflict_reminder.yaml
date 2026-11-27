@@ -248,6 +248,14 @@ jobs:
                     console.log(`Added 'conflicts' label to PR #${pr.number}`);
                   }
 
+                  // A draft opened by a person is parked or an early preview, so it gets no reminder.
+                  // Drafts opened by bots are still reminded: backport PRs (mergify[bot], scylladbbot)
+                  // are made drafts because of their conflicts, and their assignees must resolve them
+                  if (prDetails.draft && isHuman(pr.user)) {
+                    console.log(`PR #${pr.number} is a draft, no reminder sent`);
+                    continue;
+                  }
+
                   // Notify the first human assignee, or the PR author when there is none
                   const recipient = [...(pr.assignees ?? []), pr.user].find(isHuman);
                   if (!recipient) {
