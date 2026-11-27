@@ -13,6 +13,7 @@
 #include "compaction/compaction_manager.hh"
 #include "replica/database.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
 #include "utils/error_injection.hh"
@@ -1093,6 +1094,19 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_reshaping
 }
 
 static future<> run_table_resharding_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, bool vnodes_resharding, std::optional<uint64_t>& expected_workload, tasks::task_info task_info) {
+    if (auto& t = db.local().find_column_family(keyspace, table); t.uses_tablets() && !owned_ranges_ptr) {
+        // Split by tablet before collecting, so needs_cleanup() also picks sstables spanning tablets.
+        auto erm = t.get_effective_replication_map();
+        auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(t.schema()->id());
+        dht::token_range_vector ranges;
+        ranges.reserve(tmap.tablet_count());
+        for (auto tid : tmap.tablet_ids()) {
+            ranges.push_back(tmap.get_token_range(tid));
+        }
+        owned_ranges_ptr = compaction::make_owned_ranges_ptr(std::move(ranges));
+        // vnodes_resharding only makes resharding_compaction use segregate_by_token_group().
+        vnodes_resharding = true;
+    }
     auto all_jobs = co_await collect_all_shared_sstables(dir, db, keyspace, table, owned_ranges_ptr);
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
 
