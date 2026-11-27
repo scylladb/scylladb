@@ -1088,6 +1088,8 @@ The following modes are available:
 
 .. warning:: The ``repair`` mode is not supported for :term:`Colocated Tables <Colocated Table>` in this version.
 
+Tombstone GC does not run on a materialized view or a secondary index, in any mode, until the view is built on every node. Its tombstones are kept until then, also while a node that has not finished its part of the build is down. Removing or :doc:`excluding </operating-scylla/nodetool-commands/excludenode>` such a node ends the wait. This includes a node that is joining the cluster. Adding a node suspends tombstone GC on views until they are built on the new node too. :doc:`nodetool viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus>` shows the build progress per node.
+
 .. _cql-per-table-tablet-options:
 
 Per-table tablet options
