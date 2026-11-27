@@ -433,6 +433,10 @@ class ScyllaServer:
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
         self.serving_signal = None
+        # The address of the server's network proxy, set by the cluster when the server is
+        # put behind one (see test/pylib/network_proxy.py): its peers and its clients know it
+        # by this address, which it advertises as broadcast_address and broadcast_rpc_address.
+        self.proxy_address: Optional[IPAddress] = None
         shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
 
         workdir = pathlib.Path(vardir) / shortname
@@ -498,7 +502,9 @@ class ScyllaServer:
 
     @property
     def rpc_address(self) -> IPAddress:
-        return self.config["rpc_address"]
+        """The address clients reach the server's CQL port at, and which the driver reports for it:
+        its proxy's address when the server is behind the network proxy, its own otherwise."""
+        return self.proxy_address or self.config["rpc_address"]
 
     @property
     def datacenter(self) -> str:
@@ -785,9 +791,12 @@ class ScyllaServer:
                                        request_timeout=self.TOPOLOGY_TIMEOUT)
             contact_points = [UnixSocketEndPoint(maintenance_socket)]
         else:
-            profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.rpc_address]),
+            # The address the node listens on, not its proxy's: the start-up check must not
+            # depend on the rules a test has set on the network proxy.
+            listen_rpc_address = self.config["rpc_address"]
+            profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([listen_rpc_address]),
                                        request_timeout=self.TOPOLOGY_TIMEOUT)
-            contact_points=[self.rpc_address]
+            contact_points=[listen_rpc_address]
         connected = False
         cql_queried = False
         cluster_kwargs = dict(
