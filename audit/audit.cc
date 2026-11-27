@@ -88,6 +88,16 @@ static audit_sink_set parse_audit_sinks(const sstring& data) {
     return result;
 }
 
+static std::string_view sink_to_string(audit_sink sink) {
+    switch (sink) {
+    case audit_sink::table:
+        return "table";
+    case audit_sink::syslog:
+        return "syslog";
+    }
+    std::unreachable();
+}
+
 bool table_sink_configured(const db::config& cfg) {
     return parse_audit_sinks(cfg.audit()).contains(audit_sink::table);
 }
@@ -104,6 +114,16 @@ static void warn_on_sink_mismatch(const std::vector<audit_rule>& rules, audit_si
             }
         }
     }
+}
+
+static std::vector<audit_rule> drop_disabled_sinks(std::vector<audit_rule> rules, audit_sink_set enabled_sinks) {
+    for (auto& rule : rules) {
+        std::erase_if(rule.sinks, [enabled_sinks] (const sstring& name) {
+            return std::ranges::none_of(enabled_sinks, [&name] (audit_sink sink) { return sink_to_string(sink) == name; });
+        });
+    }
+    std::erase_if(rules, [] (const audit_rule& rule) { return rule.sinks.empty(); });
+    return rules;
 }
 
 static std::unique_ptr<storage_helper> create_storage_helper(audit_sink_set audit_sinks, cql3::query_processor& qp, service::migration_manager& mm) {
@@ -228,7 +248,7 @@ future<> audit::rebuild_rules() {
     auto new_rules = _cfg.audit_rules();
     logger.info("Updating audit rules: {} rules configured.", new_rules.size());
     warn_on_sink_mismatch(new_rules, _audit_sinks);
-    co_await _preprocessed_rules.refresh_rules(std::move(new_rules));
+    co_await _preprocessed_rules.refresh_rules(drop_disabled_sinks(std::move(new_rules), _audit_sinks));
     logger.info("Audit rules updated: {} rules configured.", _preprocessed_rules.rules().size());
 }
 
@@ -252,6 +272,7 @@ future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token
                 cfg.audit(), cfg.audit_categories(), cfg.audit_keyspaces(), cfg.audit_tables(), audit_rules.size());
 
     warn_on_sink_mismatch(audit_rules, audit_sinks);
+    audit_rules = drop_disabled_sinks(std::move(audit_rules), audit_sinks);
 
     return audit_instance().start(std::ref(stm),
                                   std::ref(qp),
