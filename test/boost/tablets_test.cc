@@ -7155,6 +7155,161 @@ SEASTAR_TEST_CASE(test_cleanup_of_deallocated_tablet) {
     }, cfg);
 }
 
+<<<<<<< HEAD
+||||||| parent of 01f1481b19 (replica: compaction_group: hold the sstable deletion gate for all of tablet cleanup)
+// Regression test for cleanup failures before the atomic deletion commit point:
+// compacted-but-not-deleted SSTables must stay tracked so cleanup can retry.
+SEASTAR_TEST_CASE(test_tablet_cleanup_retries_compacted_sstable_deletion) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = 1;
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("create table ks.cf (pk int, ck int, v text, primary key (pk, ck))").get();
+
+        for (int i = 0; i < 100; i++) {
+            e.execute_cql(format("INSERT INTO ks.cf (pk, ck, v) VALUES ({}, {}, '{}')",
+                                 i, i, "payload_to_ensure_sstable_creation")).get();
+        }
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+
+        auto saw_failed_cleanup = e.db().map_reduce0([&] (replica::database& db) -> future<bool> {
+            auto& cf = db.find_column_family("ks", "cf");
+            auto& sys_ks = e.get_system_keyspace().local();
+            if (cf.get_stats().tablet_count == 0 || cf.get_sstables()->empty()) {
+                co_return false;
+            }
+
+            utils::get_local_injector().enable("delete_atomically_before_prepare", true);
+            auto disable_injection = seastar::defer([] noexcept {
+                utils::get_local_injector().disable("delete_atomically_before_prepare");
+            });
+            try {
+                co_await cf.cleanup_tablet(db, sys_ks, locator::tablet_id(0));
+                BOOST_FAIL("cleanup_tablet should fail before atomic deletion is committed");
+            } catch (const std::runtime_error& e) {
+                BOOST_REQUIRE_EQUAL(std::string(e.what()), "delete_atomically_before_prepare");
+            }
+
+            BOOST_REQUIRE(cf.tablet_has_compacted_undeleted_sstables(locator::tablet_id(0)));
+            co_return true;
+        }, false, std::logical_or<bool>()).get();
+        BOOST_REQUIRE(saw_failed_cleanup);
+
+        e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+            auto& cf = db.find_column_family("ks", "cf");
+            if (cf.get_stats().tablet_count > 0) {
+                auto& sys_ks = e.get_system_keyspace().local();
+                co_await cf.cleanup_tablet(db, sys_ks, locator::tablet_id(0));
+                BOOST_REQUIRE(!cf.tablet_has_compacted_undeleted_sstables(locator::tablet_id(0)));
+            }
+            co_return;
+        }).get();
+    }, cfg);
+}
+
+=======
+// Regression test for cleanup failures before the atomic deletion commit point:
+// compacted-but-not-deleted SSTables must stay tracked so cleanup can retry.
+SEASTAR_TEST_CASE(test_tablet_cleanup_retries_compacted_sstable_deletion) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = 1;
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("create table ks.cf (pk int, ck int, v text, primary key (pk, ck))").get();
+
+        for (int i = 0; i < 100; i++) {
+            e.execute_cql(format("INSERT INTO ks.cf (pk, ck, v) VALUES ({}, {}, '{}')",
+                                 i, i, "payload_to_ensure_sstable_creation")).get();
+        }
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+
+        auto saw_failed_cleanup = e.db().map_reduce0([&] (replica::database& db) -> future<bool> {
+            auto& cf = db.find_column_family("ks", "cf");
+            auto& sys_ks = e.get_system_keyspace().local();
+            if (cf.get_stats().tablet_count == 0 || cf.get_sstables()->empty()) {
+                co_return false;
+            }
+
+            utils::get_local_injector().enable("delete_atomically_before_prepare", true);
+            auto disable_injection = seastar::defer([] noexcept {
+                utils::get_local_injector().disable("delete_atomically_before_prepare");
+            });
+            try {
+                co_await cf.cleanup_tablet(db, sys_ks, locator::tablet_id(0));
+                BOOST_FAIL("cleanup_tablet should fail before atomic deletion is committed");
+            } catch (const std::runtime_error& e) {
+                BOOST_REQUIRE_EQUAL(std::string(e.what()), "delete_atomically_before_prepare");
+            }
+
+            BOOST_REQUIRE(cf.tablet_has_compacted_undeleted_sstables(locator::tablet_id(0)));
+            co_return true;
+        }, false, std::logical_or<bool>()).get();
+        BOOST_REQUIRE(saw_failed_cleanup);
+
+        e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+            auto& cf = db.find_column_family("ks", "cf");
+            if (cf.get_stats().tablet_count > 0) {
+                auto& sys_ks = e.get_system_keyspace().local();
+                co_await cf.cleanup_tablet(db, sys_ks, locator::tablet_id(0));
+                BOOST_REQUIRE(!cf.tablet_has_compacted_undeleted_sstables(locator::tablet_id(0)));
+            }
+            co_return;
+        }).get();
+    }, cfg);
+}
+
+// Regression test for https://scylladb.atlassian.net/browse/SCYLLADB-6329:
+// a table that stops while its tablet is being cleaned up must not be left with the
+// sstables of the tablet in _sstables_compacted_but_not_deleted, referenced and never
+// deleted.
+SEASTAR_TEST_CASE(test_tablet_cleanup_racing_with_table_stop_leaves_no_undeleted_sstables) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = 1;
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("create table ks.cf (pk int, ck int, v text, primary key (pk, ck))").get();
+        for (int i = 0; i < 100; i++) {
+            e.execute_cql(format("INSERT INTO ks.cf (pk, ck, v) VALUES ({}, {}, 'payload')", i, i)).get();
+        }
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+
+        const auto tid = locator::tablet_id(0);
+        auto s = e.local_db().find_schema("ks", "cf");
+        auto shard = e.local_db().get_token_metadata().tablets().get_tablet_map(s->id()).get_tablet_info(tid).replicas.front().shard;
+        e.db().invoke_on(shard, [&] (replica::database& db) -> future<> {
+            auto& cf = db.find_column_family("ks", "cf");
+            BOOST_REQUIRE(!cf.get_sstables()->empty());
+
+            // Delays the cleanup after it stops the compaction groups of the tablet,
+            // and before it cleans them up, so the table stops in between.
+            utils::get_local_injector().enable("delay_tablet_compaction_groups_cleanup", true);
+            auto cleanup = cf.cleanup_tablet(db, e.get_system_keyspace().local(), tid);
+            auto stop = cf.stop();
+            co_await std::move(cleanup).then_wrapped([] (future<> f) {
+                // The cleanup fails because the table is stopping.
+                BOOST_REQUIRE(f.failed());
+                f.ignore_ready_future();
+            });
+            co_await std::move(stop);
+
+            BOOST_REQUIRE(!cf.tablet_has_compacted_undeleted_sstables(tid));
+        }).get();
+    }, cfg);
+}
+
+>>>>>>> 01f1481b19 (replica: compaction_group: hold the sstable deletion gate for all of tablet cleanup)
 // Reproduces https://github.com/scylladb/scylladb/issues/24134
 // tablet cleanup used subtract_compaction_group_from_stats() which is a
 // non-self-healing decrement. It double-counts total_disk_space_used because

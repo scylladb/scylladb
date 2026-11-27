@@ -5967,6 +5967,12 @@ future<> compaction_group::cleanup() {
         }
     };
 
+    // Held before the sstables are moved to _sstables_compacted_but_not_deleted below.
+    // If the table is stopping, the cleanup fails before it touches the sstables;
+    // otherwise table::stop() waits for the deletion to finish. Taking the gate only
+    // after the move would leave the sstables in that list, referenced and never
+    // deleted, when the table stops in between.
+    auto deletion_gate_holder = _t._sstable_deletion_gate.hold();
     auto permit = co_await _t.get_sstable_list_permit();
     auto updater = row_cache::external_updater(std::make_unique<compaction_group_cleaner>(*this));
 
@@ -5984,10 +5990,19 @@ future<> compaction_group::cleanup() {
     }
 
     if (!_sstables_compacted_but_not_deleted.empty()) {
+<<<<<<< HEAD
         co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
         // delete_sstables_atomically swallows exceptions, so this always runs.
         // Any SSTables that failed to delete will eventually be re-compacted
         // and re-deleted.
+||||||| parent of 01f1481b19 (replica: compaction_group: hold the sstable deletion gate for all of tablet cleanup)
+        auto gh = _t._sstable_deletion_gate.hold();
+        auto deletion = _t.make_atomic_deletion(_sstables_compacted_but_not_deleted);
+        co_await deletion.commit();
+=======
+        auto deletion = _t.make_atomic_deletion(_sstables_compacted_but_not_deleted);
+        co_await deletion.commit();
+>>>>>>> 01f1481b19 (replica: compaction_group: hold the sstable deletion gate for all of tablet cleanup)
         _sstables_compacted_but_not_deleted.clear();
         _t.rebuild_statistics();
     }
