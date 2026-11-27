@@ -96,12 +96,6 @@ static void verify_operand_count(const rjson::value* array, const size_check& ex
     }
 }
 
-struct rjson_engaged_ptr_comp {
-    bool operator()(const rjson::value* p1, const rjson::value* p2) const {
-        return rjson::single_value_comp()(*p1, *p2);
-    }
-};
-
 // It's not enough to compare underlying JSON objects when comparing sets,
 // as internally they're stored in an array, and the order of elements is
 // not important in set equality. See issue #5021
@@ -109,7 +103,7 @@ static bool check_EQ_for_sets(const rjson::value& set1, const rjson::value& set2
     if (!set1.IsArray() || !set2.IsArray() || set1.Size() != set2.Size()) {
         return false;
     }
-    std::set<const rjson::value*, rjson_engaged_ptr_comp> set1_raw;
+    std::set<const rjson::value*, rjson::single_value_ptr_comp> set1_raw;
     for (auto it = set1.Begin(); it != set1.End(); ++it) {
         set1_raw.insert(&*it);
     }
@@ -635,6 +629,23 @@ conditional_operator_type get_conditional_operator(const rjson::value& req) {
     }
 }
 
+void validate_condition_values(const rjson::value& conditions, const char* caller) {
+    for (auto it = conditions.MemberBegin(); it != conditions.MemberEnd(); ++it) {
+        if (!it->value.IsObject()) {
+            continue;
+        }
+        if (const rjson::value* v = rjson::find(it->value, "Value")) {
+            validate_value(*v, caller);
+        }
+        const rjson::value* list = rjson::find(it->value, "AttributeValueList");
+        if (list && list->IsArray()) {
+            for (const auto& e : list->GetArray()) {
+                validate_value(e, caller);
+            }
+        }
+    }
+}
+
 // Check if the existing values of the item (previous_item) match the
 // conditions given by the Expected and ConditionalOperator parameters
 // (if they exist) in the request (an UpdateItem, PutItem or DeleteItem).
@@ -653,6 +664,7 @@ bool verify_expected(const rjson::value& req, const rjson::value* previous_item)
     if (!expected->IsObject()) {
         throw api_error::validation("'Expected' parameter, if given, must be an object");
     }
+    validate_condition_values(*expected, "Expected");
     bool require_all = conditional_operator != conditional_operator_type::OR;
     return verify_condition(*expected, require_all, previous_item);
 }

@@ -373,6 +373,9 @@ filter::filter(parsed::expression_cache& parsed_expression_cache, const rjson::v
         if (rjson::find(request, "ProjectionExpression")) {
             throw api_error::validation(format("Cannot use both old-style and new-style parameters in same request: {} and ProjectionExpression", conditions_attribute));
         }
+        if (conditions->IsObject()) {
+            validate_condition_values(*conditions, conditions_attribute);
+        }
         bool require_all = conditional_operator != conditional_operator_type::OR;
         _imp = conditions_filter { require_all, rjson::copy(*conditions) };
     }
@@ -477,11 +480,13 @@ public:
             const sstring& column_name = (*_column_it)->name_as_text();
             if (column_name != executor::ATTRS_COLUMN_NAME) {
                 if (!_attrs_to_get || _attrs_to_get->contains(column_name) || _extra_filter_attrs.contains(column_name)) {
-                    if (!_item.HasMember(column_name.c_str())) {
+                    // A key name may contain U+0000, so look it up by length, not as a C string.
+                    rjson::value* field = rjson::find(_item, column_name);
+                    if (!field) {
                         rjson::add_with_string_name(_item, column_name, rjson::empty_object());
+                        field = rjson::find(_item, column_name);
                     }
-                    rjson::value& field = _item[column_name.c_str()];
-                    rjson::add_with_string_name(field, type_to_string((*_column_it)->type), json_key_column_value(bv, **_column_it));
+                    rjson::add_with_string_name(*field, type_to_string((*_column_it)->type), json_key_column_value(bv, **_column_it));
                 }
             } else {
                 auto deserialized = attrs_type()->deserialize(bv);
