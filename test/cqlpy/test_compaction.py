@@ -944,22 +944,26 @@ def test_twcs_compaction_of_deleted_rows_in_old_window(scylla_only, cql, test_ke
 # reports that they are valid, and doesn't change them.
 # Translated from scylla-dtest's compaction_additional_test.py::TestValidationCompaction::test_validation_compaction_with_valid_sstable,
 # which checked the log message that the sstables are valid.
+# Autocompaction is disabled, because a background compaction of the flushed
+# sstables would change them between the two checks, failing the test even
+# though scrub didn't touch them.
 def test_scrub_validate_valid_sstables(scylla_only, cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val text') as table:
-        for key in range(100):
-            cql.execute(f"INSERT INTO {table} (key, val) VALUES ({key}, 'hello')")
-        nodetool.flush(cql, table)
-        before = set(sstable_timestamps(cql, table))
-        assert before
-        ks, cf = table.split('.')
-        # Scrub takes a "pre-scrub" snapshot unless asked not to, and the
-        # snapshot would keep the table's directory after the table is dropped
-        response = requests.get(f'{nodetool.rest_api_url(cql)}/storage_service/keyspace_scrub/{ks}',
-                                params={'cf': cf, 'scrub_mode': 'VALIDATE', 'disable_snapshot': 'true'})
-        response.raise_for_status()
-        # 0 means that the sstables are valid (3 means validation errors)
-        assert response.json() == 0
-        assert set(sstable_timestamps(cql, table)) == before
+        with nodetool.no_autocompaction_context(cql, table):
+            for key in range(100):
+                cql.execute(f"INSERT INTO {table} (key, val) VALUES ({key}, 'hello')")
+            nodetool.flush(cql, table)
+            before = set(sstable_timestamps(cql, table))
+            assert before
+            ks, cf = table.split('.')
+            # Scrub takes a "pre-scrub" snapshot unless asked not to, and the
+            # snapshot would keep the table's directory after the table is dropped
+            response = requests.get(f'{nodetool.rest_api_url(cql)}/storage_service/keyspace_scrub/{ks}',
+                                    params={'cf': cf, 'scrub_mode': 'VALIDATE', 'disable_snapshot': 'true'})
+            response.raise_for_status()
+            # 0 means that the sstables are valid (3 means validation errors)
+            assert response.json() == 0
+            assert set(sstable_timestamps(cql, table)) == before
 
 # Test that the default compaction strategy of a table is
 # IncrementalCompactionStrategy.

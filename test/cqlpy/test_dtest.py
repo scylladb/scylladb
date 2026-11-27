@@ -2540,9 +2540,12 @@ def test_tracing_read_index_range(cql, test_keyspace, scylla_data_dir, scylla_on
 # Test the tracing of a query using an index to find one row: the trace
 # says which of the table's sstables it read the key from.
 # Translated from scylla-dtest's cql_tracing_addition_test.py::TestTracingReadAccess::test_tracing_info_for_index_read_one.
+# Autocompaction is disabled, because the index build also flushes the
+# table, so it may have several sstables, and a compaction replacing the
+# sstable which the query read would remove it before the test looks for it.
 def test_tracing_read_index_one(cql, test_keyspace, scylla_data_dir, scylla_only):
     with new_test_table(cql, test_keyspace, TRACING_SCHEMA) as table:
-        with new_secondary_index(cql, table, 'rate'):
+        with nodetool.no_autocompaction_context(cql, table), new_secondary_index(cql, table, 'rate'):
             insert_tracing_rows(cql, table, 5)
             nodetool.flush(cql, table)
             activities = trace_activities(cql, cql.execute(f'SELECT * FROM {table} WHERE rate = 3 BYPASS CACHE', trace=True),
