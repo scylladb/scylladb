@@ -707,7 +707,8 @@ async def run_workload(
     duration_s: float,
     disruptors: Sequence[tuple[str, DisruptorFactory]] = (),
 ) -> list[BaseException]:
-    """Run writers, readers and the given disruptors for ``duration_s``.
+    """Run writers, readers and the given disruptors for ``duration_s``, or until a
+    disruptor sets ``workload.stop_event``, whichever comes first.
 
     Returns the exceptions raised by the tasks; an empty list means every task
     finished cleanly.  Errors are returned rather than raised so that the
@@ -725,8 +726,11 @@ async def run_workload(
     try:
         async with asyncio.TaskGroup() as tg:
             async def stop_timer():
+                # Ends early when a disruptor stops the clients itself.
                 try:
-                    await asyncio.sleep(duration_s)
+                    await asyncio.wait_for(workload.stop_event.wait(), duration_s)
+                except TimeoutError:
+                    pass
                 finally:
                     workload.stop_event.set()
 

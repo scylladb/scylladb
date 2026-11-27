@@ -751,6 +751,8 @@ def pytest_runtest_makereport(item, call):
                     server.log_filename.unlink(missing_ok=True)
                 except OSError:
                     logger.warning("Failed to delete %s", server.log_filename, exc_info=True)
+            if cluster.network_proxy_log is not None:
+                cluster.network_proxy_log.unlink(missing_ok=True)
     recycled.clear()
 
 

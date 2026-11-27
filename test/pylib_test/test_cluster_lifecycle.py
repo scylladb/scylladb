@@ -183,6 +183,7 @@ class LogWritingCluster:
     the server logs already on disk when each cluster is created."""
 
     save_log_on_success = False
+    network_proxy_log = None
 
     def __init__(self, events: list[str], exit_status: int | None, logger, vardir: pathlib.Path, **kwargs) -> None:
         self.events = events

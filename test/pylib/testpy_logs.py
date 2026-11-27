@@ -150,6 +150,9 @@ def save_failed_phase_logs(item: pytest.Item, report: pytest.TestReport, cluster
     for server in chain.from_iterable(cluster.servers.values() for cluster in clusters):
         if server.log_filename.is_file():
             shutil.copyfile(server.log_filename, failed_test_dir_path / server.log_filename.name)
+    for cluster in clusters:
+        if cluster.network_proxy_log is not None and cluster.network_proxy_log.is_file():
+            shutil.copyfile(cluster.network_proxy_log, failed_test_dir_path / cluster.network_proxy_log.name)
     record_failed_test_artifacts(
         config=item.config,
         properties=item.user_properties,
