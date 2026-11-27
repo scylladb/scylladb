@@ -109,6 +109,26 @@ ninja build/<mode>/scylla
 - Question requests: don't blindly implement requests - evaluate trade-offs, identify issues, and suggest better alternatives when appropriate
 - Consider different approaches, weigh pros and cons, and recommend the best fit for the specific context
 
+### Readable Code
+Write code that a human reads correctly on the first pass. The points below give the usual
+direction, not fixed rules: where another form is clearly easier to read, use it. None of them
+justifies slower code on a hot path: keep the optimization and make it readable.
+- Prefer plain code over compact code. A dense one-liner, a nested comprehension or a chain of
+  algorithms is short but slow to read. For two or three items, plain repeated lines are often
+  clearer than a loop.
+- Prefer clear code over long comments. A comment usually gives the overview and the reason in a
+  few lines. A complex function or class can need a longer one, even with a list, but first check
+  whether simpler code would need less explanation. A comment states only facts checked in the
+  code.
+- When a problem shows up in one place, whether you or a reviewer found it, fix every place in the
+  change with the same pattern.
+- In tests, give different quantities different values: with 3 replicas, write 2 rows, not 3, so
+  that a count of 6 has only one meaning.
+- Split a long test into phases (set up, act, check) with a blank line and a one-line comment
+  each. The comments alone should give the outline.
+- Before presenting a change, reread the diff as someone who did not write it (file by file for a
+  large one), go through these points one by one, and rewrite whatever needs a second look.
+
 ## Making Changes
 - Make only the functional changes the task needs, and motivate each one in the patch
   description.
