@@ -6042,6 +6042,15 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        // The request is stored in the tablet map. If the table was dropped, or a
+        // rolled-back vnodes-to-tablets migration removed its tablet map, after
+        // the request was found, the request is gone with it.
+        if (!get_token_metadata().tablets().has_tablet_map(table)) {
+            slogger.info("Tablet repair request table_id={} tablet_task_id={} no longer exists: the table has no tablet map",
+                    table, tablet_task_id);
+            co_return;
+        }
+
         // see add_repair_tablet_request. repair requests can only be added on base tables.
         if (!get_token_metadata().tablets().is_base_table(table)) {
             auto table_schema = _db.local().find_schema(table);

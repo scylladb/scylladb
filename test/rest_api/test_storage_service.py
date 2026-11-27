@@ -887,6 +887,20 @@ def test_storage_service_tablet_repair_vnode_table(cql, test_keyspace_vnodes, re
         assert resp.status_code == requests.codes.bad_request
         assert "doesn't use tablets" in resp.text
 
+# The task manager finds a repair task in system.repair_tasks even when no
+# tablet map carries it, and that table outlives the tablet map of a dropped
+# table. Reproduces SCYLLADB-6708.
+def test_storage_service_tablet_repair_abort_after_table_drop(cql, test_keyspace, rest_api, skip_without_tablets):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        resp = rest_api.send("POST", "storage_service/tablets/repair", {"ks": test_keyspace, "table": table, "tokens": "all", "await_completion": "true"})
+        resp.raise_for_status()
+        task_id = resp.json()["tablet_task_id"]
+        cql.execute(f"DROP TABLE {t}")
+
+        resp = rest_api.send("POST", f"task_manager/abort_task/{task_id}")
+        assert resp.status_code == requests.codes.ok, resp.text
+
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
