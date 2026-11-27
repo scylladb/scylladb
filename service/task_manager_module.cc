@@ -311,10 +311,12 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     // see the same token metadata: the coroutine can yield in between.
     auto tmptr = _ss.get_token_metadata_ptr();
     auto table_ptr = _ss._db.local().get_tables_metadata().get_table_if_exists(table);
-    // A repair task found in system.repair_tasks may belong to a table which
-    // has no tablet map: a rolled-back vnodes-to-tablets migration removes the
-    // map but keeps the table.
-    if (!table_ptr || !tmptr->tablets().has_tablet_map(table)) {
+    const bool has_tablet_map = tmptr->tablets().has_tablet_map(table);
+    // A repair task found in system.repair_tasks may belong to a dropped
+    // table, or to a table without a tablet map: a rolled-back
+    // vnodes-to-tablets migration removes the map but keeps the table. Its
+    // status then comes from system.repair_tasks alone.
+    if (!is_repair_task(task_type) && (!table_ptr || !has_tablet_map)) {
         co_return tasks::task_status {
             .task_id = id,
             .kind = tasks::task_kind::cluster,
@@ -322,16 +324,15 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
         };
     }
     co_await utils::get_local_injector().inject("tablet_virtual_task_get_status_wait", utils::wait_for_message(std::chrono::seconds(60)));
-    auto schema = table_ptr->schema();
+    auto schema = table_ptr ? table_ptr->schema() : nullptr;
     res.status = {
         .task_id = id,
         .kind = tasks::task_kind::cluster,
         .is_abortable = co_await is_abortable(std::move(hint)),
-        .keyspace = schema->ks_name(),
-        .table = schema->cf_name(),
+        .keyspace = schema ? schema->ks_name() : sstring(),
+        .table = schema ? schema->cf_name() : sstring(),
     };
     size_t sched_nr = 0;
-    auto& tmap = tmptr->tablets().get_tablet_map(table);
     bool repair_task_finished = false;
     bool repair_task_pending = false;
     bool no_tablets_processed = true;
@@ -347,6 +348,8 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
                 repair_task_pending = true;
             }
         }
+        if (has_tablet_map) {
+            auto& tmap = tmptr->tablets().get_tablet_map(table);
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
             for (const auto* task_info : {info.repair_task_info.get(), info.pending_repair_request.get()}) {
                 if (task_info && task_info->tablet_task_id.uuid() == id.uuid()) {
@@ -356,8 +359,10 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
             }
             return make_ready_future();
         });
+        }
         res.status.children = co_await get_children(get_module(), id, _ss.get_token_metadata_ptr());
     } else if (is_migration_task(task_type)) {    // Migration task.
+        auto& tmap = tmptr->tablets().get_tablet_map(table);
         auto tablet_id = hint.get_tablet_id();
         res.pending_replica = tmap.get_tablet_transition_info(tablet_id)->pending_replica;
         auto& task_info = tmap.get_tablet_info(tablet_id).migration_task_info;
@@ -366,6 +371,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
             no_tablets_processed = false;
         }
     } else {    // Resize task.
+        auto& tmap = tmptr->tablets().get_tablet_map(table);
         auto& task_info = tmap.resize_task_info();
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
             update_status(task_info, res.status, sched_nr);

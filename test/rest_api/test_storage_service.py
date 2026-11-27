@@ -928,6 +928,22 @@ def test_storage_service_tablet_repair_status_table_drop_race(cql, test_keyspace
     resp = status.join()
     assert resp.status_code == requests.codes.ok, resp.text
 
+# The status of the repair task of a dropped table comes from
+# system.repair_tasks, so a finished repair is reported as done, by both
+# status and wait. Reproduces SCYLLADB-6708.
+def test_storage_service_tablet_repair_status_after_table_drop(cql, test_keyspace, rest_api, skip_without_tablets):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as t:
+        table = t.split(".")[1]
+        resp = rest_api.send("POST", "storage_service/tablets/repair", {"ks": test_keyspace, "table": table, "tokens": "all", "await_completion": "true"})
+        resp.raise_for_status()
+        task_id = resp.json()["tablet_task_id"]
+        cql.execute(f"DROP TABLE {t}")
+
+        for path in (f"task_manager/task_status/{task_id}", f"task_manager/wait_task/{task_id}"):
+            resp = rest_api.send("GET", path)
+            assert resp.status_code == requests.codes.ok, resp.text
+            assert resp.json()["state"] == "done", f"{path}: {resp.text}"
+
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
