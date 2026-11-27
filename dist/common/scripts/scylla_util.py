@@ -5,6 +5,7 @@
 import configparser
 import io
 import os
+import platform
 import re
 import subprocess
 import yaml
@@ -286,6 +287,47 @@ def get_set_nic_and_disks_config_value(cfg):
     except Exception:
         # For backwards compatibility
         return cfg.get('SET_NIC')
+
+
+def kstrtobool(value):
+    """The kernel's kstrtobool(): True, False, or None for a value the kernel rejects."""
+    value = value.lower()
+    if value[:1] in ('y', 't', '1', 'e') or value[:2] == 'on':
+        return True
+    if value[:1] in ('n', 'f', '0', 'd') or value[:2] == 'of':
+        return False
+    return None
+
+
+def kho_enabled():
+    """Whether Kexec HandOver (KHO) is enabled in the running kernel.
+
+    KHO keeps "scratch" memory (gigabytes on large machines) that only takes
+    movable pages, so the kernel can't use it for slab, page tables or I/O
+    buffers.  It is on by default in kernels built with
+    CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y (e.g. Linux 7.0 in Ubuntu 26.04).
+    kho= on the command line overrides the default; the kernel applies each
+    valid occurrence in order and ignores invalid ones.
+    """
+    try:
+        with open(f'/boot/config-{platform.release()}') as f:
+            config = f.read().splitlines()
+    except FileNotFoundError:
+        config = None
+    if config is not None and 'CONFIG_KEXEC_HANDOVER=y' not in config:
+        return False
+    enabled = config is not None and 'CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y' in config
+    try:
+        with open('/proc/cmdline') as f:
+            cmdline = f.read().split()
+    except FileNotFoundError:
+        cmdline = []
+    for arg in cmdline:
+        if arg.startswith('kho='):
+            value = kstrtobool(arg[len('kho='):])
+            if value is not None:
+                enabled = value
+    return enabled
 
 
 def swap_exists():

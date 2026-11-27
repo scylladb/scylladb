@@ -50,6 +50,7 @@ def test_non_interactive(root, distro, capsys):
         'scylla_cpuscaling_setup',
         'scylla_fstrim_setup',
         'scylla_memory_setup --lock-memory',
+        'scylla_kernel_memory_setup',
         'scylla_swap_setup --swap-directory / --swap-size 2',
         'scylla_rsyslog_setup --remote-server 10.0.0.1:514',
     ]
@@ -65,7 +66,7 @@ def test_skip_everything(root, capsys):
     assert root.run('scylla_setup', '--no-raid-setup', '--no-kernel-check', '--no-enable-service',
                     '--no-selinux-setup', '--no-ntp-setup', '--no-coredump-setup', '--no-sysconfig-setup',
                     '--no-io-setup', '--no-cpuscaling-setup', '--no-fstrim-setup', '--no-memory-setup',
-                    '--no-swap-setup', '--no-rsyslog-setup', '--no-perf-collector-setup') == 0
+                    '--no-kernel-memory-setup', '--no-swap-setup', '--no-rsyslog-setup', '--no-perf-collector-setup') == 0
     assert setup_calls(root) == []
     assert 'systemctl  disable scylla-perf-collector.service' in root.cmd
     assert 'A Scylla executable was not found' in capsys.readouterr().out
@@ -87,6 +88,18 @@ def test_developer_mode(root):
     calls = setup_calls(root)
     assert 'scylla_dev_mode_setup --developer-mode 1' in calls
     assert 'scylla_io_setup' not in calls
+
+
+@pytest.mark.parametrize('kho,argv,reminder', [(True, [], True), (False, [], False),
+                                               (True, ['--no-kernel-memory-setup'], False)],
+                         ids=['kho-enabled', 'kho-disabled', 'step-skipped'])
+def test_kho_reboot_reminder(root, monkeypatch, capsys, kho, argv, reminder):
+    """With KHO enabled in the running kernel, setup ends by asking to check kho=off and reboot, since the step's own output scrolls by."""
+    monkeypatch.setattr('platform.release', lambda: '7.0.0')
+    root.file('/boot/config-7.0.0', 'CONFIG_KEXEC_HANDOVER=y\nCONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y\n')
+    root.file('/proc/cmdline', 'ro\n' if kho else 'ro kho=off\n')
+    assert root.run('scylla_setup', '--no-raid-setup', *argv) == 0
+    assert ('Kexec HandOver is enabled in the running kernel. Please make sure kho=off' in capsys.readouterr().out) == reminder
 
 
 def test_raid_mount_exists(root, capsys):
@@ -174,6 +187,7 @@ def test_interactive(root, monkeypatch, capsys):
            '',                     # coredump
            'y', 'y', 'bogus', 'eth1', 'y',  # sysconfig, NIC/disk tuning, NIC, clocksource
            'y', 'y', 'y', 'y',     # io, cpuscaling, fstrim, memory
+           'y',                    # kernel memory
            'y', 'n', '/nope', '/', 'n', '5x', '5',  # swap, on /?, directory, auto size?, size
            'y', '10.0.0.1:514',    # rsyslog
            'y')                    # perf collector
@@ -189,6 +203,7 @@ def test_interactive(root, monkeypatch, capsys):
         'scylla_cpuscaling_setup',
         'scylla_fstrim_setup',
         'scylla_memory_setup --lock-memory',
+        'scylla_kernel_memory_setup',
         'scylla_swap_setup --swap-directory / --swap-size 5',
         'scylla_rsyslog_setup --remote-server 10.0.0.1:514',
     ]

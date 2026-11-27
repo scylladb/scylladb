@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2026-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+
+# Scylla locks almost all memory and leaves a small reserve to the kernel.
+# Make sure the kernel can use that reserve for its own allocations.
+
+import os
+import sys
+import argparse
+import shutil
+from subprocess import run, CalledProcessError
+from scylla_util import is_debian_variant, kho_enabled
+
+GRUB_DROPIN = '/etc/default/grub.d/99-scylla-kho.cfg'
+KHO_OFF = 'kho=off'
+
+
+def disable_kho():
+    """Add kho=off to the kernel command line of every boot entry.
+
+    Written whether or not the running kernel has KHO enabled, so the setting
+    is already there if the machine later boots a kernel that enables it.
+    """
+    if is_debian_variant() and shutil.which('update-grub'):
+        # A drop-in, not an edit of grub.cfg: update-grub regenerates grub.cfg on every kernel upgrade.
+        os.makedirs(os.path.dirname(GRUB_DROPIN), exist_ok=True)
+        with open(GRUB_DROPIN, 'w') as f:
+            f.write('# Added by scylla_kernel_memory_setup: Kexec HandOver keeps memory the kernel needs next to Scylla.\n')
+            f.write(f'GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX {KHO_OFF}"\n')
+        run('update-grub', shell=True, check=True)
+    elif shutil.which('grubby'):
+        run(f'grubby --update-kernel=ALL --args={KHO_OFF}', shell=True, check=True)
+    else:
+        if kho_enabled():
+            print(f'Kexec HandOver is enabled, and the bootloader is not supported: add {KHO_OFF} to the kernel command line manually.')
+        return
+    if kho_enabled():
+        print(f'Kexec HandOver is enabled in the running kernel. Reboot the machine to apply {KHO_OFF}.')
+
+
+def try_step(name, step):
+    """Run a step; a failure is reported but doesn't fail the setup, which goes on with its other steps."""
+    try:
+        step()
+    except (CalledProcessError, OSError) as e:
+        print(f'{name} failed: {e}')
+
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Configure the kernel to keep the memory Scylla leaves to it usable.')
+    parser.parse_args()
+
+    try_step('Disabling Kexec HandOver', disable_kho)
