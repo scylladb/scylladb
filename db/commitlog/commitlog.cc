@@ -344,8 +344,21 @@ public:
     };
 
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
+    struct file_to_dispose {
+        named_file file;
+        dispose_mode mode;
+        // Set for the file of a segment that was in _segments, so that
+        // min_position() stays at or below it while the file is queued.
+        std::optional<segment_id_type> id;
+    };
     // Disposed of in order; a file stays at the front until it is gone.
-    std::deque<std::pair<named_file, dispose_mode>> _files_to_dispose;
+    std::deque<file_to_dispose> _files_to_dispose;
+    // min_position() never passes this id: a kept (Keep) segment file
+    // left _files_to_dispose but stays on disk under its own name.
+    std::optional<segment_id_type> _min_position_floor;
+    void pin_min_position(segment_id_type id) noexcept {
+        _min_position_floor = std::min(_min_position_floor.value_or(id), id);
+    }
     // Ids of this shard's segment files from before start that are not
     // deleted yet. Released live segments wait for them.
     std::unordered_set<segment_id_type> _replay_ids;
@@ -1623,11 +1636,21 @@ public:
 };
 
 db::replay_position db::commitlog::segment_manager::min_position() const {
-    if (_segments.empty()) {
-        return {_ids, 0};
-    } else {
-        return {_segments.front()->_desc.id, 0};
+    // A segment that left _segments keeps its file on disk while it waits in
+    // _released_segments and then in _files_to_dispose.
+    auto id = _segments.empty() ? _ids : _segments.front()->_desc.id;
+    if (!_released_segments.empty()) {
+        id = std::min(id, _released_segments.begin()->first);
     }
+    for (const auto& f : _files_to_dispose) {
+        if (f.id) {
+            id = std::min(id, *f.id);
+        }
+    }
+    if (_min_position_floor) {
+        id = std::min(id, *_min_position_floor);
+    }
+    return {id, 0};
 }
 
 db::replay_position db::commitlog::segment_manager::current_position() const {
@@ -2828,7 +2851,7 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
 
     collect_released_files(true);
 
-    for (auto& [f, mode] : _files_to_dispose) {
+    for (auto& [f, mode, id] : _files_to_dispose) {
         if (mode == dispose_mode::Delete) {
             mode = dispose_mode::ForceDelete;
         }
@@ -2973,19 +2996,19 @@ void db::commitlog::segment_manager::collect_released_files(bool final) {
         if (!file || id >= oldest_live) {
             break;
         }
-        _files_to_dispose.emplace_back(std::move(*file));
+        _files_to_dispose.emplace_back(std::move(file->first), file->second, id);
         _released_segments.erase(it);
     }
     if (!final) {
         return;
     }
     std::erase_if(_released_segments, [this] (released_segments::value_type& r) {
-        auto& file = r.second;
+        auto& [id, file] = r;
         if (!file) {
             return false;
         }
         clogger.debug("Keeping segment {} on disk, since an older segment is kept", file->first.name());
-        _files_to_dispose.emplace_back(std::move(file->first), dispose_mode::Keep);
+        _files_to_dispose.emplace_back(std::move(file->first), dispose_mode::Keep, id);
         return true;
     });
 }
@@ -3081,13 +3104,12 @@ struct fmt::formatter<db::commitlog::segment_manager::byte_flow<T>> {
     }
 };
 
-using file_to_dispose_t = std::pair<db::commitlog::segment_manager::named_file,
-                                    db::commitlog::segment_manager::dispose_mode>;
+using file_to_dispose_t = db::commitlog::segment_manager::file_to_dispose;
 template <>
 struct fmt::formatter<file_to_dispose_t> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const file_to_dispose_t& p, fmt::format_context& ctx) const {
-        auto& [file, mode] = p;
+        auto& [file, mode, id] = p;
         return fmt::format_to(ctx.out(), "{} ({})", file, mode);
     }
 };
@@ -3118,7 +3140,7 @@ future<std::exception_ptr> db::commitlog::segment_manager::dispose_files() {
         while (!_files_to_dispose.empty()) {
             // Stays valid across the waits below: files are only appended
             // meanwhile. Shutdown may change the mode to ForceDelete.
-            auto& [f, mode] = _files_to_dispose.front();
+            auto& [f, mode, id] = _files_to_dispose.front();
             // `f.remove_file()` resets known_size to 0, so remember the size here,
             // in order to subtract it from total_size_on_disk accurately.
             auto size = f.known_size();
@@ -3132,6 +3154,9 @@ future<std::exception_ptr> db::commitlog::segment_manager::dispose_files() {
 
             // retain the file (replay...)
             if (mode == dispose_mode::Keep) {
+                if (id) {
+                    pin_min_position(*id);
+                }
                 _files_to_dispose.pop_front();
                 continue;
             }
