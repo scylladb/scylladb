@@ -307,14 +307,21 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     status_helper res;
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
+    // The check whether the table has a tablet map and the use of the map must
+    // see the same token metadata: the coroutine can yield in between.
+    auto tmptr = _ss.get_token_metadata_ptr();
     auto table_ptr = _ss._db.local().get_tables_metadata().get_table_if_exists(table);
-    if (!table_ptr) {
+    // A repair task found in system.repair_tasks may belong to a table which
+    // has no tablet map: a rolled-back vnodes-to-tablets migration removes the
+    // map but keeps the table.
+    if (!table_ptr || !tmptr->tablets().has_tablet_map(table)) {
         co_return tasks::task_status {
             .task_id = id,
             .kind = tasks::task_kind::cluster,
             .is_abortable = co_await is_abortable(std::move(hint)),
         };
     }
+    co_await utils::get_local_injector().inject("tablet_virtual_task_get_status_wait", utils::wait_for_message(std::chrono::seconds(60)));
     auto schema = table_ptr->schema();
     res.status = {
         .task_id = id,
@@ -324,7 +331,6 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
         .table = schema->cf_name(),
     };
     size_t sched_nr = 0;
-    auto tmptr = _ss.get_token_metadata_ptr();
     auto& tmap = tmptr->tablets().get_tablet_map(table);
     bool repair_task_finished = false;
     bool repair_task_pending = false;
