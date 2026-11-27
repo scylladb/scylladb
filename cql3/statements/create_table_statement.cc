@@ -182,7 +182,7 @@ void create_table_statement::add_column_metadata_from_aliases(schema_builder& bu
     }
 }
 
-std::unique_ptr<prepared_statement>
+future<prepare_result>
 create_table_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     // Cannot happen; create_table_statement is never instantiated as a raw statement
     // (instead we instantiate create_table_statement::raw_statement)
@@ -207,7 +207,8 @@ create_table_statement::raw_statement::raw_statement(cf_name name, bool if_not_e
     , _if_not_exists{if_not_exists}
 { }
 
-std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+future<prepare_result> create_table_statement::raw_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    prepare_allocations allocations;
     // Column family name
     const sstring& cf_name = _cf_name->get_column_family();
     boost::regex name_regex("\\w+");
@@ -495,7 +496,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         }
     }
 
-    return std::make_unique<prepared_statement>(audit_info(), stmt, std::move(stmt_warnings));
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), stmt, std::move(stmt_warnings)));
 }
 
 future<::shared_ptr<messages::result_message>>

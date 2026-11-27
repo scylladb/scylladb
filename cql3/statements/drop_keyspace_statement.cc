@@ -72,9 +72,10 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_w
     co_return std::make_tuple(std::move(ret), std::vector<sstring>());
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<cql3::statements::prepare_result>
 drop_keyspace_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<drop_keyspace_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), make_shared<drop_keyspace_statement>(*this)));
 }
 
 }

@@ -1105,6 +1105,9 @@ future<> schema_applier::commit() {
     // However, we can only acquire the (write) lock after preparing all
     // entities for the pending schema change that need to iterate over tables_metadata;
     // otherwise, such iteration would deadlock.
+    // hold_off_schema_changes() holds off this commit too. A batch that
+    // yields relies on it to see one schema, so apply every part of a schema
+    // change under these locks.
     _metadata_locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
             co_await replica::database::lock_tables_metadata(sharded_db));
     // Run func first on shard 0

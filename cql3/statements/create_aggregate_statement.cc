@@ -89,9 +89,10 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
     co_return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(reduce_func), std::move(final_func));
 }
 
-std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+future<prepare_result> create_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    prepare_allocations allocations;
     validate_name("Aggregate");
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<create_aggregate_statement>(*this));
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), make_shared<create_aggregate_statement>(*this)));
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>

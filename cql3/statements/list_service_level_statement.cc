@@ -37,10 +37,11 @@ list_service_level_statement::list_service_level_statement(sstring service_level
     _service_level(service_level), _describe_all(describe_all) {
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<cql3::statements::prepare_result>
 cql3::statements::list_service_level_statement::prepare(
         data_dictionary::database db, cql_stats &stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_service_level_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_service_level_statement>(*this)));
 }
 
 future<> list_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {

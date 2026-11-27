@@ -190,7 +190,7 @@ public:
         cql3::prepared_cache_key_type id,
         std::unique_ptr<cql3::query_options> qo) = 0;
 
-    virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) = 0;
+    virtual future<utils::chunked_vector<mutation>> get_modification_mutations(sstring text) = 0;
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) = 0;
 
@@ -260,6 +260,11 @@ public:
     virtual sharded<service::topology_state_machine>& get_topology_state_machine() = 0;
 
     data_dictionary::database data_dictionary();
+
+    // Waits until a schema change waits for the holders of
+    // data_dictionary::database::hold_off_schema_changes() on this shard.
+    // Runs in a seastar thread.
+    void wait_until_schema_change_waits();
 
     virtual sharded<qos::service_level_controller>& service_level_controller_service() = 0;
 

@@ -12,6 +12,7 @@
 
 #include <vector>
 
+#include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 
 #include "cql3/column_identifier.hh"
@@ -33,14 +34,26 @@ namespace cql3 {
 namespace util {
 
 
-void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func);
+// Stack size of a thread that parses with a hook, see do_with_parser(). It
+// is Seastar's default for a thread, except in debug builds, where the parser
+// needs far more stack.
+#ifdef DEBUG
+constexpr size_t parser_thread_stack_size = 1 << 20;
+#else
+constexpr size_t parser_thread_stack_size = 128 * 1024;
+#endif
 
+void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func,
+        noncopyable_function<void()>* on_token);
+
+// on_token, if set, runs on every token, so that a long parse can yield.
+// Such a parse runs on the caller's stack.
 template <typename Func, typename Result = cql3_parser::unwrap_uninitialized_t<std::invoke_result_t<Func, cql3_parser::CqlParser&>>>
-Result do_with_parser(utils::chunked_string_view cql, dialect d, Func&& f) {
+Result do_with_parser(utils::chunked_string_view cql, dialect d, Func&& f, noncopyable_function<void()>* on_token = nullptr) {
     std::optional<Result> ret;
     do_with_parser_impl(cql, d, [&] (cql3_parser::CqlParser& parser) {
         ret.emplace(f(parser));
-    });
+    }, on_token);
     return std::move(*ret);
 }
 
@@ -93,6 +106,11 @@ sstring quote(const std::string_view s);
 /// character itself is quoted by doubling it.
 /// Single quoting is necessary for dates, IP addresses or string literals.
 sstring single_quote(const std::string_view s);
+
+// Delays a step of a statement when the error injection injection_name is
+// enabled. Its parameter spin_us burns that many microseconds of CPU, and
+// pause waits for a message.
+future<> inject_delay(std::string_view injection_name);
 
 // Check whether timestamp is not too far in the future as this probably
 // indicates its incorrectness (for example using other units than microseconds).

@@ -132,6 +132,10 @@ public:
 
     value_type find(const key_type& key);
 
+    void remove(const key_type& key) {
+        _cache.remove(key.key());
+    }
+
     template <typename Pred>
     requires std::is_invocable_r_v<bool, Pred, ::shared_ptr<cql_statement>>
     void remove_if(Pred&& pred) {

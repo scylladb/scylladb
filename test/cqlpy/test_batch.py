@@ -9,7 +9,8 @@ import time
 
 from cassandra import ConsistencyLevel, InvalidRequest
 from cassandra.cluster import NoHostAvailable
-from cassandra.query import BatchStatement, SimpleStatement
+from cassandra.protocol import SyntaxException
+from cassandra.query import BatchStatement, BatchType, SimpleStatement
 from .util import new_test_table, new_test_keyspace, unique_name, unique_key_int, is_scylla, is_cassandra_older_than
 from . import rest_api
 from .rest_api import scylla_inject_error
@@ -460,3 +461,71 @@ def test_batch_static_ttl_conditional_interaction(cql, test_keyspace, clock):
         assert rows() == [(1, 2, 3, 4, 22, 5), (1, 4, 5, 6, 22, None)]
         batch(f'UPDATE {table} SET sval=23 WHERE id=1 IF sval=22', delete(4, 5, 6))
         assert rows() == [(1, 2, 3, 4, 23, 5)]
+
+# Scylla parses a statement this large in a thread that yields (SCYLLADB-219).
+LARGE = 16 * 1024
+
+# A large textual batch is parsed and prepared with yields in between
+# (SCYLLADB-219). Run a batch of many statements as an unprepared QUERY and as
+# a PREPARE followed by an EXECUTE, and check that every statement took effect.
+def test_large_batch_query(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        n = 250
+        inserts = "\n".join(f"INSERT INTO {table} (k, t) VALUES ({i}, 'q')" for i in range(n))
+        assert len(inserts) > LARGE
+        cql.execute("BEGIN UNLOGGED BATCH\n" + inserts + "\nAPPLY BATCH")
+        assert cql.execute(f"SELECT COUNT(*) FROM {table}").one()[0] == n
+
+def test_large_batch_prepared(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        n = 250
+        inserts = "\n".join(f"INSERT INTO {table} (k, t) VALUES (?, ?)" for _ in range(n))
+        assert len(inserts) > LARGE
+        prepared = cql.prepare("BEGIN UNLOGGED BATCH\n" + inserts + "\nAPPLY BATCH")
+        cql.execute(prepared, [v for i in range(n) for v in (i, 'p')])
+        assert cql.execute(f"SELECT COUNT(*) FROM {table}").one()[0] == n
+
+# A syntax error at the end of a large textual batch is reported as usual,
+# though such a batch is parsed in a thread that yields (SCYLLADB-219).
+def test_large_batch_syntax_error(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        inserts = "\n".join(f"INSERT INTO {table} (k, t) VALUES ({i}, 'q')" for i in range(250))
+        assert len(inserts) > LARGE
+        with pytest.raises(SyntaxException):
+            cql.execute("BEGIN UNLOGGED BATCH\n" + inserts + "\nAPPLY")
+
+# A BATCH message carries its statements one by one, as text or as the id of a
+# prepared statement, and Scylla prepares each textual one separately: a large
+# one in a thread that yields (SCYLLADB-219). Check that every statement takes
+# effect.
+def test_batch_message(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (k, t) VALUES (?, ?)")
+        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+        for i in range(100):
+            batch.add(f"INSERT INTO {table} (k, t) VALUES ({i}, 'q')")
+            batch.add(insert, (100 + i, 'p'))
+        large = 'x' * LARGE
+        batch.add(f"INSERT INTO {table} (k, t) VALUES (-1, '{large}')")
+        cql.execute(batch)
+        # 100 textual, 100 prepared and the large one.
+        assert cql.execute(f"SELECT COUNT(*) FROM {table}").one()[0] == 201
+        assert cql.execute(f"SELECT t FROM {table} WHERE k = -1").one().t == large
+
+# In a BATCH message, the entries after a large textual statement are read
+# only when that statement is prepared (SCYLLADB-219). Check that each of them
+# still takes effect, a prepared one with its own values.
+def test_batch_message_entries_after_large_statement(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (k, t) VALUES (?, ?)")
+        large = 'x' * LARGE
+        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+        batch.add(insert, (0, 'p0'))
+        batch.add(f"INSERT INTO {table} (k, t) VALUES (1, '{large}')")
+        batch.add(insert, (2, 'p2'))
+        batch.add(f"INSERT INTO {table} (k, t) VALUES (3, 'q3')")
+        batch.add(f"INSERT INTO {table} (k, t) VALUES (4, '{large}')")
+        batch.add(insert, (5, 'p5'))
+        cql.execute(batch)
+        rows = {row.k: row.t for row in cql.execute(f"SELECT k, t FROM {table}")}
+        assert rows == {0: 'p0', 1: large, 2: 'p2', 3: 'q3', 4: large, 5: 'p5'}

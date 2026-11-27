@@ -33,6 +33,7 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
 #include "service/client_routes.hh"
 #include "service/migration_manager.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
@@ -147,6 +148,26 @@ static const sstring testing_superuser = "tester";
 data_dictionary::database
 cql_test_env::data_dictionary() {
     return db().local().as_data_dictionary();
+}
+
+void
+cql_test_env::wait_until_schema_change_waits() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    for (;;) {
+        // A new holder is ready at once, unless a schema change waits: then
+        // it waits behind the schema change.
+        auto holder = data_dictionary().hold_off_schema_changes();
+        if (!holder.available()) {
+            // It lets go as soon as it gets its turn.
+            (void)holder.discard_result();
+            return;
+        }
+        (void)holder.get();
+        if (std::chrono::steady_clock::now() > deadline) {
+            throw std::runtime_error("wait_until_schema_change_waits(): no schema change waited within 30s");
+        }
+        seastar::sleep(std::chrono::milliseconds(1)).get();
+    }
 }
 
 class single_node_cql_env : public cql_test_env {
@@ -337,11 +358,11 @@ public:
             });
     }
 
-    virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) override {
+    virtual future<utils::chunked_vector<mutation>> get_modification_mutations(sstring text) override {
         auto qs = make_query_state();
-        auto cql_stmt = local_qp().get_statement(text, qs->get_client_state(), test_dialect(),
-                cql3::query_processor::prepared_for_driver::no)->statement;
-        auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(std::move(cql_stmt));
+        auto prepared = co_await local_qp().get_statement(text, qs->get_client_state(), test_dialect(),
+                cql3::query_processor::prepared_for_driver::no);
+        auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(prepared->statement);
         if (!modif_stmt) {
             throw std::runtime_error(format("get_stmt_mutations: not a modification statement: {}", text));
         }
@@ -349,8 +370,7 @@ public:
         auto timeout = db::timeout_clock::now() + qs->get_client_state().get_timeout_config().write_timeout;
         cql3::statements::modification_spec spec(*modif_stmt, qo);
 
-        return cql3::statements::eventual_consistency::get_mutations(*modif_stmt, local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, std::move(spec))
-            .finally([qs, modif_stmt = std::move(modif_stmt)] {});
+        co_return co_await cql3::statements::eventual_consistency::get_mutations(*modif_stmt, local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, std::move(spec));
     }
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) override {
@@ -1368,26 +1388,26 @@ public:
         testlog.trace("{}(type={}):\n  {}",
                 __FUNCTION__, batch_type == batch_statement::type::LOGGED ? "LOGGED" : "UNLOGGED", fmt::join(queries, "\n  "));
 
+        // The loop awaits, and the caller may release the texts meanwhile.
+        const std::vector<sstring> texts(queries.begin(), queries.end());
         std::vector<batch_statement::single_statement> modifications;
-        std::ranges::transform(queries, back_inserter(modifications), [this](const auto& query) {
-            auto stmt = local_qp().get_statement(query, _core_local.local().client_state, test_dialect(),
+        for (std::string_view query : texts) {
+            auto stmt = co_await local_qp().get_statement(query, _core_local.local().client_state, test_dialect(),
                     cql3::query_processor::prepared_for_driver::no);
             if (!dynamic_cast<modification_statement*>(stmt->statement.get())) {
                 throw exceptions::invalid_request_exception(
                     "Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
             }
-            return batch_statement::single_statement(static_pointer_cast<modification_statement>(stmt->statement));
-        });
+            modifications.emplace_back(static_pointer_cast<modification_statement>(stmt->statement));
+        }
         auto batch = ::make_shared<batch_statement>(
             batch_type,
             std::move(modifications),
             cql3::attributes::none(),
             local_qp().get_cql_stats());
         auto qs = make_query_state();
-        auto& lqo = *qo;
-        return local_qp().execute_batch_without_checking_exception_message(batch, *qs, lqo, batch->get_statements().size(), {}).then([qs, batch, qo = std::move(qo)] (auto msg) {
-            return cql_transport::messages::propagate_exception_as_future(std::move(msg));
-        });
+        auto msg = co_await local_qp().execute_batch_without_checking_exception_message(batch, *qs, *qo, batch->get_statements().size(), {});
+        co_return co_await cql_transport::messages::propagate_exception_as_future(std::move(msg));
     }
 
     virtual sharded<qos::service_level_controller>& service_level_controller_service() override {

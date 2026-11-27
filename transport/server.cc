@@ -1755,26 +1755,28 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     tracing::trace(trace_state, "Parsing a statement");
-    auto prepared = qp.local().get_statement(query.assume_value(), client_state, dialect,
+    return qp.local().get_statement(std::move(query).assume_value(), client_state, dialect,
             cql3::query_processor::prepared_for_driver::no,
-            cql3::query_processor::pinned_plan_from_paging_state(options.get_paging_state()));
-    auto& statement = *prepared->statement;
-    auto execute_fut = reclassifying_control_connection_needs_user_service_level(statement, query_state)
-            ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
-                    [&qp, &query_state, &options, prepared = std::move(prepared)] () mutable {
-                return qp.local().execute_direct_statement_without_checking_exception_message(std::move(prepared), query_state, options);
-            })
-            : qp.local().execute_direct_statement_without_checking_exception_message(std::move(prepared), query_state, options);
-    return std::move(execute_fut).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
-        if (msg->as_bounce()) {
-            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
-        } else if (msg->is_exception()) {
-            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
-        } else {
-            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
+            cql3::query_processor::pinned_plan_from_paging_state(options.get_paging_state())).then(
+            [&qp, &query_state, &options, q_state = std::move(q_state), stream, skip_metadata, version] (std::unique_ptr<cql3::statements::prepared_statement> prepared) mutable {
+        auto& statement = *prepared->statement;
+        auto execute_fut = reclassifying_control_connection_needs_user_service_level(statement, query_state)
+                ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
+                        [&qp, &query_state, &options, prepared = std::move(prepared)] () mutable {
+                    return qp.local().execute_direct_statement_without_checking_exception_message(std::move(prepared), query_state, options);
+                })
+                : qp.local().execute_direct_statement_without_checking_exception_message(std::move(prepared), query_state, options);
+        return std::move(execute_fut).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+            if (msg->as_bounce()) {
+                return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
+            } else if (msg->is_exception()) {
+                return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
+            } else {
+                tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
 
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, cql_metadata_id_wrapper{}, skip_metadata)));
-        }
+                return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, cql_metadata_id_wrapper{}, skip_metadata)));
+            }
+        });
     });
 }
 
@@ -1827,21 +1829,26 @@ struct pinned_plan {
     std::unique_ptr<cql3::statements::prepared_statement> statement;
 };
 
-// A prepared SELECT derives its plan once; re-derive it when the paging state
-// pins another. Returns an empty plan when there is nothing to re-derive.
-static pinned_plan
-maybe_rederive_with_pinned_plan(cql3::query_processor& qp, const service::client_state& client_state,
-        cql3::dialect dialect, const lw_shared_ptr<const service::pager::paging_state>& paging_state,
-        const cql3::cql_statement& stmt, semaphore& memory_available,
-        const tracing::trace_state_ptr& trace_state) {
+// A prepared SELECT derives its plan once. Returns the plan that the paging
+// state pins, if it is another one, so the statement must be re-derived.
+static std::optional<service::pager::query_plan>
+plan_to_rederive(const lw_shared_ptr<const service::pager::paging_state>& paging_state, const cql3::cql_statement& stmt) {
     auto pinned = cql3::query_processor::pinned_plan_from_paging_state(paging_state);
     if (!pinned) {
-        return {};
+        return std::nullopt;
     }
     auto stmt_plan = stmt.query_plan_for_paging();
     if (!stmt_plan || *stmt_plan == *pinned) {
-        return {};
+        return std::nullopt;
     }
+    return pinned;
+}
+
+// Re-derives the statement with the plan that the paging state pins.
+static future<pinned_plan>
+rederive_with_pinned_plan(cql3::query_processor& qp, const service::client_state& client_state,
+        cql3::dialect dialect, service::pager::query_plan pinned, const cql3::cql_statement& stmt,
+        semaphore& memory_available, const tracing::trace_state_ptr& trace_state) {
     auto keyspace = stmt.keyspace_for_reparse();
     if (stmt.raw_cql_statement.empty() || !keyspace) {
         // Unreachable: get_statement() records the query string, and a statement
@@ -1857,14 +1864,15 @@ maybe_rederive_with_pinned_plan(cql3::query_processor& qp, const service::client
     tracing::trace(trace_state,
             "Paging state pins another query plan; re-deriving the statement with that plan pinned");
     // It's still the statement the driver prepared.
-    rederived.statement = qp.get_statement(stmt.raw_cql_statement, client_state, dialect,
-            cql3::query_processor::prepared_for_driver::yes, std::move(pinned), keyspace);
+    rederived.statement = co_await coroutine::try_future(qp.get_statement(stmt.raw_cql_statement, client_state, dialect,
+            cql3::query_processor::prepared_for_driver::yes, std::move(pinned), keyspace));
     // Counts the pages that got a statement back. A refusal pays the re-parse
     // too - it is thrown while preparing what was parsed - but serves no page.
     ++qp.get_cql_stats().select_paging_plan_rederivations;
-    return rederived;
+    co_return rederived;
 }
 
+// Executes the statement re-derived with the plan that the paging state pins.
 // Kept apart from process_execute_internal so a paged EXECUTE costs the common
 // path nothing; the tail is duplicated on purpose - keep the two in step.
 static future<cql_server::process_fn_return_type>
@@ -1873,20 +1881,24 @@ execute_prepared_with_paging_state(service::client_state& client_state, sharded<
         std::unique_ptr<cql_query_state> q_state, cql3::statements::prepared_statement::checked_weak_ptr prepared,
         cql3::prepared_cache_key_type cache_key, bool needs_authorization,
         cql_metadata_id_wrapper metadata_id, bool skip_metadata, bool init_trace,
-        tracing::trace_state_ptr trace_state, semaphore& memory_available) {
+        tracing::trace_state_ptr trace_state, semaphore& memory_available, service::pager::query_plan plan) {
     auto& query_state = q_state->query_state;
     auto& options = *q_state->options;
     auto stmt = prepared->statement;
 
-    pinned_plan pinned = maybe_rederive_with_pinned_plan(qp.local(), client_state, dialect,
-            options.get_specific_options().state, *stmt, memory_available, query_state.get_trace_state());
-    if (pinned.statement) {
-        stmt = pinned.statement->statement;
+    pinned_plan pinned = co_await coroutine::try_future(rederive_with_pinned_plan(qp.local(), client_state, dialect,
+            std::move(plan), *stmt, memory_available, query_state.get_trace_state()));
+    // A schema change can drop the cache entry while the await above is
+    // suspended. Answer as for an entry already gone: the driver prepares again.
+    if (!prepared) {
+        co_return coroutine::exception(std::make_exception_ptr(
+                exceptions::prepared_query_not_found_exception(cql3::prepared_cache_key_type::cql_id(cache_key))));
     }
+    stmt = pinned.statement->statement;
 
     // The bound names must come from the statement being executed: they order the
     // values a client sent by name, and only its own prepare_context numbered them.
-    options.prepare(pinned.statement ? pinned.statement->bound_names : prepared->bound_names);
+    options.prepare(pinned.statement->bound_names);
 
     if (init_trace && trace_state) {
         tracing::add_prepared_query_options(trace_state, options);
@@ -1900,17 +1912,15 @@ execute_prepared_with_paging_state(service::client_state& client_state, sharded<
                 return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization);
             })
             : qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization);
-    return std::move(execute_fut).then([skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id),
-            pinned = std::move(pinned)] (auto msg) mutable {
-        if (msg->as_bounce()) {
-            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
-        } else if (msg->is_exception()) {
-            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
-        } else {
-            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata)));
-        }
-    });
+    auto msg = co_await coroutine::try_future(std::move(execute_fut));
+    if (msg->as_bounce()) {
+        co_return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
+    } else if (msg->is_exception()) {
+        co_return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
+    } else {
+        tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
+        co_return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata)));
+    }
 }
 
 static future<cql_server::process_fn_return_type>
@@ -2000,9 +2010,12 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     // A paging state can pin a query plan this statement did not derive, which
     // takes re-deriving it - all out of line, so this path pays only a branch.
     if (options.get_specific_options().state) {
-        return execute_prepared_with_paging_state(client_state, qp, stream, version, dialect,
-                std::move(q_state), std::move(prepared), std::move(cache_key), needs_authorization,
-                std::move(metadata_id), skip_metadata, init_trace, trace_state, memory_available);
+        auto plan = plan_to_rederive(options.get_specific_options().state, *stmt);
+        if (plan) {
+            return execute_prepared_with_paging_state(client_state, qp, stream, version, dialect,
+                    std::move(q_state), std::move(prepared), std::move(cache_key), needs_authorization,
+                    std::move(metadata_id), skip_metadata, init_trace, trace_state, memory_available, std::move(*plan));
+        }
     }
 
     options.prepare(prepared->bound_names);
@@ -2031,6 +2044,367 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     });
 }
 
+// The entries of a BATCH message, read and prepared one by one.
+class batch_message {
+    service::client_state& _client_state;
+    sharded<cql3::query_processor>& _qp;
+    const cql_protocol_version_type _version;
+    const cql3::dialect _dialect;
+    const tracing::trace_state_ptr _trace_state;
+    const bool _init_trace;
+    const bool _trace_entries;
+    const cql3::statements::batch_statement::type _type;
+    const uint16_t _entry_count;
+    const request_reader _first_entry;
+    request_reader _in;
+    uint16_t _entries_read = 0;
+    // Entries can be read twice, see restart(), but each is traced once.
+    uint16_t _entries_traced = 0;
+    std::vector<cql3::statements::batch_statement::single_statement> _modifications;
+    std::vector<std::reference_wrapper<const audit::audit_info>> _audit_infos;
+    std::vector<cql3::raw_value_view_vector_with_unset> _values;
+    std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> _pending_authorization_entries;
+    // The schema of the last prepared entry that was compared with its table.
+    const schema* _current_schema = nullptr;
+public:
+    // in is at the first entry.
+    batch_message(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in, cql_protocol_version_type version,
+            cql3::dialect dialect, tracing::trace_state_ptr trace_state, bool init_trace, cql3::statements::batch_statement::type type, uint16_t entry_count)
+        : _client_state(client_state)
+        , _qp(qp)
+        , _version(version)
+        , _dialect(dialect)
+        , _trace_state(std::move(trace_state))
+        , _init_trace(init_trace)
+        , _trace_entries(init_trace && _trace_state)
+        , _type(type)
+        , _entry_count(entry_count)
+        , _first_entry(in)
+        , _in(in)
+    {
+        _modifications.reserve(entry_count);
+        _audit_infos.reserve(entry_count);
+        _values.reserve(entry_count);
+    }
+
+    // Reads entries up to the next textual entry or the end of the message.
+    // At a textual entry it stops with the entry's kind read, so its text
+    // comes next in the input.
+    utils::result_with_exception_ptr<void> read_prepared_entries();
+
+    // Whether all entries are read.
+    bool at_end() const {
+        return _entries_read == _entry_count;
+    }
+
+    // Reads a message that has a textual entry. Its parse and prepare can
+    // yield. This parses the textual entries first, then holds off schema
+    // changes and reads all entries again. All entries use one keyspace.
+    future<> read_with_textual_entries();
+
+    // Executes the batch. All entries must be read.
+    future<cql_server::process_fn_return_type> execute(uint16_t stream, service_permit permit, cql3::computed_function_values cached_pk_fn_calls,
+            std::optional<db::timeout_clock::time_point> deadline, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp);
+private:
+    // A textual entry's statement, and the bytes its parse allocated.
+    using parsed_entry = std::pair<std::unique_ptr<cql3::statements::raw::parsed_statement>, uint64_t>;
+
+    // Parses the textual entries from the current one to the end of the
+    // message, and reads the prepared entries between them.
+    future<std::vector<parsed_entry>> parse_textual_entries();
+    utils::result_with_exception_ptr<void> skip_values();
+    utils::result_with_exception_ptr<void> add_prepared();
+    utils::result_with_exception_ptr<void> add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps,
+            const cql3::prepared_cache_key_type* prepared_key, bool needs_authorization);
+    void restart();
+};
+
+utils::result_with_exception_ptr<void>
+batch_message::read_prepared_entries() {
+    while (_entries_read < _entry_count) {
+        const utils::result_with_exception_ptr<int8_t> kind = _in.read_byte();
+        if (!kind) {
+            return bo::failure(std::move(kind).assume_error());
+        }
+
+        switch (kind.assume_value()) {
+        case 0:
+            return bo::success();
+        case 1: {
+            auto added = add_prepared();
+            if (!added) {
+                return bo::failure(std::move(added).assume_error());
+            }
+            break;
+        }
+        default:
+            return bo::failure(std::make_exception_ptr(exceptions::protocol_exception(
+                    "Invalid query kind in BATCH messages. Must be 0 or 1 but got "
+                            + std::to_string(int(kind.assume_value())))));
+        }
+    }
+    return bo::success();
+}
+
+future<>
+batch_message::read_with_textual_entries() {
+    // The statement of a textual entry is awaited, so other tasks run from
+    // here on. A USE on this connection among them could change the keyspace
+    // that the entries resolve their tables against, so they all use the
+    // keyspace from now.
+    const auto client_state = _client_state.snapshot();
+    // A parse does not depend on the schema, so a schema change does not wait
+    // for the parses.
+    auto parsed = co_await coroutine::try_future(parse_textual_entries());
+    // A schema change could leave two entries on different versions of one
+    // table, so none runs until all entries are read.
+    auto schema_lock = co_await _qp.local().db().hold_off_schema_changes();
+    // A schema change may have run after the prepared entries were read.
+    // Read them again.
+    restart();
+    for (auto& [statement, allocated_in_parse] : parsed) {
+        // The prepared entries before this textual one.
+        auto status = read_prepared_entries();
+        if (!status) {
+            co_await coroutine::return_exception_ptr(std::move(status).assume_error());
+        }
+        utils::result_with_exception_ptr<utils::chunked_string> query = _in.read_long_chunked_string();
+        if (!query) {
+            co_await coroutine::return_exception_ptr(std::move(query).assume_error());
+        }
+        auto prepared = co_await coroutine::try_future(_qp.local().prepare_batch_message_statement(
+                std::move(statement), allocated_in_parse, std::move(query).assume_value(), client_state));
+        auto added = add_statement(prepared->checked_weak_from_this(), nullptr, true);
+        if (!added) {
+            co_await coroutine::return_exception_ptr(std::move(added).assume_error());
+        }
+    }
+    // The prepared entries after the last textual one.
+    auto status = read_prepared_entries();
+    if (!status) {
+        co_await coroutine::return_exception_ptr(std::move(status).assume_error());
+    }
+}
+
+future<std::vector<batch_message::parsed_entry>>
+batch_message::parse_textual_entries() {
+    std::vector<parsed_entry> parsed;
+    for (;;) {
+        utils::result_with_exception_ptr<utils::chunked_string> query = _in.read_long_chunked_string();
+        if (!query) {
+            co_await coroutine::return_exception_ptr(std::move(query).assume_error());
+        }
+        parsed.push_back(co_await coroutine::try_future(_qp.local().parse_batch_message_statement(query.assume_value(), _dialect)));
+        auto skipped = skip_values();
+        if (!skipped) {
+            co_await coroutine::return_exception_ptr(std::move(skipped).assume_error());
+        }
+        auto status = read_prepared_entries();
+        if (!status) {
+            co_await coroutine::return_exception_ptr(std::move(status).assume_error());
+        }
+        if (at_end()) {
+            co_return parsed;
+        }
+    }
+}
+
+// Reads past the values of a textual entry. They are read again once its
+// statement is prepared.
+utils::result_with_exception_ptr<void>
+batch_message::skip_values() {
+    std::vector<cql3::raw_value_view> values;
+    cql3::unset_bind_variable_vector unset;
+    auto rvl = _in.read_value_view_list(_version, values, unset);
+    if (!rvl) {
+        return bo::failure(std::move(rvl).assume_error());
+    }
+    ++_entries_read;
+    return bo::success();
+}
+
+utils::result_with_exception_ptr<void>
+batch_message::add_prepared() {
+    utils::result_with_exception_ptr<bytes> cache_key_bytes = _in.read_short_bytes();
+    if (!cache_key_bytes) {
+        return bo::failure(std::move(cache_key_bytes).assume_error());
+    }
+    cql3::prepared_cache_key_type cache_key(cache_key_bytes.assume_value(), _dialect);
+    bool needs_authorization = false;
+
+    // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
+    // look for the prepared statement and then authorize it.
+    auto ps = _qp.local().get_prepared(_client_state.user(), cache_key);
+    if (!ps) {
+        ps = _qp.local().get_prepared(cache_key);
+        if (!ps) {
+            return bo::failure(std::make_exception_ptr(exceptions::prepared_query_not_found_exception(cql3::prepared_cache_key_type::cql_id(cache_key))));
+        }
+        // authorize a particular prepared statement only once
+        needs_authorization = _pending_authorization_entries.emplace(cache_key, ps->checked_weak_from_this()).second;
+    }
+    return add_statement(std::move(ps), &cache_key, needs_authorization);
+}
+
+// Adds the statement of an entry and reads the entry's values. prepared_key
+// is the cache key of a prepared entry, and null for a textual one.
+utils::result_with_exception_ptr<void>
+batch_message::add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps,
+        const cql3::prepared_cache_key_type* prepared_key, bool needs_authorization) {
+    auto modif_statement_ptr = dynamic_pointer_cast<cql3::statements::modification_statement>(ps->statement);
+    if (!modif_statement_ptr) {
+        return bo::failure(std::make_exception_ptr(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.")));
+    }
+    const schema& s = *modif_statement_ptr->s;
+    if (prepared_key && &s != _current_schema) {
+        // A schema change is applied to a table first, and the table's
+        // prepared statements leave the cache a little later. A statement
+        // found in between is older than its table, and the batch could mix
+        // it with a statement of the new version. Drop it, and the driver
+        // prepares it again.
+        auto table = _qp.local().db().try_find_table(s.id());
+        if (!table || table->schema()->version() != s.version()) {
+            _qp.local().remove_prepared(_client_state.user(), *prepared_key, *ps);
+            return bo::failure(std::make_exception_ptr(
+                    exceptions::prepared_query_not_found_exception(cql3::prepared_cache_key_type::cql_id(*prepared_key))));
+        }
+        _current_schema = &s;
+    }
+    // Skip tracing entries already traced before restart().
+    if (_trace_entries && _entries_read == _entries_traced) {
+        tracing::add_query(_trace_state, ps->statement->raw_cql_statement);
+        tracing::add_table_name(_trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
+        tracing::add_prepared_statement(_trace_state, ps);
+        ++_entries_traced;
+    }
+    if (auto* inner_ai = ps->statement->get_audit_info()) {
+        _audit_infos.emplace_back(*inner_ai);
+    }
+
+    _modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
+
+    std::vector<cql3::raw_value_view> tmp;
+    cql3::unset_bind_variable_vector unset;
+    auto rvl = _in.read_value_view_list(_version, tmp, unset);
+    if (!rvl) {
+        return bo::failure(std::move(rvl).assume_error());
+    }
+
+    auto stmt = ps->statement;
+    if (stmt->get_bound_terms() != tmp.size()) {
+        return bo::failure(std::make_exception_ptr(exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
+                        stmt->get_bound_terms(), tmp.size()))));
+    }
+    _values.emplace_back(cql3::raw_value_view_vector_with_unset(std::move(tmp), std::move(unset)));
+    ++_entries_read;
+    return bo::success();
+}
+
+// Makes the entries be read again from the first one.
+void batch_message::restart() {
+    _in = _first_entry;
+    _entries_read = 0;
+    _modifications.clear();
+    _audit_infos.clear();
+    _values.clear();
+    _pending_authorization_entries.clear();
+    _current_schema = nullptr;
+}
+
+future<cql_server::process_fn_return_type>
+batch_message::execute(uint16_t stream, service_permit permit, cql3::computed_function_values cached_pk_fn_calls,
+        std::optional<db::timeout_clock::time_point> deadline, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp) {
+    auto q_state = std::make_unique<cql_query_state>(_client_state, _trace_state, std::move(permit));
+    auto& query_state = q_state->query_state;
+    // #563. CQL v2 encodes query_options in v1 format for batch requests.
+    auto o = _in.read_options(_version, _qp.local().get_cql_config());
+    if (!o) {
+        return make_exception_future<cql_server::process_fn_return_type>(std::move(o).assume_error());
+    }
+    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*o.assume_value()), std::move(_values)));
+    auto& options = *q_state->options;
+    record_client_timestamp_drift(sg_stats, _init_trace, request_start_timestamp, options.get_specific_options().timestamp);
+    if (!cached_pk_fn_calls.empty()) {
+        options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+    }
+    if (deadline) {
+        options.set_deadline(*deadline);
+    }
+
+    if (_client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+        const utils::result_with_exception_ptr<uint16_t> routing_statement_index = _in.read_short();
+        if (!routing_statement_index) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(
+                    std::move(routing_statement_index).assume_error());
+        }
+        const utils::result_with_exception_ptr<int8_t> tablet_version_byte = _in.read_byte();
+        if (!tablet_version_byte) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(
+                    std::move(tablet_version_byte).assume_error());
+        }
+        // The index of a batch the driver didn't route by any statement.
+        constexpr uint16_t no_routing_statement = 0xFFFF;
+        const uint16_t index = routing_statement_index.assume_value();
+        if (index != no_routing_statement) {
+            if (index >= _modifications.size()) [[unlikely]] {
+                return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(format(
+                        "Invalid routing statement index in BATCH message: {} for a batch of {} statements",
+                        index, _modifications.size())));
+            }
+            // Whether the driver could compute the token from the routing statement
+            // is only decided when the batch is executed: it depends on the prepared
+            // statement the ID names now, not on the request.
+            const locator::tablet_version_block block{uint8_t(tablet_version_byte.assume_value())};
+            options.set_routing_hint(index, block);
+        }
+    }
+
+    if (_init_trace && _trace_state) {
+        tracing::add_prepared_query_options(_trace_state, options);
+        tracing::set_common_query_parameters(_trace_state, options.get_consistency(),
+            options.get_serial_consistency(), options.get_specific_options().timestamp);
+
+        tracing::trace(_trace_state, "Creating a batch statement");
+    }
+
+    auto ai = audit::audit::create_audit_info(audit::statement_category::DML, sstring(), sstring(), true);
+    if (ai) {
+        ai->set_batch_infos(std::move(_audit_infos));
+    }
+    ::shared_ptr<cql3::cql_statement> statement = ::make_shared<cql3::statements::batch_statement>(_type, std::move(_modifications), cql3::attributes::none(), _qp.local().get_cql_stats());
+    statement->set_audit_info(std::move(ai));
+
+    const size_t batch_size = _entry_count;
+    auto execute_fut = reclassifying_control_connection_needs_user_service_level(*statement, query_state)
+            ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
+                    [&qp = _qp, &query_state, &options, statement = std::move(statement), pending_authorization_entries = std::move(_pending_authorization_entries), batch_size] () mutable {
+                return qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, batch_size, std::move(pending_authorization_entries));
+            })
+            : _qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, batch_size, std::move(_pending_authorization_entries));
+    return std::move(execute_fut).then([stream, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version = _version] (auto msg) {
+        if (msg->as_bounce()) {
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
+        } else if (msg->is_exception()) {
+            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
+        } else {
+            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
+
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version, cql_metadata_id_wrapper{})));
+        }
+    });
+}
+
+// Reads a BATCH message that has a textual entry, and executes the batch.
+static future<cql_server::process_fn_return_type>
+read_with_textual_entries_and_execute(batch_message message, uint16_t stream, service_permit permit, cql3::computed_function_values cached_pk_fn_calls,
+        std::optional<db::timeout_clock::time_point> deadline, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp) {
+    co_await coroutine::try_future(message.read_with_textual_entries());
+    co_return co_await message.execute(stream, std::move(permit), std::move(cached_pk_fn_calls), deadline, sg_stats, request_start_timestamp);
+}
+
+// A BATCH message of prepared entries is processed without a coroutine. A
+// textual entry awaits its statement, so a message that has one is read in a
+// coroutine.
 static future<cql_server::process_fn_return_type>
 process_batch_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
@@ -2046,182 +2420,21 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         return make_exception_future<cql_server::process_fn_return_type>(std::move(n).assume_error());
     }
 
-    size_t batch_size = 0;
-    std::vector<cql3::statements::batch_statement::single_statement> modifications;
-    std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
-    std::vector<cql3::raw_value_view_vector_with_unset> values;
-    std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> pending_authorization_entries;
-
-    modifications.reserve(n.assume_value());
-    batch_audit_infos.reserve(n.assume_value());
-    values.reserve(n.assume_value());
-
     if (init_trace && trace_state) {
         tracing::begin(trace_state, "Execute batch of CQL3 queries", client_state.get_client_address());
     }
 
-    for ([[gnu::unused]] auto i : std::views::iota(0u, n.assume_value())) {
-        const utils::result_with_exception_ptr<int8_t> kind = in.read_byte();
-        if (!kind) {
-            return make_exception_future<cql_server::process_fn_return_type>(std::move(kind).assume_error());
-        }
-
-        std::unique_ptr<cql3::statements::prepared_statement> stmt_ptr;
-        cql3::statements::prepared_statement::checked_weak_ptr ps;
-        bool needs_authorization(kind.assume_value() == 0);
-
-        switch (kind.assume_value()) {
-        case 0: {
-            utils::result_with_exception_ptr<utils::chunked_string> query = in.read_long_chunked_string();
-            if (!query) {
-                return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
-            }
-            stmt_ptr = qp.local().get_statement(query.assume_value(), client_state, dialect,
-                    cql3::query_processor::prepared_for_driver::no);
-            ps = stmt_ptr->checked_weak_from_this();
-            if (init_trace && trace_state) {
-                tracing::add_query(trace_state, query.assume_value());
-            }
-            break;
-        }
-        case 1: {
-            utils::result_with_exception_ptr<bytes> cache_key_bytes = in.read_short_bytes();
-            if (!cache_key_bytes) {
-                return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
-            }
-            cql3::prepared_cache_key_type cache_key(cache_key_bytes.assume_value(), dialect);
-            auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
-
-            // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
-            // look for the prepared statement and then authorize it.
-            ps = qp.local().get_prepared(client_state.user(), cache_key);
-            if (!ps) {
-                ps = qp.local().get_prepared(cache_key);
-                if (!ps) {
-                    return make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(id));
-                }
-                // authorize a particular prepared statement only once
-                needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
-            }
-            if (init_trace && trace_state) {
-                tracing::add_query(trace_state, ps->statement->raw_cql_statement);
-            }
-            break;
-        }
-        default:
-            return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(
-                    "Invalid query kind in BATCH messages. Must be 0 or 1 but got "
-                            + std::to_string(int(kind.assume_value()))));
-        }
-
-        auto modif_statement_ptr = dynamic_pointer_cast<cql3::statements::modification_statement>(ps->statement);
-        if (!modif_statement_ptr) {
-            return make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
-        }
-        if (init_trace && trace_state) {
-            tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
-            tracing::add_prepared_statement(trace_state, ps);
-        }
-        if (auto* inner_ai = ps->statement->get_audit_info()) {
-            batch_audit_infos.emplace_back(*inner_ai);
-        }
-
-        modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
-        ++batch_size;
-
-        std::vector<cql3::raw_value_view> tmp;
-        cql3::unset_bind_variable_vector unset;
-        auto rvl = in.read_value_view_list(version, tmp, unset);
-        if (!rvl) {
-            return make_exception_future<cql_server::process_fn_return_type>(std::move(rvl).assume_error());
-        }
-
-        auto stmt = ps->statement;
-        if (stmt->get_bound_terms() != tmp.size()) {
-            return make_exception_future<cql_server::process_fn_return_type>(
-                    exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
-                            stmt->get_bound_terms(), tmp.size())));
-        }
-        values.emplace_back(cql3::raw_value_view_vector_with_unset(std::move(tmp), std::move(unset)));
+    batch_message message(client_state, qp, in, version, dialect, std::move(trace_state), init_trace,
+            cql3::statements::batch_statement::type(type.assume_value()), n.assume_value());
+    auto status = message.read_prepared_entries();
+    if (!status) {
+        return make_exception_future<cql_server::process_fn_return_type>(std::move(status).assume_error());
     }
-
-    auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
-    auto& query_state = q_state->query_state;
-    // #563. CQL v2 encodes query_options in v1 format for batch requests.
-    auto o = in.read_options(version, qp.local().get_cql_config());
-    if (!o) {
-        return make_exception_future<cql_server::process_fn_return_type>(std::move(o).assume_error());
+    if (message.at_end()) {
+        return message.execute(stream, std::move(permit), std::move(cached_pk_fn_calls), deadline, sg_stats, request_start_timestamp);
     }
-    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*o.assume_value()), std::move(values)));
-    auto& options = *q_state->options;
-    record_client_timestamp_drift(sg_stats, init_trace, request_start_timestamp, options.get_specific_options().timestamp);
-    if (!cached_pk_fn_calls.empty()) {
-        options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
-    }
-    if (deadline) {
-        options.set_deadline(*deadline);
-    }
-
-    if (client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
-        const utils::result_with_exception_ptr<uint16_t> routing_statement_index = in.read_short();
-        if (!routing_statement_index) [[unlikely]] {
-            return make_exception_future<cql_server::process_fn_return_type>(
-                    std::move(routing_statement_index).assume_error());
-        }
-        const utils::result_with_exception_ptr<int8_t> tablet_version_byte = in.read_byte();
-        if (!tablet_version_byte) [[unlikely]] {
-            return make_exception_future<cql_server::process_fn_return_type>(
-                    std::move(tablet_version_byte).assume_error());
-        }
-        // The index of a batch the driver didn't route by any statement.
-        constexpr uint16_t no_routing_statement = 0xFFFF;
-        const uint16_t index = routing_statement_index.assume_value();
-        if (index != no_routing_statement) {
-            if (index >= modifications.size()) [[unlikely]] {
-                return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(format(
-                        "Invalid routing statement index in BATCH message: {} for a batch of {} statements",
-                        index, modifications.size())));
-            }
-            // Whether the driver could compute the token from the routing statement
-            // is only decided when the batch is executed: it depends on the prepared
-            // statement the ID names now, not on the request.
-            const locator::tablet_version_block block{uint8_t(tablet_version_byte.assume_value())};
-            options.set_routing_hint(index, block);
-        }
-    }
-
-    if (init_trace && trace_state) {
-        tracing::add_prepared_query_options(trace_state, options);
-        tracing::set_common_query_parameters(trace_state, options.get_consistency(),
-            options.get_serial_consistency(), options.get_specific_options().timestamp);
-
-        tracing::trace(trace_state, "Creating a batch statement");
-    }
-
-    auto ai = audit::audit::create_audit_info(audit::statement_category::DML, sstring(), sstring(), true);
-    if (ai) {
-        ai->set_batch_infos(std::move(batch_audit_infos));
-    }
-    ::shared_ptr<cql3::cql_statement> statement = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
-    statement->set_audit_info(std::move(ai));
-
-    auto execute_fut = reclassifying_control_connection_needs_user_service_level(*statement, query_state)
-            ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
-                    [&qp, &query_state, &options, statement = std::move(statement), pending_authorization_entries = std::move(pending_authorization_entries), batch_size] () mutable {
-                return qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, batch_size, std::move(pending_authorization_entries));
-            })
-            : qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, batch_size, std::move(pending_authorization_entries));
-    return std::move(execute_fut).then([stream, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
-        if (msg->as_bounce()) {
-            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
-        } else if (msg->is_exception()) {
-            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
-        } else {
-            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version, cql_metadata_id_wrapper{})));
-        }
-    });
+    return read_with_textual_entries_and_execute(std::move(message), stream, std::move(permit), std::move(cached_pk_fn_calls), deadline, sg_stats,
+            request_start_timestamp);
 }
 
 // Copy the bytes from an istream into a bytes_ostream.

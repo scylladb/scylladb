@@ -220,6 +220,10 @@ private:
     virtual replica::database* real_database_ptr(data_dictionary::database db) const override {
         return nullptr;
     }
+    virtual future<rwlock::holder> hold_off_schema_changes(data_dictionary::database db) const override {
+        // The schema does not change here.
+        return make_ready_future<rwlock::holder>();
+    }
 };
 
 class user_types_storage : public data_dictionary::user_types_storage {
@@ -289,7 +293,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         auto raw_statement = cql3::query_processor::parse_statement(
                 fmt::format("CREATE KEYSPACE {} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '1'}}", name),
                 cql3::dialect{});
-        auto prepared_statement = raw_statement->prepare(db, cql_stats, cql3::default_cql_config);
+        auto prepared_statement = raw_statement->prepare(db, cql_stats, cql3::default_cql_config).get().prepared;
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
         SCYLLA_ASSERT(p);
@@ -341,7 +345,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             }
         }
         auto ks = find_or_create_keyspace(cf_statement->keyspace());
-        auto prepared_statement = cf_statement->prepare(db, cql_stats, cql3::default_cql_config);
+        auto prepared_statement = cf_statement->prepare(db, cql_stats, cql3::default_cql_config).get().prepared;
         auto* statement = prepared_statement->statement.get();
 
         if (auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement)) {

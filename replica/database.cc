@@ -1423,6 +1423,10 @@ void tables_metadata_lock_on_all_shards::assign_lock(seastar::rwlock::holder&& h
     _holders[this_shard_id()] = make_foreign(std::make_unique<seastar::rwlock::holder>(std::move(h)));
 }
 
+void tables_metadata_lock_on_all_shards::assign_schema_change_lock(seastar::rwlock::holder&& h) {
+    _schema_change_holders[this_shard_id()] = make_foreign(std::make_unique<seastar::rwlock::holder>(std::move(h)));
+}
+
 future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name) {
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     return get_table_on_all_shards(sharded_db, std::move(uuid));
@@ -1461,6 +1465,9 @@ future<tables_metadata_lock_on_all_shards> database::lock_tables_metadata(sharde
         co_await sharded_db.invoke_on_others([&locks] (auto& db) -> future<> {
             locks.assign_lock(co_await db.get_tables_metadata().hold_write_lock());
         });
+    });
+    co_await sharded_db.invoke_on_all([&locks] (auto& db) -> future<> {
+        locks.assign_schema_change_lock(co_await db.get_tables_metadata().hold_schema_change_lock());
     });
 
     co_return locks;
@@ -3822,6 +3829,19 @@ size_t database::tables_metadata::size() const noexcept {
 
 future<rwlock::holder> database::tables_metadata::hold_write_lock() {
     co_return co_await _cf_lock.hold_write_lock();
+}
+
+future<rwlock::holder> database::tables_metadata::hold_schema_change_lock() {
+    return _schema_change_lock.hold_write_lock();
+}
+
+future<rwlock::holder> database::tables_metadata::hold_off_schema_changes() {
+    // then() defers even a free lock in debug builds, so try it first.
+    auto holder = _schema_change_lock.try_hold_read_lock();
+    if (holder) {
+        return make_ready_future<rwlock::holder>(std::move(*holder));
+    }
+    return _schema_change_lock.hold_read_lock();
 }
 
 void database::tables_metadata::add_table(database& db, keyspace& ks, table& cf, schema_ptr s) {

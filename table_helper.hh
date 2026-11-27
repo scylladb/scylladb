@@ -132,7 +132,7 @@ public:
     // The input may contain multiple semicolon-separated statements, of which the
     // first must be the CREATE TABLE one and the rest are ignored, so a schema
     // produced by describe with internals is accepted as is.
-    static schema_ptr parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql);
+    static future<schema_ptr> parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql);
 };
 
 struct bad_column_family : public std::exception {

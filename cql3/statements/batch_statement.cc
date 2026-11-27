@@ -16,10 +16,14 @@
 #include "data_dictionary/data_dictionary.hh"
 #include <ranges>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "cql3/query_processor.hh"
 #include "tracing/trace_state.hh"
 #include "cql3/statements/modification_executor.hh"
 #include "cql3/statements/eventual_consistency/batch_executor.hh"
+#include "utils/error_injection.hh"
+#include "utils/growth_counter.hh"
+#include "utils/stall_free.hh"
 
 namespace cql3 {
 
@@ -234,8 +238,15 @@ void batch_statement::build_cas_result_set_metadata() {
 
 namespace raw {
 
-std::unique_ptr<prepared_statement>
+future<prepare_result>
 batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    // The batch yields between its sub-statements. A schema change in between
+    // could leave two of them on different versions of one table, so it waits
+    // until they are all prepared.
+    auto schema_lock = co_await db.hold_off_schema_changes();
+    // Other tasks run while this coroutine yields. The bytes they allocate
+    // are left out.
+    utils::total_bytes_allocated_counter allocated;
     auto&& meta = get_prepare_context();
 
     std::optional<sstring> first_ks;
@@ -261,6 +272,13 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             batch_audit_infos.emplace_back(*audit_info);
         }
         statements.emplace_back(std::move(statement));
+        allocated.pause();
+        // An error injection can delay the prepare after each sub-statement.
+        if (utils::get_local_injector().is_enabled("delay_after_batch_sub_statement")) {
+            co_await coroutine::without_preemption_check(util::inject_delay("delay_after_batch_sub_statement"));
+        }
+        co_await coroutine::maybe_yield();
+        allocated.resume();
     }
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
     prep_attrs->fill_prepare_context(meta);
@@ -278,9 +296,17 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         ai->set_batch_infos(std::move(batch_audit_infos));
     }
 
-    return std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
+    auto prepared = std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
                                                       meta.get_variable_specifications(),
                                                       std::move(partition_key_bind_indices));
+    prepare_result result{std::move(prepared), allocated.value()};
+    // The schema is not read any more.
+    schema_lock.return_all();
+    // The parsed sub-statements are not used any more. Free them one by one,
+    // with a preemption check in between: freeing a large batch of them at
+    // once would stall.
+    co_await utils::clear_gently(_parsed_statements);
+    co_return std::move(result);
 }
 
 audit::statement_category batch_statement::category() const {

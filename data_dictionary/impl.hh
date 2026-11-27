@@ -43,6 +43,7 @@ public:
     virtual const gms::feature_service& get_features(database db) const = 0;
     virtual replica::database& real_database(database db) const = 0;
     virtual replica::database* real_database_ptr(database db) const = 0;
+    virtual future<seastar::rwlock::holder> hold_off_schema_changes(database db) const = 0;
 protected:
     // Tools for type erasing an unerasing
     static database make_database(const impl* i, const void* db) {

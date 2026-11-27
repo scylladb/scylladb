@@ -128,6 +128,8 @@ add_scylla_test(generic_server_test
   KIND SEASTAR)
 add_scylla_test(gossiping_property_file_snitch_test
   KIND SEASTAR)
+add_scylla_test(growth_counter_test
+  KIND BOOST)
 add_scylla_test(hash_test
   KIND SEASTAR)
 add_scylla_test(hashers_test

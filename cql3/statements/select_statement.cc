@@ -2201,7 +2201,8 @@ group_by_references_clustering_keys(const selection::selection& sel, const std::
     });
 }
 
-std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+future<prepare_result> select_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    prepare_allocations allocations;
     if (_no_from && _select_clause.empty()) {
         // No table to expand the wildcard against.
         // Rejecting before maybe_jsonize_select_clause() guards against SELECT JSON *.
@@ -2518,7 +2519,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes(*schema);
 
-    return make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
+    return allocations.result(make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings)));
 }
 
 ::shared_ptr<const restrictions::select_restrictions>

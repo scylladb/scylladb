@@ -220,6 +220,10 @@ replica::database* database::real_database_ptr() const {
     return _ops->real_database_ptr(*this);
 }
 
+future<seastar::rwlock::holder> database::hold_off_schema_changes() const {
+    return _ops->hold_off_schema_changes(*this);
+}
+
 impl::~impl() = default;
 
 keyspace_metadata::keyspace_metadata(std::string_view name,

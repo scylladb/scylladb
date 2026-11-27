@@ -676,7 +676,7 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp, const query
     co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<cql3::statements::prepare_result>
 cql3::statements::alter_table_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     // Cannot happen; alter_table_statement is never instantiated as a raw statement
     // (instead we instantiate alter_table_statement::raw_statement)
@@ -705,8 +705,9 @@ alter_table_statement::raw_statement::raw_statement(cf_name name,
     , _ttl_change(std::move(ttl_change))
     {}
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<cql3::statements::prepare_result>
 alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    prepare_allocations allocations;
     auto t = db.try_find_table(keyspace(), column_family());
     std::optional<schema_ptr> s = t ? std::make_optional(t->schema()) : std::nullopt;
     std::optional<sstring> warning = check_restricted_table_properties(s, keyspace(), column_family(), *_properties, cfg.twcs_restrictions);
@@ -720,7 +721,7 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
     prepared_attrs->fill_prepare_context(ctx);
 
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_table_statement>(
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_table_statement>(
                 ctx.bound_variables_size(),
                 *_cf_name,
                 _type,
@@ -734,7 +735,7 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
             // since alter table doesn't return any metadata when preparing
             // and bind markers cannot be a part of partition key,
             // we can pass empty vector as partition_key_bind_indices
-            std::vector<uint16_t>()); 
+            std::vector<uint16_t>())); 
 }
 
 }

@@ -427,12 +427,13 @@ create_view_statement::prepare_schema_mutations(query_processor& qp, const query
     co_return std::make_tuple(created_event(), std::move(m), std::move(warnings));
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<cql3::statements::prepare_result>
 create_view_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    prepare_allocations allocations;
     if (!_prepare_ctx.get_variable_specifications().empty()) {
         throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
     }
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<create_view_statement>(*this));
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), make_shared<create_view_statement>(*this)));
 }
 
 ::shared_ptr<schema_altering_statement::event_t> create_view_statement::created_event() const {
