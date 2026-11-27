@@ -213,7 +213,6 @@ class ScyllaClusterManager:
         self.api: ScyllaRESTAPIClient = cluster.api
         self.metrics = ScyllaMetricsClient()
         self.thread_pool = ThreadPoolExecutor()
-        self.load_balancing_policy = RoundRobinPolicy()
 
         self.ccluster: CassandraCluster | None = None
         self.cql: CassandraSession | None = None
@@ -738,7 +737,7 @@ class ScyllaClusterManager:
                 port: int = 9042,
                 use_ssl: bool = False,
                 auth_provider: AuthProvider | None = None,
-                load_balancing_policy: LoadBalancingPolicy = RoundRobinPolicy(),
+                load_balancing_policy: LoadBalancingPolicy | None = None,
                 control_connection_fallback: bool = False,
                 queries_only_via_control_connection: bool = False) -> CassandraCluster:
         """Create a CQL Cluster connection object according to configuration.
@@ -749,6 +748,25 @@ class ScyllaClusterManager:
         the installed driver supports it.
         """
         assert hosts, "python driver connection needs at least one host to connect to"
+<<<<<<< HEAD
+||||||| parent of 01de4b3e51 (test/pylib: create a default driver policy for each cluster)
+        ssl_context = None
+        if use_ssl:
+            # Test clusters use self-signed certificates.
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+=======
+        ssl_context = None
+        if use_ssl:
+            # Test clusters use self-signed certificates.
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+        # Policies own mutable host state, so each Cluster needs its own default.
+        if load_balancing_policy is None:
+            load_balancing_policy = RoundRobinPolicy()
+>>>>>>> 01de4b3e51 (test/pylib: create a default driver policy for each cluster)
         profile = ExecutionProfile(
             load_balancing_policy=load_balancing_policy,
             consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -831,7 +849,6 @@ class ScyllaClusterManager:
             port=self.port,
             use_ssl=self.use_ssl,
             auth_provider=auth_provider if auth_provider else self.auth_provider,
-            load_balancing_policy=self.load_balancing_policy,
             control_connection_fallback=control_connection_fallback,
         )
         self.cql = self.ccluster.connect()
