@@ -260,6 +260,11 @@ seastar::future<> gcs_fixture::impl::setup() {
         creds = co_await credentials(user_1_creds);
     }
 
+    if (project.empty() && getenv_or_default("GCP_STORAGE_ENDPOINT").empty()) {
+        // The test environment's server may want a project to create buckets
+        // in, as GCS does; any one will do.
+        project = "testproject";
+    }
     client = std::make_unique<storage::client>(endpoint, std::move(creds));
     std::exception_ptr p;
 
