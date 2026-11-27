@@ -94,21 +94,6 @@ auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
     return {{schema, host, *port}};
 }
 
-auto decode_error_message(const std::vector<seastar::temporary_buffer<char>>& content) -> sstring {
-    auto body = vector_search::response_content_to_sstring(content);
-    auto json = rjson::try_parse(body);
-    if (json) {
-        if (json->IsString()) {
-            return sstring(rjson::to_string_view(*json));
-        }
-        auto message = rjson::find(*json, "message");
-        if (message && message->IsString()) {
-            return sstring(rjson::to_string_view(*message));
-        }
-    }
-    return body;
-}
-
 auto get_key_column_value(const rjson::value& item, std::size_t idx, const column_definition& column) -> std::expected<bytes, ann_error> {
     auto const& column_name = column.name_as_text();
     auto const* keys_obj = rjson::find(item, column_name);
@@ -701,6 +686,11 @@ struct vector_store_client::impl {
             auto result = co_await _primary_clients.request(method, path, content, as);
             if (success_or_aborted(result) || _secondary_uris.empty()) {
                 co_return result;
+            }
+            if (std::holds_alternative<index_building_error>(result.error())) {
+                // The index is still being built on primary nodes, try secondary then.
+                auto secondary_result = co_await _secondary_clients.request(method, path, content, as);
+                co_return success_or_aborted(secondary_result) ? std::move(secondary_result) : std::move(result);
             }
         }
 

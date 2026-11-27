@@ -19,7 +19,8 @@ import pytest
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 
-from .util import new_test_keyspace, new_test_table, unique_name
+from .util import config_value_context, new_test_keyspace, new_test_table, unique_name
+from .vector_store_mock import VectorStoreMock
 
 
 def wait_for_vector_store_node_recovery(cql, table, vector_store_mock):
@@ -419,3 +420,31 @@ def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, vector_store_
             f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
             trace=True,
         )
+
+
+# Reproduces VECTOR-1217: the index is still being built on the primary vector store node,
+# but the secondary node already serves it. Scylla must send the query to the secondary node
+# instead of returning the 503 to the client.
+def test_vector_search_ann_falls_back_to_secondary_node_when_index_is_building(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    host = cql.hosts[0].endpoint.address
+    primary = vector_store_mock
+    secondary = VectorStoreMock()
+    secondary.start(host)
+    try:
+        with new_test_table(cql, test_keyspace, "p int primary key, v vector<float, 3>") as table, \
+                config_value_context(cql, "vector_store_secondary_uri", f"http://{host}:{secondary.port}"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+            cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, [0.1, 0.2, 0.3])")
+            primary.set_next_ann_response(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                '{"reason":"INDEX_BUILDING","message":"Index is not available yet as it is still being constructed, progress: 33.333%"}')
+            secondary.set_next_ann_response(200, json.dumps({"primary_keys": {"p": [1]}, "similarity_scores": [0.5]}))
+
+            rows = list(cql.execute(f"SELECT p FROM {table} ORDER BY v ANN OF [0.1, 0.2, 0.3] LIMIT 1"))
+
+            # The primary node was asked.
+            assert len(primary.ann_requests) == 1
+            # The secondary node answers the query.
+            assert [r.p for r in rows] == [1]
+    finally:
+        secondary.stop()

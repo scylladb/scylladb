@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/rjson.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/net/api.hh>
@@ -63,6 +64,21 @@ inline seastar::net::tcp_keepalive_params get_keepalive_parameters(std::chrono::
             .interval = interval,
             .count = count,
     };
+}
+
+inline seastar::sstring decode_error_message(const std::vector<seastar::temporary_buffer<char>>& content) {
+    auto body = response_content_to_sstring(content);
+    auto json = rjson::try_parse(body);
+    if (json) {
+        if (json->IsString()) {
+            return seastar::sstring(rjson::to_string_view(*json));
+        }
+        auto message = rjson::find(*json, "message");
+        if (message && message->IsString()) {
+            return seastar::sstring(rjson::to_string_view(*message));
+        }
+    }
+    return body;
 }
 
 } // namespace vector_search

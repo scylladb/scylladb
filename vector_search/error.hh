@@ -34,6 +34,11 @@ struct service_error {
 /// An unsupported reply format from the vector-store service.
 struct service_reply_format_error {};
 
+/// The index is still being built on the vector-store node.
+struct index_building_error {
+    seastar::sstring message; ///< The error message from the vector-store service.
+};
+
 struct error_visitor {
     seastar::sstring operator()(service_error e) const {
         return fmt::format("Vector Store error: HTTP status {}, message: {}", e.status, e.message);
@@ -52,6 +57,9 @@ struct error_visitor {
     }
     seastar::sstring operator()(service_reply_format_error) const {
         return fmt::format("Vector Store returned an invalid JSON");
+    }
+    seastar::sstring operator()(index_building_error e) const {
+        return fmt::format("Vector Store error: HTTP status {}, message: {}", seastar::http::reply::status_type::service_unavailable, e.message);
     }
 };
 

@@ -81,8 +81,9 @@ public:
     using service_unavailable = service_unavailable_error;
     using service_error = service_error;
     using service_reply_format_error = service_reply_format_error;
+    using index_building_error = index_building_error;
 
-    using ann_error = std::variant<disabled, aborted, addr_unavailable, service_unavailable, service_error, service_reply_format_error>;
+    using ann_error = std::variant<disabled, aborted, addr_unavailable, service_unavailable, service_error, service_reply_format_error, index_building_error>;
     using ann_error_visitor = error_visitor;
     using fts_error = ann_error;
     using fts_error_visitor = ann_error_visitor;

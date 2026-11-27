@@ -191,6 +191,9 @@ seastar::future<client::request_result> client::request(
             handle_server_unavailable(fmt::format("received HTTP status {}: {}", static_cast<int>(resp.status), body));
             co_return std::unexpected{service_unavailable_error{}};
         }
+        if (reason == service_unavailable_reason::index_building) {
+            co_return std::unexpected{index_building_error{decode_error_message(resp.content)}};
+        }
     }
     co_return resp;
 }
