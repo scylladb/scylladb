@@ -247,9 +247,9 @@ public:
         _truncations = std::move(truncations);
     }
 
-    // Drop the truncation records whose segment the commitlog no longer lists. The
-    // segment file is removed a moment later, in the background, so a crash in
-    // between leaves copies on disk with no record covering them (SCYLLADB-4094).
+    // Drop the truncation records of segments below commitlog::min_position(), which
+    // stays at or below a segment of this commitlog instance while its file is on disk
+    // under the segment's name, and until its removal or recycling is durable.
     void purge_stale_truncations();
     const std::vector<truncation_record>& truncations() const {
         return _truncations;
