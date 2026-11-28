@@ -22,6 +22,7 @@
 #include "gms/gossiper.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"
+#include "mutation/mutation_partition_view.hh"
 
 #include "utils/error_injection.hh"
 
@@ -179,9 +180,15 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
             co_await coroutine::return_exception(utils::injected_error("injected_error_after_save_promise"));
         }
 
-        auto upgrade_if_needed = [schema = std::move(schema), token, &paxos_store, timeout] (std::optional<proposal> p) -> future<std::optional<proposal>> {
+        auto upgrade_if_needed = [schema = std::move(schema), token, &key, &paxos_store, timeout] (std::optional<proposal> p) -> future<std::optional<proposal>> {
             if (!p || p->update.schema_version() == schema->version()) {
                 co_return std::move(p);
+            }
+            // An empty update has no cells to map, so it is built anew for the current schema.
+            // It can stay accepted for as long as the paxos state lives, longer than the
+            // column mapping of the schema version it was written with.
+            if (p->update.partition().empty()) {
+                co_return std::make_optional(proposal(p->ballot, freeze(mutation(schema, key))));
             }
             // In case current schema is not the same as the schema in the proposal
             // try to look it up first in the local schema_registry cache and upgrade

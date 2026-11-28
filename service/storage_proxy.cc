@@ -1636,7 +1636,7 @@ private:
     db::consistency_level _cl_for_paxos;
     // QUORUM, LOCAL_QUORUM, etc - defines how many replicas to wait for in LEARN step.
     // Is either set explicitly or derived from the consistency level set in keyspace options.
-    db::consistency_level _cl_for_learn;
+    const db::consistency_level _cl_for_learn;
     // Live endpoints, as per get_paxos_participants()
     host_id_vector_replica_set _live_endpoints;
     // How many endpoints need to respond favourably for the protocol to progress to the next step.
@@ -1700,9 +1700,6 @@ public:
     }
     const partition_key& key() const {
         return _key.key();
-    }
-    void set_cl_for_learn(db::consistency_level cl) {
-        _cl_for_learn = cl;
     }
     // this is called with an id of a replica that replied to learn request
     // and returns true when quorum of such requests are accumulated
@@ -2360,7 +2357,9 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
 
         // If we have an in-progress accepted ballot greater than the most recent commit
         // we know, then it's an in-progress round that needs to be completed, so do it.
-        if (in_progress &&
+        // The round of an empty update is complete once accepted, and as the newest
+        // accepted proposal it hides every older one from this check.
+        if (in_progress && !in_progress->update.partition().empty() &&
             (!summary.most_recent_commit || (summary.most_recent_commit && in_progress->ballot.timestamp() > summary.most_recent_commit->ballot.timestamp()))) {
             paxos::paxos_state::logger.debug("CAS[{}] Finishing incomplete paxos round {}", _id, *in_progress);
             tracing::trace(tr_state, "Finishing incomplete paxos round {}", *in_progress);
@@ -7176,10 +7175,6 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
         co_await utils::get_local_injector().inject("cas_timeout_after_lock", write_timeout + std::chrono::milliseconds(100));
 
         while (true) {
-            // An unmet condition lowers the level of the learn to ANY for the dummy decision of
-            // its round; the rounds that follow, a retry or the repair of another coordinator's
-            // round, learn at the client's level again.
-            handler->set_cl_for_learn(cl_for_learn);
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
             // a ballot (round identifier) which is a) unique b) has good chances of being
             // recent enough.
@@ -7214,8 +7209,6 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
                 // in https://github.com/scylladb/scylla/issues/6299
                 // Let's use empty mutation as a value and proceed
                 mutation.emplace(handler->schema(), handler->key());
-                // since the value we are writing is dummy we may use minimal consistency level for learn
-                handler->set_cl_for_learn(db::consistency_level::ANY);
             } else {
                 ld_guardrail->check_coordinator(
                         *schema, mutation->partition(), mutation->key(), &large_data_violations);
@@ -7225,6 +7218,7 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
             }
 
             auto proposal = make_lw_shared<paxos::proposal>(ballot, freeze(*mutation));
+            const bool empty_update = proposal->update.partition().empty();
 
             // Lets a test hold a round between its prepare and its accept.
             co_await utils::get_local_injector().inject("paxos_coordinator_before_accept", utils::wait_for_message(std::chrono::minutes(2)));
@@ -7246,15 +7240,20 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
                 // The majority (aka a QUORUM) has promised the coordinator to
                 // accept the action associated with the computed ballot.
                 // Apply the mutation.
-                try {
-                  co_await handler->learn_decision(std::move(proposal), false, std::move(cdc_opts));
-                } catch (unavailable_exception& e) {
-                    // if learning stage encountered unavailablity error lets re-map it to a write error
-                    // since unavailable error means that operation has never ever started which is not
-                    // the case here
-                    schema_ptr schema = handler->schema();
-                    throw mutation_write_timeout_exception(schema->ks_name(), schema->cf_name(),
-                                          e.consistency, e.alive, e.required, db::write_type::CAS);
+                // The round of an empty update is complete once accepted: the quorum that
+                // accepted it reports it to every later round as the newest accepted proposal,
+                // which keeps every older proposal from being replayed.
+                if (!empty_update) {
+                    try {
+                        co_await handler->learn_decision(std::move(proposal), false, std::move(cdc_opts));
+                    } catch (unavailable_exception& e) {
+                        // if learning stage encountered unavailablity error lets re-map it to a write error
+                        // since unavailable error means that operation has never ever started which is not
+                        // the case here
+                        schema_ptr schema = handler->schema();
+                        throw mutation_write_timeout_exception(schema->ks_name(), schema->cf_name(),
+                                              e.consistency, e.alive, e.required, db::write_type::CAS);
+                    }
                 }
                 paxos::paxos_state::logger.debug("CAS[{}] successful", handler->id());
                 tracing::trace(handler->tr_state, "CAS successful");

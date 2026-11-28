@@ -9,10 +9,10 @@
 Idea: a CAS keeps one storage_proxy::paxos_response_handler across every
 round it runs: the rounds it finishes for other coordinators, its own
 retries after a rejection, and finally the round that applies the update.
-The consistency level of the learn is lowered to ANY for the empty
-decision of an unmet condition, and it must not stay lowered for the
-rounds that follow.  The test builds that interleaving with error
-injections and checks what the client sees.
+A round with an empty update, that of an unmet condition, is not learned
+at all, and that must not weaken the learn of the rounds that follow.
+The test builds that interleaving with error injections and checks what
+the client sees.
 
 Setup: three nodes, RF=3, one tablet; none of this depends on where the
 paxos state table lives.  The round is held between its prepare and its
@@ -70,9 +70,9 @@ async def create_table(cql, ks: str, columns: str = "c int") -> None:
 async def test_learn_consistency_survives_an_unmet_condition(manager: ScyllaClusterManager, scale_timeout):
     """A CAS whose condition was unmet on a first try is still learned at its own consistency level.
 
-    An unmet condition makes the coordinator commit an empty decision,
-    learned at ANY (storage_proxy::cas).  That level is for the empty
-    decision alone: if the empty proposal is rejected and the retry finds
+    An unmet condition makes the coordinator propose an empty update,
+    which it does not learn (storage_proxy::cas).  That is for the empty
+    update alone: if the empty proposal is rejected and the retry finds
     the condition met, the client's update must be learned at the client's
     level, not acknowledged once a single replica learned it.
 

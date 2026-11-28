@@ -106,6 +106,19 @@ SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_appl
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_partition_view_emptiness) {
+    auto s = new_table()
+        .with_column("pk", bytes_type, column_kind::partition_key)
+        .with_column("v", bytes_type)
+        .build();
+    mutation empty(s, partition_key::from_single_value(*s, "key"));
+    BOOST_REQUIRE(freeze(empty).partition().empty());
+
+    for_each_mutation([] (const mutation& m) {
+        BOOST_REQUIRE_EQUAL(freeze(m).partition().empty(), m.partition().empty());
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     for_each_mutation([&] (const mutation& m) {
