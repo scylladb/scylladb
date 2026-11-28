@@ -11,6 +11,8 @@
 #include <seastar/core/on_internal_error.hh>
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "alternator/import.hh"
+#include "alternator/put_or_delete_item.hh"
 #include "alternator/consumed_capacity.hh"
 #include "auth/permission.hh"
 #include "auth/resource.hh"
@@ -27,6 +29,7 @@
 #include "mutation/tombstone.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
+#include "schema/schema_registry.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
 #include "service/client_state.hh"
@@ -133,6 +136,12 @@ const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
 // configured by UpdateTimeToLive to be the expiration-time attribute for
 // this table.
 extern const sstring TTL_TAG_KEY("system:ttl_attribute");
+// This tag is present on a table which ImportTable created while the import
+// fills it, and stores the ARN of that import. DescribeTable reports such a
+// table as CREATING, as DynamoDB does, although Alternator does not block
+// reads and writes to it. The import removes the tag when it ends; if it cannot
+// (e.g. its node stops), the garbage collector of imports does.
+extern const sstring IMPORT_IN_PROGRESS_TAG_KEY("system:import_in_progress");
 // This tag is set for GSIs since scylla-2026.4.
 // GSI implementation in Alternator assumes that (currently up to 4)
 // user-specified RANGE keys come first in the underlying materialized view's
@@ -215,7 +224,8 @@ void executor::maybe_audit(
 }
 
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type,
-        const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode);
+        const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode,
+        bool warn_about_unsafe_rf = true);
 
 static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, sstring>& tags_map,
     const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode);
@@ -332,6 +342,7 @@ executor::executor(gms::gossiper& gossiper,
 {
     s_default_timeout_in_ms = std::move(default_timeout_in_ms);
     _describe_table_info_manager = std::make_unique<describe_table_info_manager>(*this);
+    _s3_imports = std::make_unique<s3_imports>(*this);
     register_metrics(_metrics, _stats);
 }
 
@@ -375,8 +386,10 @@ static void check_gsi_warm_throughput_units(const rjson::value& gsi, std::string
 // which the request gave to the table or to a GSI. It appears in the response
 // only when the request configured one, which echoing the request back already
 // achieves - but the request carries only the units, and DynamoDB reports a
-// Status with them. Alternator's CreateTable is synchronous and the response
-// already says TableStatus ACTIVE, so the warm throughput is active with it.
+// Status with them. Alternator's CreateTable is synchronous and its response
+// already says TableStatus ACTIVE, so the warm throughput is active with it -
+// also in an UpdateTable response which says CREATING, while an import fills
+// the table, which is usable meanwhile.
 static void complete_warm_throughput(rjson::value& parent) {
     rjson::value* warm = rjson::find(parent, "WarmThroughput");
     if (!warm || !warm->IsObject()) {
@@ -395,7 +408,9 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
     auto creation_time = get_table_creation_time(schema);
 
     rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
-    rjson::add(descr, "TableStatus", "ACTIVE");
+    // As DescribeTable reports it: CREATING while the table carries the import-in-progress tag of
+    // the import which created it.
+    rjson::add(descr, "TableStatus", rjson::from_string(db::find_tag(schema, IMPORT_IN_PROGRESS_TAG_KEY) ? "CREATING" : "ACTIVE"));
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
     complete_warm_throughput(descr);
@@ -647,9 +662,11 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
     // the table may be in "Creating" state until creating is finished.
     // We don't currently do this in Alternator - instead CreateTable waits
-    // until the table is really available. So/ DescribeTable returns either
-    // ACTIVE or doesn't exist at all (and DescribeTable returns an error).
-    // The states CREATING and UPDATING are not currently returned.
+    // until the table is really available. So DescribeTable returns either
+    // ACTIVE or doesn't exist at all (and DescribeTable returns an error) -
+    // or CREATING for a table which ImportTable created, until the tag of its
+    // import is removed (see IMPORT_IN_PROGRESS_TAG_KEY). UPDATING is not
+    // currently returned.
     rjson::add(table_description, "TableStatus", rjson::from_string(table_status_to_sstring(tbl_status)));
     rjson::add(table_description, "TableArn", generate_arn_for_table(*schema));
     rjson::add(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
@@ -876,7 +893,8 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
     tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
-    std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, table_status::active, client_state, trace_state, permit);
+    const auto status = db::find_tag(*schema, IMPORT_IN_PROGRESS_TAG_KEY) ? table_status::creating : table_status::active;
+    std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, status, client_state, trace_state, permit);
     if (auto error = std::get_if<api_error>(&table_description_result)) {
         co_return std::move(*error);
     }
@@ -2530,6 +2548,102 @@ create_table_params validate_create_table_request(const rjson::value& request, c
     };
 }
 
+// The checks which CreateTable makes of the keyspace of a new table. Unlike
+// those of validate_create_table_request(), they depend on the cluster - its
+// topology, configuration and storage - so commit_table_creation() makes them
+// when it creates the table, and check_new_table() makes them for ImportTable,
+// which creates the table only after it accepted the request. Returns the
+// error to refuse the table with, or nullopt.
+std::optional<api_error> executor::check_keyspace_of_new_table(const keyspace_metadata& ksm, std::string_view keyspace_name,
+        std::string_view table_name, bool has_vector_indexes, bool has_views, bool warn) {
+    locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option());
+    const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
+    auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params, topo);
+
+    // Vector indexes is a new feature that we decided to only support
+    // on tablets.
+    if (has_vector_indexes) {
+        if (!rs->uses_tablets()) {
+            return api_error::validation("Vector indexes are not supported on tables using vnodes.");
+        }
+    }
+    // Creating an index in tablets mode requires the keyspace to be RF-rack-valid.
+    // GSI and LSI indexes are based on materialized views which require RF-rack-validity to avoid consistency issues.
+    if (has_views || _proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
+        try {
+            locator::assert_rf_rack_valid_keyspace(keyspace_name, _proxy.local_db().get_token_metadata_ptr(), *rs);
+        } catch (const std::invalid_argument& ex) {
+            if (has_views) {
+                return api_error::validation(fmt::format("GlobalSecondaryIndexes and LocalSecondaryIndexes on a table "
+                    "using tablets require the number of racks in the cluster to be either 1 or 3"));
+            } else {
+                return api_error::validation(fmt::format("Cannot create table '{}' with tablets: the configuration "
+                    "option 'rf_rack_valid_keyspaces' is enabled, which enforces that tables using tablets can only be created in clusters "
+                    "that have either 1 or 3 racks", table_name));
+            }
+        }
+    }
+    // Alternator asks for no storage options, so the keyspace it creates
+    // keeps its data locally. restrict_mixed_storage_clusters decides
+    // whether the mix is refused, warned about or allowed -- except for a
+    // cluster which is already mixed, which only ever gets a warning:
+    // refusing the table would not bring it back to either kind.
+    const auto storage_restriction = _proxy.local_db().get_config().restrict_mixed_storage_clusters();
+    if (storage_restriction != db::tri_mode_restriction_t::mode::FALSE) {
+        if (_proxy.local_db().has_keyspace(keyspace_name)) {
+            // The keyspace can predate the table: nothing stops CREATE KEYSPACE
+            // from naming one and asking for object storage. The table is then
+            // built from that keyspace's metadata rather than from the one
+            // assembled here, so it would inherit the object storage with it.
+            if (_proxy.local_db().find_keyspace(keyspace_name).metadata()->get_storage_options().is_object_storage_type()) {
+                auto message = fmt::format("Cannot create table {}: keyspace {} keeps its data in object storage, and an Alternator "
+                                           "table keeps its data in local storage.",
+                                           table_name, keyspace_name);
+                if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
+                    return api_error::validation(std::move(message));
+                }
+                if (warn) {
+                    elogger.warn("{}", message);
+                }
+            }
+        } else {
+            switch (_proxy.local_db().get_user_storage_kind()) {
+                using enum replica::database::user_storage_kind;
+            case object_storage: {
+                auto message = fmt::format("Cannot create table {}: this cluster keeps its user data in object storage, and an Alternator "
+                                           "table keeps its data in local storage.",
+                                           table_name);
+                if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
+                    return api_error::validation(std::move(message));
+                }
+                if (warn) {
+                    elogger.warn("{}", message);
+                }
+                break;
+            }
+            case mixed:
+                if (warn) {
+                    elogger.warn("Creating table {}: this cluster keeps some of its user data locally and some in object "
+                                 "storage. Such a cluster is not supported.",
+                                 table_name);
+                }
+                break;
+            case none:
+            case local:
+                break;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<api_error> executor::check_new_table(const create_table_params& validated, const db::tablets_mode_t::mode tablets_mode) {
+    auto ksm = create_keyspace_metadata(validated.keyspace_name, _proxy, _gossiper, api::new_timestamp(), validated.tags_map, _proxy.features(), tablets_mode,
+            /* warn_about_unsafe_rf */ false);
+    return check_keyspace_of_new_table(*ksm, validated.keyspace_name, validated.table_name, validated.has_vector_indexes, !validated.view_builders.empty(),
+            /* warn */ false);
+}
+
 future<executor::request_return_type> executor::commit_table_creation(
     rjson::value&& request,
     create_table_params&& validated,
@@ -2564,77 +2678,9 @@ future<executor::request_return_type> executor::commit_table_creation(
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
-        locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
-        const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
-        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
-
-        // Vector indexes is a new feature that we decided to only support
-        // on tablets.
-        if (validated.has_vector_indexes) {
-            if (!rs->uses_tablets()) {
-                co_return api_error::validation("Vector indexes are not supported on tables using vnodes.");
-            }
-        }
-        // Creating an index in tablets mode requires the keyspace to be RF-rack-valid.
-        // GSI and LSI indexes are based on materialized views which require RF-rack-validity to avoid consistency issues.
-        if (!view_builders.empty() || _proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
-            try {
-                locator::assert_rf_rack_valid_keyspace(keyspace_name, _proxy.local_db().get_token_metadata_ptr(), *rs);
-            } catch (const std::invalid_argument& ex) {
-                if (!view_builders.empty()) {
-                    co_return api_error::validation(fmt::format("GlobalSecondaryIndexes and LocalSecondaryIndexes on a table "
-                        "using tablets require the number of racks in the cluster to be either 1 or 3"));
-                } else {
-                    co_return api_error::validation(fmt::format("Cannot create table '{}' with tablets: the configuration "
-                        "option 'rf_rack_valid_keyspaces' is enabled, which enforces that tables using tablets can only be created in clusters "
-                        "that have either 1 or 3 racks", table_name));
-                }
-            }
-        }
-        // Alternator asks for no storage options, so the keyspace it creates
-        // keeps its data locally. restrict_mixed_storage_clusters decides
-        // whether the mix is refused, warned about or allowed -- except for a
-        // cluster which is already mixed, which only ever gets a warning:
-        // refusing the table would not bring it back to either kind.
-        const auto storage_restriction = _proxy.local_db().get_config().restrict_mixed_storage_clusters();
-        if (storage_restriction != db::tri_mode_restriction_t::mode::FALSE) {
-            if (_proxy.local_db().has_keyspace(keyspace_name)) {
-                // The keyspace can predate the table: nothing stops CREATE KEYSPACE
-                // from naming one and asking for object storage. The table is then
-                // built from that keyspace's metadata rather than from the one
-                // assembled here, so it would inherit the object storage with it.
-                if (_proxy.local_db().find_keyspace(keyspace_name).metadata()->get_storage_options().is_object_storage_type()) {
-                    auto message = fmt::format("Cannot create table {}: keyspace {} keeps its data in object storage, and an Alternator "
-                                               "table keeps its data in local storage.",
-                                               table_name, keyspace_name);
-                    if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
-                        co_return api_error::validation(std::move(message));
-                    }
-                    elogger.warn("{}", message);
-                }
-            } else {
-                switch (_proxy.local_db().get_user_storage_kind()) {
-                    using enum replica::database::user_storage_kind;
-                case object_storage: {
-                    auto message = fmt::format("Cannot create table {}: this cluster keeps its user data in object storage, and an Alternator "
-                                               "table keeps its data in local storage.",
-                                               table_name);
-                    if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
-                        co_return api_error::validation(std::move(message));
-                    }
-                    elogger.warn("{}", message);
-                    break;
-                }
-                case mixed:
-                    elogger.warn("Creating table {}: this cluster keeps some of its user data locally and some in object "
-                                 "storage. Such a cluster is not supported.",
-                                 table_name);
-                    break;
-                case none:
-                case local:
-                    break;
-                }
-            }
+        if (auto error = check_keyspace_of_new_table(*ksm, keyspace_name, table_name, validated.has_vector_indexes, !view_builders.empty(),
+                /* warn */ true)) {
+            co_return std::move(*error);
         }
         bool table_already_exists = false;
         try {
@@ -2743,11 +2789,6 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         co_return co_await e.local().create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), enforce_authorization, warn_authorization, std::move(tablets_mode), audit_info);
     });
 }
-
-struct search_schema_attribute_info {
-    std::string type;
-    bool is_hash;
-};
 
 // Get, for every SearchSchema attribute (HASH or INLINE_FILTER) of every
 // vector index on this table, its declared AttributeType and whether it's
@@ -3547,71 +3588,6 @@ void validate_value(const rjson::value& v, const char* caller) {
         throw api_error::validation(fmt::format("{}: unknown type {} for value {}", caller, type, v));
     }
 }
-
-// Per-table information needed to validate the attribute values written by
-// PutItem, UpdateItem or a BatchWriteItem PutRequest against GSI/LSI keys
-// and vector-index constraints (see si_key_attributes(),
-// vector_index_attributes() and search_schema_attributes() below). It
-// depends only on the table's schema, not on the item being written, so a
-// caller writing multiple items to the same table (BatchWriteItem) should
-// compute it once and reuse it, instead of recomputing it - and re-parsing
-// the vector indexes' JSON-encoded options - for every item.
-struct write_item_index_info {
-    std::unordered_map<bytes, std::string> key_attributes;
-    std::unordered_map<bytes, int> vec_attrs;
-    std::unordered_map<bytes, search_schema_attribute_info> search_schema_attrs;
-
-    // Defined below, once si_key_attributes(), vector_index_attributes() and
-    // search_schema_attributes() are all in scope.
-    write_item_index_info(service::storage_proxy& proxy, const schema& s);
-};
-
-// The put_or_delete_item class builds the mutations needed by the PutItem and
-// DeleteItem operations - either as stand-alone commands or part of a list
-// of commands in BatchWriteItem.
-// put_or_delete_item splits each operation into two stages: Constructing the
-// object parses and validates the user input (throwing exceptions if there
-// are input errors). Later, build() generates the actual mutation, with a
-// specified timestamp. This split is needed because of the peculiar needs of
-// BatchWriteItem and LWT. BatchWriteItem needs all parsing to happen before
-// any writing happens (if one of the commands has an error, none of the
-// writes should be done). LWT makes it impossible for the parse step to
-// generate "mutation" objects, because the timestamp still isn't known.
-class put_or_delete_item {
-private:
-    partition_key _pk;
-    clustering_key _ck;
-    struct cell {
-        bytes column_name;
-        bytes value;
-    };
-    // PutItem: engaged _cells, write these cells to item (_pk, _ck).
-    // DeleteItem: disengaged _cells, delete the entire item (_pk, _ck).
-    std::optional<std::vector<cell>> _cells;
-    // WCU calculation takes into account some length in bytes,
-    // that length can have different meaning depends on the operation but the
-    // the calculation of length in bytes to WCU is the same.
-    uint64_t _length_in_bytes = 0;
-public:
-    struct delete_item {};
-    struct put_item {};
-    put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item);
-    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, const write_item_index_info& index_info);
-    // put_or_delete_item doesn't keep a reference to schema (so it can be
-    // moved between shards for LWT) so it needs to be given again to build():
-    mutation build(schema_ptr schema, api::timestamp_type ts) const;
-    const partition_key& pk() const { return _pk; }
-    const clustering_key& ck() const { return _ck; }
-    uint64_t length_in_bytes() const noexcept {
-        return _length_in_bytes;
-    }
-    void set_length_in_bytes(uint64_t length) noexcept {
-        _length_in_bytes = length;
-    }
-    bool is_put_item() noexcept {
-        return _cells.has_value();
-    }
-};
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
         : _pk(pk_from_json(key, schema)), _ck(ck_from_json(key, schema)) {
@@ -4482,20 +4458,6 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     co_return res;
 }
 
-using primary_key = std::pair<partition_key, clustering_key>;
-struct primary_key_hash {
-    schema_ptr _s;
-    size_t operator()(const primary_key& key) const {
-        return utils::hash_combine(partition_key::hashing(*_s)(key.first), clustering_key::hashing(*_s)(key.second));
-    }
-};
-struct primary_key_equal {
-    schema_ptr _s;
-    bool operator()(const primary_key& k1, const primary_key& k2) const {
-        return partition_key::equality(*_s)(k1.first, k2.first) && clustering_key::equality(*_s)(k1.second, k2.second);
-    }
-};
-
 // This is a cas_request subclass for applying given put_or_delete_items to
 // one partition using LWT as part as BatchWriteItem. This is a write-only
 // operation, not needing the previous value of the item (the mutation to be
@@ -4536,21 +4498,26 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
                     [cs = client_state.move_to_other_shard(),
                     &mb = mutation_builders,
                     &dk,
-                    ks = schema->ks_name(),
-                    cf = schema->cf_name(),
+                    gs = global_schema_ptr(schema),
                     gt = tracing::global_trace_state_ptr(trace_state),
                     permit = std::move(permit)]
                     (executor& self) mutable {
-            return do_with(cs.get(), [&mb, &dk, ks = std::move(ks), cf = std::move(cf),
-                                    trace_state = tracing::trace_state_ptr(gt), &self]
-                                    (service::client_state& client_state) mutable {
-                auto schema = self._proxy.data_dictionary().find_schema(ks, cf);
-                service::cas_shard cas_shard(*schema, dk.token());
+            // Build the write with the schema which encoded the items, not with the table found again
+            // by name: after a CQL ALTER, build() would put a value encoded for :attrs into a regular
+            // column, or the reverse; after a drop and a re-creation, the write would go to the new
+            // table. With this schema, cas_shard throws no_such_column_family if the table was dropped.
+            // (The work item of invoke_on() keeps this lambda and its captures until its future resolves.)
+            return gs.get(executor::default_timeout()).then([&self, &mb, &dk, &cs, &gt] (schema_ptr schema) {
+                return do_with(cs.get(), [&mb, &dk, schema = std::move(schema),
+                                        trace_state = tracing::trace_state_ptr(gt), &self]
+                                        (service::client_state& client_state) mutable {
+                    service::cas_shard cas_shard(*schema, dk.token());
 
-                //FIXME: Instead of passing empty_service_permit() to the background operation,
-                // the current permit's lifetime should be prolonged, so that it's destructed
-                // only after all background operations are finished as well.
-                return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+                    //FIXME: Instead of passing empty_service_permit() to the background operation,
+                    // the current permit's lifetime should be prolonged, so that it's destructed
+                    // only after all background operations are finished as well.
+                    return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+                });
             });
         });
     }
@@ -4593,7 +4560,8 @@ future<> executor::do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
-        service_permit permit) {
+        service_permit permit,
+        std::optional<api::timestamp_type> timestamp) {
     if (mutation_builders.empty()) {
         return make_ready_future<>();
     }
@@ -4609,7 +4577,7 @@ future<> executor::do_batch_write(
         // Do a normal write, without LWT:
         utils::chunked_vector<mutation> mutations;
         mutations.reserve(mutation_builders.size());
-        api::timestamp_type now = api::new_timestamp();
+        api::timestamp_type now = timestamp.value_or(api::new_timestamp());
         bool any_cdc_enabled = false;
         for (auto& b : mutation_builders) {
             mutations.push_back(b.second.build(b.first, now));
@@ -5849,8 +5817,11 @@ static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, 
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
+// warn_about_unsafe_rf is false for a caller which only checks the keyspace
+// and does not create it (check_new_table()).
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
-            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
+            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode,
+            bool warn_about_unsafe_rf) {
     auto initial_tablets = get_initial_tablet_count(tags_map, feat, tablets_mode);
     if (feat.tablets) {
         if (tags_map.contains(INITIAL_TABLETS_TAG_KEY)) {
@@ -5875,8 +5846,10 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     int rf = 3;
     if (endpoint_count < rf) {
         rf = 1;
-        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                     keyspace_name, rf, endpoint_count);
+        if (warn_about_unsafe_rf) {
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
+                         keyspace_name, rf, endpoint_count);
+        }
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
     cql3::statements::ks_prop_defs props;
@@ -5893,8 +5866,15 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
 }
 
 future<> executor::start() {
-    // Currently, nothing to do on initialization. We delay the keyspace
-    // creation (create_keyspace()) until a table is actually created.
+    // We delay the keyspace creation (create_keyspace()) until a table is
+    // actually created.
+
+    // The garbage collector of ImportTable fails the imports whose node no
+    // longer runs them. One per node is enough, so it runs on shard 0. It holds
+    // the gate of s3_imports, so stop() waits for it.
+    if (this_shard_id() == 0) {
+        (void)_s3_imports->run_garbage_collector();
+    }
     return make_ready_future<>();
 }
 
@@ -5905,6 +5885,7 @@ future<> executor::modify_tags(sstring ks, sstring cf, std::function<void(std::m
 }
 
 future<> executor::stop() {
+    co_await _s3_imports->stop();
     co_await _describe_table_info_manager->stop();
     // disconnect from the value source, but keep the value unchanged.
     s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};
