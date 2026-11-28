@@ -65,6 +65,7 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
         auto partition_view = mutation_partition_view::from_view(mv.partition());
         partition_builder b(*m.schema(), m.partition());
         partition_view.accept(*m.schema(), b);
+        b.finish();
     } else {
         column_mapping cm = mv.mapping();
         converting_mutation_partition_applier v(cm, *m.schema(), m.partition());

@@ -9,6 +9,7 @@
 #include "sstable_mutation_reader.hh"
 
 #include "column_translation.hh"
+#include "sstables/exceptions.hh"
 #include "types/concrete_types.hh"
 #include "utils/fragment_range.hh"
 #include "utils/to_string.hh"
@@ -128,6 +129,9 @@ std::vector<column_translation::column_info> column_translation::state::build(
         });
     } else {
         cols.reserve(src.size());
+        // Rows are built by appending each column once, so reject a column which
+        // appears twice (under the same name) here rather than when reading a row.
+        std::vector<bool> seen(is_static ? s.static_columns_count() : s.regular_columns_count());
         for (auto&& desc : src) {
             const bytes& type_name = desc.type_name.value;
             data_type type = db::marshal::type_parser::parse(to_string_view(type_name));
@@ -140,6 +144,12 @@ std::vector<column_translation::column_info> column_translation::state::build(
             bool schema_mismatch = false;
             if (def) {
                 id = def->id;
+                if (def->id < seen.size()) {
+                    if (seen[def->id]) {
+                        throw_malformed_sstable_exception(format("Column {} appears more than once in the serialization header", def->name_as_text()));
+                    }
+                    seen[def->id] = true;
+                }
                 schema_mismatch = def->is_multi_cell() != type->is_multi_cell() ||
                                   def->is_counter() != type->is_counter() ||
                                   !def->type->is_value_compatible_with(*type);

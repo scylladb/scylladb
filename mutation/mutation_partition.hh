@@ -26,7 +26,9 @@
 #include "utils/preempt.hh"
 #include "utils/lru.hh"
 #include "utils/managed_ref.hh"
-#include "utils/compact-radix-tree.hh"
+#include "mutation/atomic_cell_or_collection_block.hh"
+#include "mutation/cell_hash.hh"
+#include "mutation/digest_request.hh"
 #include "utils/immutable-collection.hh"
 #include "mutation/compact_and_expire_result.hh"
 
@@ -42,28 +44,9 @@ class tombstone_gc_state;
 
 namespace query {
     class clustering_key_filter_ranges;
+    class partition_slice;
+    struct result_options;
 } // namespace query
-
-struct cell_hash {
-    using size_type = uint64_t;
-    static constexpr size_type no_hash = 0;
-
-    size_type hash = no_hash;
-
-    explicit operator bool() const noexcept {
-        return hash != no_hash;
-    }
-};
-
-template<>
-struct appending_hash<cell_hash> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const cell_hash& ch) const {
-        feed_hash(h, ch.hash);
-    }
-};
-
-using cell_hash_opt = seastar::optimized_optional<cell_hash>;
 
 struct cell_and_hash {
     atomic_cell_or_collection cell;
@@ -79,7 +62,22 @@ struct cell_and_hash {
     { }
 };
 
+// A cell stored in a row, together with its cached hash, which may be
+// updated in place. hash is null if the cell is too small to cache its hash.
+struct cell_and_hash_view {
+    atomic_cell_or_collection_view cell;
+    cell_hash_opt* hash;
+
+    cell_hash_opt cached_hash() const noexcept { return hash ? *hash : cell_hash_opt(); }
+};
+
 class compaction_garbage_collector;
+
+// True if columns is every column of kind in id order.
+bool is_all_columns(const schema& s, column_kind kind, const query::column_id_vector& columns) noexcept;
+
+// True if a data read with these options digests per-row hashes, i.e. should set with_row_digest.
+bool wants_row_hashes(const schema& s, const query::partition_slice& slice, const query::result_options& opts) noexcept;
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -88,13 +86,51 @@ class compaction_garbage_collector;
 // for space-efficiency reasons. Whenever a method accepts a column_kind,
 // the caller must always supply the same column_kind.
 //
+// Cells are stored packed in atomic_cell_or_collection_blocks; see
+// atomic_cell_or_collection_block.hh. Access to cells is through views,
+// which are invalidated by any modification of the row.
 //
 class row {
     friend class size_calculator;
     using size_type = std::make_unsigned_t<column_id>;
-    size_type _size = 0;
-    using sparse_array_type = compact_radix_tree::tree<cell_and_hash, column_id>;
-    sparse_array_type _cells;
+    using cells_type = atomic_cell_or_collection_block_tree;
+    using block_index_type = cells_type::block_index_type;
+    using block_type = atomic_cell_or_collection_block;
+    using block_ptr = block_type::ptr;
+    using block_being_rebuilt = cells_type::block_being_rebuilt;
+    cells_type _cells;
+    // Hash of the hashes of all columns of the row's kind (see row_hash()); cleared on change.
+    // A bare hash rather than cell_hash, to keep row small.
+    mutable cell_hash::size_type _row_hash = cell_hash::no_hash;
+
+    static block_index_type block_index_of(column_id id) noexcept {
+        return id >> atomic_cell_or_collection_block_slot_bits;
+    }
+    static unsigned slot_of(column_id id) noexcept {
+        return id & (atomic_cell_or_collection_block_nr_cells - 1);
+    }
+    static column_id column_of(block_index_type block_index, unsigned slot) noexcept {
+        return (column_id(block_index) << atomic_cell_or_collection_block_slot_bits) | slot;
+    }
+    // All block replacement goes through these two (or cell_appender), which drop the stale row hash.
+    void set_block(block_index_type block_index, block_ptr&& block, std::optional<unsigned> blocks_to_follow = std::nullopt) {
+        _row_hash = {};
+        _cells.set_block(block_index, std::move(block), blocks_to_follow);
+    }
+    void rebuild_blocks(std::invocable<block_index_type, block_being_rebuilt&> auto&& func) {
+        _cells.rebuild_blocks([&] (block_index_type block_index, block_being_rebuilt& block) {
+            try {
+                func(block_index, block);
+            } catch (...) {
+                // func may have changed the block before throwing.
+                _row_hash = {};
+                throw;
+            }
+            if (block.changed()) {
+                _row_hash = {};
+            }
+        });
+    }
 public:
     row();
     ~row();
@@ -102,66 +138,207 @@ public:
     static row construct(const schema& our_schema, const schema& their_schema, column_kind, const row&);
     row(row&& other) noexcept;
     row& operator=(row&& other) noexcept;
-    size_t size() const { return _size; }
-    bool empty() const { return _size == 0; }
+    size_t size() const { return _cells.size(); }
+    bool empty() const { return _cells.empty(); }
 
-    const atomic_cell_or_collection& cell_at(column_id id) const;
+    atomic_cell_or_collection_view cell_at(column_id id) const;
 
-    // Returns a pointer to cell's value or nullptr if column is not set.
-    const atomic_cell_or_collection* find_cell(column_id id) const;
-    // Returns a pointer to cell's value and hash or nullptr if column is not set.
-    const cell_and_hash* find_cell_and_hash(column_id id) const;
+    // Returns a view of cell's value or a disengaged optional if column is not set.
+    std::optional<atomic_cell_or_collection_view> find_cell(column_id id) const;
+    // Returns a view of cell's value and hash or a disengaged optional if column is not set.
+    std::optional<cell_and_hash_view> find_cell_and_hash(column_id id) const;
 
-    template<typename Func>
-    void remove_if(Func&& func) {
-        _cells.weed([func, this] (column_id id, cell_and_hash& cah) {
-            if (!func(id, cah.cell)) {
-                return false;
-            }
+    // Builds the cells of a row a block at a time, rather than rebuilding a
+    // block for every cell, as append_cell() and apply() do.
+    //
+    // Cells are collected until a cell of another block is appended, or finish()
+    // is called, so cells of the same block (columns with the same
+    // id / atomic_cell_or_collection_block_nr_cells) should be appended
+    // consecutively, e.g. in increasing column id order. Appending in another
+    // order works, but is slower.
+    //
+    // The appended columns must not be set in the row. Appended cells are not
+    // visible in the row until finish() is called; neither the row nor the
+    // appender may be used after an exception.
+    class cell_appender {
+        row& _row;
+        atomic_cell_or_collection_block_builder _builder;
+        block_index_type _block_index = 0;
+        // While the row is empty, the built blocks are added here, and the row's
+        // tree is built from them by finish(), with exactly sized vectors.
+        cells_type::loader _loader;
+        // Whether the row may need vectors, i.e. its columns don't all fit in one
+        // block. If not, the loader is not worth its overhead.
+        bool _use_loader;
 
-            _size--;
-            return true;
-        });
-    }
+        void flush();
+        // Prepares for appending `id`, returning its slot.
+        unsigned prepare_append(column_id id);
+    public:
+        // The row holds the columns of `kind` (static or regular) in schema `s`.
+        cell_appender(row& r, const schema& s, column_kind kind) noexcept
+            : _row(r)
+            , _use_loader((kind == column_kind::static_column ? s.static_columns_count() : s.regular_columns_count())
+                    > atomic_cell_or_collection_block_nr_cells) {
+        }
+        cell_appender(const cell_appender&) = delete;
+        cell_appender& operator=(const cell_appender&) = delete;
+        void append(column_id id, atomic_cell_or_collection&& cell);
+        void append(column_id id, atomic_cell_or_collection_view cell);
+        // Appends a cell whose serialized form of `size` bytes is written by
+        // write(managed_bytes_mutable_view). `size` must not be zero.
+        template <std::invocable<managed_bytes_mutable_view> Writer>
+        void append_serialized(column_id id, size_t size, Writer&& write) {
+            auto slot = prepare_append(id);
+            write(_builder.add_uninitialized(slot, size, {}));
+        }
+        void finish();
+        // Whether there are appended cells which finish() would add to the row.
+        bool has_pending_cells() const noexcept { return !_builder.empty() || !_loader.empty(); }
+    };
 
 private:
-    template<typename Func>
-    void consume_with(Func&&);
+    // Out of line: its big hasher frame would otherwise tax the none case.
+    void prepare_hash_slow(const schema& s, column_kind kind, digest_request dr) const;
+    // Replaces or inserts the cell at `id`. If `stealable` is not null, it holds
+    // `value` and may be moved from.
+    void put_cell(column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash);
+    // Like put_cell(), given the block of `id`'s block index (find_block()), or null.
+    void put_cell(const block_type* old_block, column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash);
+    void apply_cell(const column_definition& column, atomic_cell_or_collection_view value, managed_bytes* stealable, cell_hash_opt hash,
+            db::large_data_cache_tracker* tracker);
+    // Merges the block of other at block_index into this row, whose block there
+    // (as found by the caller) is this_block, or nullptr if it has none. If steal
+    // is true, external cells of other_block may be moved from, and if the merged
+    // block would be other_block itself (it has all of this block's columns, and
+    // wins all of their merges), nothing is done and true is returned, so that the
+    // caller can install other_block instead.
+    // blocks_to_follow is passed to set_block() if the block is new to this row.
+    bool merge_block(const schema& s, column_kind kind, block_index_type block_index, const block_type* this_block,
+            const block_type& other_block, bool steal,
+            db::large_data_cache_tracker* tracker, std::optional<unsigned> blocks_to_follow);
+    // The number of blocks which merging `other` into this row will add after
+    // block_index (which this row lacks), in the vector of blocks holding block_index.
+    unsigned blocks_to_follow_from(const row& other, block_index_type block_index) const noexcept;
 
     // Func obeys the same requirements as for for_each_cell below.
-    template<typename Func, typename MaybeConstCellAndHash>
-    static constexpr auto maybe_invoke_with_hash(Func& func, column_id id, MaybeConstCellAndHash& c_a_h) {
-        if constexpr (std::is_invocable_v<Func, column_id, const cell_and_hash&>) {
-            return func(id, c_a_h);
+    template<typename Func>
+    static constexpr auto invoke_const(Func& func, column_id& id, const block_type::cell_entry& e) {
+        auto cell = atomic_cell_or_collection_view(e.cell);
+        if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash_view&>) {
+            return func(id, cell_and_hash_view{cell, e.hash});
+        } else if constexpr (std::is_invocable_v<Func&, column_id&, atomic_cell_or_collection_view>) {
+            return func(id, cell);
+        } else if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash&>) {
+            // Compatibility path, materializes a copy of the cell.
+            auto cah = cell_and_hash(atomic_cell_or_collection::from_serialized(managed_bytes(e.cell)), e.hash_value());
+            return func(id, std::as_const(cah));
         } else {
-            return func(id, c_a_h.cell);
+            // Compatibility path, materializes a copy of the cell.
+            static_assert(std::is_invocable_v<Func&, column_id&, const atomic_cell_or_collection&>);
+            auto c = atomic_cell_or_collection::from_serialized(managed_bytes(e.cell));
+            return func(id, std::as_const(c));
         }
     }
 
 public:
-    // Calls Func(column_id, cell_and_hash&) or Func(column_id, atomic_cell_and_collection&)
+    // Calls Func(column_id, const cell_and_hash_view&) or Func(column_id, atomic_cell_or_collection_view)
     // for each cell in this row, depending on the concrete Func type.
     // noexcept if Func doesn't throw.
     template<typename Func>
-    void for_each_cell(Func&& func) {
-        _cells.walk([func] (column_id id, cell_and_hash& cah) {
-            maybe_invoke_with_hash(func, id, cah);
-            return true;
-        });
-    }
-
-    template<typename Func>
     void for_each_cell(Func&& func) const {
-        _cells.walk([func] (column_id id, const cell_and_hash& cah) {
-            maybe_invoke_with_hash(func, id, cah);
-            return true;
+        _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
+            block.for_each_cell([&func, block_index] (const block_type::cell_entry& e) {
+                column_id id = column_of(block_index, e.slot);
+                invoke_const(func, id, e);
+            });
         });
     }
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
-        _cells.walk([func] (column_id id, const cell_and_hash& cah) {
-            return maybe_invoke_with_hash(func, id, cah) != stop_iteration::yes;
+        _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
+            return block.for_each_cell([&func, block_index] (const block_type::cell_entry& e) {
+                column_id id = column_of(block_index, e.slot);
+                return invoke_const(func, id, e);
+            });
+        });
+    }
+
+    struct cell_entry {
+        column_id id;
+        atomic_cell_or_collection_view cell;
+    };
+
+    // A forward iterator over the cells, in column id order, yielding cell_entry by value.
+    // Invalidated by any modification of the row.
+    //
+    // It is slower than for_each_cell() (each block step descends the tree from the
+    // root), so prefer for_each_cell() and its variants. The iterator is for consumers
+    // which need to walk two rows side by side or want std::ranges algorithms.
+    class const_cell_iterator {
+        cells_type::const_iterator _block;
+        // The slots of the current block still to visit; empty at the end.
+        block_type::mask_type _remaining_slots = 0;
+    public:
+        using value_type = cell_entry;
+        using difference_type = std::ptrdiff_t;
+
+        const_cell_iterator() noexcept = default;
+        explicit const_cell_iterator(const row& r) noexcept
+            : _block(r._cells)
+        {
+            if (_block != std::default_sentinel) {
+                _remaining_slots = (*_block).block.present();
+            }
+        }
+        cell_entry operator*() const noexcept {
+            auto [block_index, block] = *_block;
+            auto slot = std::countr_zero(_remaining_slots);
+            return {column_of(block_index, slot), atomic_cell_or_collection_view(block.cell(slot))};
+        }
+        const_cell_iterator& operator++() noexcept {
+            _remaining_slots &= _remaining_slots - 1;
+            if (!_remaining_slots) {
+                ++_block;
+                if (_block != std::default_sentinel) {
+                    _remaining_slots = (*_block).block.present();
+                }
+            }
+            return *this;
+        }
+        const_cell_iterator operator++(int) noexcept {
+            auto ret = *this;
+            ++*this;
+            return ret;
+        }
+        bool operator==(const const_cell_iterator& o) const noexcept {
+            return _block == o._block && _remaining_slots == o._remaining_slots;
+        }
+        bool operator==(std::default_sentinel_t) const noexcept { return !_remaining_slots; }
+    };
+
+    // The cells, as a range of const_cell_iterator. See const_cell_iterator for when to
+    // prefer for_each_cell().
+    std::ranges::subrange<const_cell_iterator, std::default_sentinel_t> cell_range() const noexcept {
+        return {const_cell_iterator(*this), std::default_sentinel};
+    }
+
+    // Calls func(column_id, managed_bytes_mutable_view) for each cell, with a view of the
+    // serialized cell which may be modified in place, as long as its size doesn't change
+    // (e.g. atomic_cell_mutable_view::from_bytes(v).set_timestamp()). Doesn't allocate.
+    // Resets the cached hashes of the cells.
+    template<typename Func>
+    void for_each_cell_in_place(Func&& func) {
+        _row_hash = {};
+        _cells.for_each_block([&func] (block_index_type block_index, block_type& block) {
+            bitmask::for_each_set(block.present(), [&] (unsigned slot) {
+                func(column_of(block_index, slot), block.mutable_cell(slot));
+                // The cached hash may no longer match the cell.
+                if (auto* h = block.hash(slot)) {
+                    *h = cell_hash_opt();
+                }
+            });
         });
     }
 
@@ -222,10 +399,23 @@ public:
 
     size_t external_memory_usage(const schema&, column_kind) const;
 
+    // The total size of the serialized cells, independent of how they are
+    // represented in memory.
+    size_t representation_independent_data_size() const;
+
     cell_hash_opt cell_hash_for(column_id id) const;
 
-    void prepare_hash(const schema& s, column_kind kind) const;
+    // Fills missing cell hashes, and the row hash too for cells_and_row. No-op for none.
+    void prepare_hash(const schema& s, column_kind kind, digest_request dr) const {
+        if (dr == digest_request::none) {
+            return;
+        }
+        prepare_hash_slow(s, kind, dr);
+    }
     void clear_hash() const;
+    // The digest of all columns of the row's kind, in id order, as fed by
+    // digest_algorithm::xxHash_row. Set by prepare_hash(..., cells_and_row).
+    cell_hash_opt row_hash() const noexcept { return cell_hash{_row_hash}; }
 
     bool is_live(const schema&, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
 
@@ -310,7 +500,7 @@ public:
         }
     }
 
-    const atomic_cell_or_collection& cell_at(column_id id) const {
+    atomic_cell_or_collection_view cell_at(column_id id) const {
         if (!_row) {
             throw_with_backtrace<std::out_of_range>(format("Column not found for id = {:d}", id));
         } else {
@@ -318,33 +508,23 @@ public:
         }
     }
 
-    // Returns a pointer to cell's value or nullptr if column is not set.
-    const atomic_cell_or_collection* find_cell(column_id id) const {
+    // Returns a view of cell's value or a disengaged optional if column is not set.
+    std::optional<atomic_cell_or_collection_view> find_cell(column_id id) const {
         if (!_row) {
-            return nullptr;
+            return std::nullopt;
         }
         return _row->find_cell(id);
     }
 
-    // Returns a pointer to cell's value and hash or nullptr if column is not set.
-    const cell_and_hash* find_cell_and_hash(column_id id) const {
+    // Returns a view of cell's value and hash or a disengaged optional if column is not set.
+    std::optional<cell_and_hash_view> find_cell_and_hash(column_id id) const {
         if (!_row) {
-            return nullptr;
+            return std::nullopt;
         }
         return _row->find_cell_and_hash(id);
     }
 
-    // Calls Func(column_id, cell_and_hash&) or Func(column_id, atomic_cell_and_collection&)
-    // for each cell in this row, depending on the concrete Func type.
-    // noexcept if Func doesn't throw.
-    template<typename Func>
-    void for_each_cell(Func&& func) {
-        if (!_row) {
-            return;
-        }
-        _row->for_each_cell(std::forward<Func>(func));
-    }
-
+    // See row::for_each_cell().
     template<typename Func>
     void for_each_cell(Func&& func) const {
         if (!_row) {
@@ -494,11 +674,11 @@ public:
         return _row->cell_hash_for(id);
     }
 
-    void prepare_hash(const schema& s, column_kind kind) const {
+    void prepare_hash(const schema& s, column_kind kind, digest_request dr) const {
         if (!_row) {
             return;
         }
-        _row->prepare_hash(s, kind);
+        _row->prepare_hash(s, kind, dr);
     }
 
     void clear_hash() const {
@@ -1067,6 +1247,9 @@ public:
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
     size_t memory_usage(const schema&) const;
+    // The size of the row's data, independent of its in-memory representation;
+    // see mutation_partition::representation_independent_data_size().
+    size_t representation_independent_data_size() const;
 
     // Handles eviction of the row, but doesn't attempt to handle eviction
     // of the containing partition_entry in case this is the last row.
@@ -1516,6 +1699,11 @@ public:
     uint64_t row_count() const;
 
     size_t external_memory_usage(const schema&) const;
+    // The size of the data in the partition (excluding the partition key),
+    // independent of how it is represented in memory: the sizes of the clustering
+    // keys and of the serialized cells, plus the sizes of tombstones and row markers
+    // as timestamps and times.
+    size_t representation_independent_data_size(const schema&) const;
 private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;

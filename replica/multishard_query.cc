@@ -1026,10 +1026,18 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
         query::result_options opts,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout, true,
-            [query_schema, &cmd, opts] (query::result_memory_accounter&& accounter) {
-        return data_query_result_builder(*query_schema, cmd.slice, opts, std::move(accounter), cmd.tombstone_limit);
-    });
+    // Set on a local copy so readers and the querier cache see the same slice on every page.
+    std::optional<query::read_command> cmd_copy;
+    if (wants_row_hashes(*query_schema, cmd.slice, opts)) {
+        cmd_copy.emplace(cmd);
+        cmd_copy->slice.options.set<query::partition_slice::option::with_row_digest>();
+    }
+    const auto& c = cmd_copy ? *cmd_copy : cmd;
+    // try_future: a plain co_await would rethrow a read timeout as a C++ exception.
+    co_return co_await coroutine::try_future(do_query_on_all_shards<data_query_result_builder>(db, query_schema, c, ranges, std::move(trace_state), timeout, true,
+            [query_schema, &c, opts] (query::result_memory_accounter&& accounter) {
+        return data_query_result_builder(*query_schema, c.slice, opts, std::move(accounter), c.tombstone_limit);
+    }));
 }
 
 } // namespace replica

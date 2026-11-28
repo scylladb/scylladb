@@ -16,6 +16,7 @@
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
 #include "query/query-result-writer.hh"
+#include <ranges>
 #include "mutation_fragment.hh"
 #include "mutation_query.hh"
 #include "mutation_compactor.hh"
@@ -382,6 +383,7 @@ mutation_partition::apply(const schema& s, mutation_partition_view p,
     mutation_partition p2(*this, copy_comparators_only{});
     partition_builder b(p_schema, p2);
     p.accept(p_schema, b);
+    b.finish();
     if (s.version() != p_schema.version()) {
         p2.upgrade(p_schema, s);
     }
@@ -729,10 +731,48 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
             .end_qr_cell();
 }
 
+// Feeds a collection like feed_hash(h, cm, def) and returns its newest timestamp from the same walk.
+static cell_hash collection_cell_digest(collection_mutation_view cm, const column_definition& def) {
+    xx_hasher h;
+    auto tomb = cm.tomb();
+    feed_hash(h, tomb);
+    auto max_ts = tomb.timestamp;
+    for (auto&& [key, value] : cm) {
+        feed_hash(h, key);
+        feed_hash(h, value, def);
+        max_ts = std::max(max_ts, value.timestamp());
+    }
+    return cell_hash{h.finalize_uint64(), max_ts};
+}
+
+// A cell's digest and newest timestamp, as cached by row::prepare_hash(); the digest is the one
+// feed_cell_hashes() computes for an uncached cell.
+static cell_hash cell_digest(atomic_cell_or_collection_view cell, const column_definition& def) {
+    if (def.is_atomic()) {
+        auto c = cell.as_atomic_cell(def);
+        xx_hasher h;
+        feed_hash(h, c, def);
+        return cell_hash{h.finalize_uint64(), c.timestamp()};
+    }
+    return collection_cell_digest(cell.as_collection_mutation(), def);
+}
+
+// A cell's max timestamp, as fed to max_timestamp by the digest.
+static api::timestamp_type cell_max_timestamp(atomic_cell_or_collection_view c, const column_definition& def) {
+    return def.is_atomic() ? c.as_atomic_cell(def).timestamp() : c.as_collection_mutation().last_update(*def.type);
+}
+
+// As above, but from the cached hash if it carries the max timestamp.
+static api::timestamp_type cell_max_timestamp(const cell_and_hash_view& c, const column_definition& def) {
+    auto ch = c.cached_hash();
+    return ch && ch->max_ts != api::missing_timestamp ? ch->max_ts : cell_max_timestamp(c.cell, def);
+}
+
+// Feeds the hash of each column in ids, or null_hash_value if it is absent.
 template<typename Hasher>
-void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
-    for (auto id : columns) {
-        const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
+static void feed_cell_hashes(Hasher& h, const row& cells, const schema& s, column_kind kind, std::ranges::input_range auto&& ids, max_timestamp& max_ts) {
+    for (column_id id : ids) {
+        auto cell_and_hash = cells.find_cell_and_hash(id);
         if (!cell_and_hash) {
             feed_hash(h, appending_hash<row>::null_hash_value);
             continue;
@@ -741,8 +781,9 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
         if (def.is_atomic()) {
             max_ts.update(cell_and_hash->cell.as_atomic_cell(def).timestamp());
             if constexpr (query::using_hash_of_hash_v<Hasher>) {
-                if (cell_and_hash->hash) {
-                    feed_hash(h, *cell_and_hash->hash);
+                auto ch = cell_and_hash->cached_hash();
+                if (ch) {
+                    feed_hash(h, *ch);
                 } else {
                     Hasher cellh;
                     feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
@@ -753,43 +794,111 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
             }
         } else {
             auto cm = cell_and_hash->cell.as_collection_mutation();
-            max_ts.update(cm.last_update(*def.type));
             if constexpr (query::using_hash_of_hash_v<Hasher>) {
-                if (cell_and_hash->hash) {
-                    feed_hash(h, *cell_and_hash->hash);
+                auto ch = cell_and_hash->cached_hash();
+                if (ch) {
+                    max_ts.update(cell_max_timestamp(*cell_and_hash, def));
+                    feed_hash(h, *ch);
                 } else {
-                    Hasher cellh;
-                    feed_hash(cellh, cm, def);
-                    feed_hash(h, cellh.finalize_uint64());
+                    auto d = collection_cell_digest(cm, def);
+                    max_ts.update(d.max_ts);
+                    feed_hash(h, d.hash);
                 }
             } else {
+                max_ts.update(cm.last_update(*def.type));
                 feed_hash(h, cm, def);
             }
         }
     }
 }
+template<typename Hasher>
+void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
+    feed_cell_hashes(h, cells, s, kind, columns, max_ts);
+}
+
+bool is_all_columns(const schema& s, column_kind kind, const query::column_id_vector& columns) noexcept {
+    if (columns.size() != s.columns_count(kind)) {
+        return false;
+    }
+    for (column_id i = 0; i < columns.size(); ++i) {
+        if (columns[i] != i) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool wants_row_hashes(const schema& s, const query::partition_slice& slice, const query::result_options& opts) noexcept {
+    return opts.request != query::result_request::only_result && opts.digest_algo == query::digest_algorithm::xxHash_row
+            && is_all_columns(s, column_kind::static_column, slice.static_columns)
+            && is_all_columns(s, column_kind::regular_column, slice.regular_columns);
+}
+
+// The row's contribution to an xxHash_row digest of an all-columns slice: one hash of the cell hashes.
+static uint64_t row_digest(const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) {
+    if (auto rh = cells.row_hash()) {
+        cells.for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
+            auto& def = s.column_at(kind, id);
+            if (def.is_atomic()) {
+                max_ts.update(c.as_atomic_cell(def).timestamp());
+                return;
+            }
+            // Collections only: the cached timestamp needs a hash-slot lookup.
+            max_ts.update(cell_max_timestamp(*cells.find_cell_and_hash(id), def));
+        });
+        return rh->hash;
+    }
+    xx_hasher rowh;
+    feed_cell_hashes(rowh, cells, s, kind, columns, max_ts);
+    return rowh.finalize_uint64();
+}
+
+// Partial slices are fed as with xxHash, so only all-columns rows can use the cached row hash.
+static void feed_row(query::digester& d, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, bool all_columns, max_timestamp& max_ts) {
+    if (all_columns) {
+        d.feed_hash(row_digest(cells, s, kind, columns, max_ts));
+    } else {
+        d.feed_hash(cells, s, kind, columns, max_ts);
+    }
+}
+
 // Instantiation for mutation_test.cc
 template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
 
 cell_hash_opt row::cell_hash_for(column_id id) const {
-    const cell_and_hash* cah = _cells.get(id);
-    return cah != nullptr ? cah->hash : cell_hash_opt();
+    auto cah = find_cell_and_hash(id);
+    return cah ? cah->cached_hash() : cell_hash_opt();
 }
 
-void row::prepare_hash(const schema& s, column_kind kind) const {
+void row::prepare_hash_slow(const schema& s, column_kind kind, digest_request dr) const {
+    const bool row_hash = dr == digest_request::cells_and_row;
     // const to avoid removing const qualifiers on the read path
-    for_each_cell([&s, kind] (column_id id, const cell_and_hash& c_a_h) {
-        if (!c_a_h.hash) {
-            query::default_hasher cellh;
-            feed_hash(cellh, c_a_h.cell, s.column_at(kind, id));
-            c_a_h.hash = cell_hash{cellh.finalize_uint64()};
-        }
+    // Every path that clears a cell hash also clears _row_hash, so a set row hash implies all cell hashes are filled.
+    if (_row_hash) {
+        return;
+    }
+    _cells.for_each_block([&s, kind] (block_index_type block_index, const block_type& block) {
+        bitmask::for_each_set(block.hashed(), [&] (unsigned slot) {
+            auto* hash = block.hash(slot);
+            if (!*hash) {
+                *hash = cell_digest(atomic_cell_or_collection_view(block.cell(slot)), s.column_at(kind, column_of(block_index, slot)));
+            }
+        });
     });
+    if (row_hash) {
+        xx_hasher rowh;
+        max_timestamp unused;
+        feed_cell_hashes(rowh, *this, s, kind, std::views::iota(column_id(0), column_id(s.columns_count(kind))), unused);
+        _row_hash = rowh.finalize_uint64();
+    }
 }
 
 void row::clear_hash() const {
-    for_each_cell([] (column_id, const cell_and_hash& c_a_h) {
-        c_a_h.hash = { };
+    _row_hash = {};
+    _cells.for_each_block([] (block_index_type, const block_type& block) {
+        bitmask::for_each_set(block.hashed(), [&] (unsigned slot) {
+            *block.hash(slot) = { };
+        });
     });
 }
 
@@ -802,7 +911,7 @@ static void get_compacted_row_slice(const schema& s,
     RowWriter& writer)
 {
     for (auto id : columns) {
-        const atomic_cell_or_collection* cell = cells.find_cell(id);
+        auto cell = cells.find_cell(id);
         if (!cell) {
             writer.add().skip();
         } else {
@@ -830,7 +939,7 @@ static void get_compacted_row_slice(const schema& s,
 
 bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb, gc_clock::time_point now) {
     bool any_live = false;
-    cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
+    cells.for_each_cell_until([&] (column_id id, atomic_cell_or_collection_view cell_or_collection) {
         const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             auto&& c = cell_or_collection.as_atomic_cell(def);
@@ -865,13 +974,10 @@ static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
 
 std::ostream&
 operator<<(std::ostream& os, const row::printer& p) {
-    auto& cells = p._row._cells;
-
     os << "{{row:";
-    cells.walk([&] (column_id id, const cell_and_hash& cah) {
+    p._row.for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
         auto& cdef = p._schema.column_at(p._kind, id);
-        fmt::print(os, "\n    {}{}", cdef.name_as_text(), atomic_cell_or_collection::printer(cdef, cah.cell));
-        return true;
+        fmt::print(os, "\n    {}{}", cdef.name_as_text(), atomic_cell_or_collection_view::printer(cdef, cell));
     });
     return os << "}}";
 }
@@ -928,11 +1034,11 @@ auto fmt::formatter<mutation_partition::printer>::format(const mutation_partitio
     if (!mp.static_row().empty()) {
         out = fmt::format_to(out, "{}static_row: {{\n", indent);
         const auto& srow = mp.static_row().get();
-        srow.for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
+        srow.for_each_cell([&] (column_id& c_id, atomic_cell_or_collection_view cell) {
             auto& column_def = p._schema.column_at(column_kind::static_column, c_id);
             out = fmt::format_to(out, "{}{}'{}':{},\n",
                                  indent, indent, column_def.name_as_text(),
-                                 atomic_cell_or_collection::printer(column_def, cell));
+                                 atomic_cell_or_collection_view::printer(column_def, cell));
         });
         out = fmt::format_to(out, "{}}},\n", indent);
     }
@@ -978,11 +1084,11 @@ auto fmt::formatter<mutation_partition::printer>::format(const mutation_partitio
             out = fmt::format_to(out, "{}{}{}}},\n", indent, indent, indent);
         }
 
-        row.cells().for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
+        row.cells().for_each_cell([&] (column_id& c_id, atomic_cell_or_collection_view cell) {
             auto& column_def = p._schema.column_at(column_kind::regular_column, c_id);
             out = fmt::format_to(out, "{}{}{}'{}': {},\n", indent, indent, indent,
                            column_def.name_as_text(),
-                           atomic_cell_or_collection::printer(column_def, cell));
+                           atomic_cell_or_collection_view::printer(column_def, cell));
         });
 
         out = fmt::format_to(out, "{}{}}},\n", indent, indent);
@@ -1140,25 +1246,74 @@ mutation_partition mutation_partition::sliced(const schema& s, const query::clus
     return p;
 }
 
-static
 void
-apply_monotonically(const column_definition& def, cell_and_hash& dst,
-        atomic_cell_or_collection& src, cell_hash_opt src_hash,
-        db::large_data_cache_tracker* tracker = nullptr) {
+row::put_cell(column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash) {
+    put_cell(_cells.find_block(block_index_of(id)), id, value, stealable, hash);
+}
+
+void
+row::put_cell(const block_type* old_block, column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash) {
+    if (value.empty()) {
+        // The builder would ignore it, and could be left with no cells to build.
+        on_internal_error(mplog, format("row::put_cell: empty cell for column {}", id));
+    }
+    auto block_index = block_index_of(id);
+    auto slot = slot_of(id);
+
+    atomic_cell_or_collection_block_builder builder;
+    bool added = false;
+    auto add_new = [&] {
+        builder.add_borrowed(slot, value, hash, stealable);
+        added = true;
+    };
+    if (old_block) {
+        old_block->for_each_cell([&] (const block_type::cell_entry& e) {
+            if (!added && e.slot >= slot) {
+                add_new();
+                if (e.slot == slot) {
+                    return;
+                }
+            }
+            builder.add_borrowed(e.slot, e.cell, e.hash_value(), e.external_storage);
+        });
+    }
+    if (!added) {
+        add_new();
+    }
+    auto new_block = builder.build();
+    try {
+        set_block(block_index, std::move(new_block));
+    } catch (...) {
+        builder.roll_back(std::move(new_block));
+        throw;
+    }
+}
+
+void
+row::apply_cell(const column_definition& def, atomic_cell_or_collection_view value, managed_bytes* stealable, cell_hash_opt hash,
+        db::large_data_cache_tracker* tracker) {
+    // Look the block up once, for both reading the existing cell and replacing it.
+    auto* block = _cells.find_block(block_index_of(def.id));
+    auto slot = slot_of(def.id);
+    if (!block || !block->contains(slot)) {
+        put_cell(block, def.id, value.data(), stealable, hash);
+        return;
+    }
+    auto existing = atomic_cell_or_collection_view(block->cell(slot));
     if (def.is_atomic()) {
         if (def.is_counter()) {
-            counter_cell_view::apply(def, dst.cell, src); // FIXME: Optimize
-            dst.hash = { };
-        } else if (compare_atomic_cell_for_merge(dst.cell.as_atomic_cell(def), src.as_atomic_cell(def)) < 0) {
-            using std::swap;
-            swap(dst.cell, src);
-            dst.hash = std::move(src_hash);
+            auto dst = existing.copy(*def.type);
+            auto src = value.copy(*def.type);
+            counter_cell_view::apply(def, dst, src); // FIXME: Optimize
+            put_cell(block, def.id, managed_bytes_view(dst.data()), &dst.data(), {});
+        } else if (compare_atomic_cell_for_merge(existing.as_atomic_cell(def), value.as_atomic_cell(def)) < 0) {
+            put_cell(block, def.id, value.data(), stealable, hash);
         }
     } else {
-        dst.cell = merge(*def.type, dst.cell.as_collection_mutation(), src.as_collection_mutation());
-        dst.hash = { };
+        auto merged = atomic_cell_or_collection(merge(*def.type, existing.as_collection_mutation(), value.as_collection_mutation()));
+        put_cell(block, def.id, managed_bytes_view(merged.data()), &merged.data(), {});
         if (tracker) {
-            tracker->on_collection_merged(def, dst.cell);
+            tracker->on_collection_merged(def, *find_cell(def.id));
         }
     }
 }
@@ -1166,67 +1321,255 @@ apply_monotonically(const column_definition& def, cell_and_hash& dst,
 void
 row::apply(const column_definition& column, const atomic_cell_or_collection& value, cell_hash_opt hash,
         db::large_data_cache_tracker* tracker) {
-    auto tmp = value.copy(*column.type);
-    apply_monotonically(column, std::move(tmp), std::move(hash), tracker);
+    apply_cell(column, value, nullptr, hash, tracker);
 }
 
 void
 row::apply(const column_definition& column, atomic_cell_or_collection&& value, cell_hash_opt hash,
         db::large_data_cache_tracker* tracker) {
-    apply_monotonically(column, std::move(value), std::move(hash), tracker);
-}
-
-template<typename Func>
-void row::consume_with(Func&& func) {
-    _cells.weed([func, this] (column_id id, cell_and_hash& cah) {
-        func(id, cah);
-        _size--;
-        return true;
-    });
+    apply_cell(column, value, &value.data(), hash, tracker);
 }
 
 void
 row::apply_monotonically(const column_definition& column, atomic_cell_or_collection&& value, cell_hash_opt hash,
         db::large_data_cache_tracker* tracker) {
-    static_assert(std::is_nothrow_move_constructible<atomic_cell_or_collection>::value
-                  && std::is_nothrow_move_assignable<atomic_cell_or_collection>::value,
-                  "noexcept required for atomicity");
-
-    // our mutations are not yet immutable
-    auto id = column.id;
-
-    cell_and_hash* cah = _cells.get(id);
-    if (cah == nullptr) {
-        // FIXME -- add .locate method to radix_tree to find or allocate a spot
-        _cells.emplace(id, std::move(value), std::move(hash));
-        _size++;
-    } else {
-        ::apply_monotonically(column, *cah, value, std::move(hash), tracker);
-    }
+    apply_cell(column, value, &value.data(), hash, tracker);
 }
 
 void
 row::append_cell(column_id id, atomic_cell_or_collection value) {
-    _cells.emplace(id, std::move(value), cell_hash_opt());
-    _size++;
+    put_cell(id, managed_bytes_view(value.data()), &value.data(), cell_hash_opt());
 }
 
-const cell_and_hash*
+unsigned
+row::cell_appender::prepare_append(column_id id) {
+    auto block_index = block_index_of(id);
+    if (block_index != _block_index) {
+        flush();
+        _block_index = block_index;
+    }
+    auto slot = slot_of(id);
+    if (_builder.slots() & bitmask::bit<block_type::mask_type>(slot)) {
+        on_internal_error(mplog, format("row::cell_appender: column {} appended twice", id));
+    }
+    return slot;
+}
+
+void
+row::cell_appender::flush() {
+    if (_builder.empty()) {
+        return;
+    }
+    // The loader's blocks reach the row without set_block().
+    _row._row_hash = {};
+    // While the row is empty, blocks go to the loader, which builds the row's tree
+    // in finish(). A block before those the loader can take (appended out of
+    // order) moves them to the row now, and is merged into the row from then on.
+    if (_row._cells.empty() && !_loader.can_set_block(_block_index)) {
+        _loader.load_into(_row._cells);
+    }
+    const bool load = _use_loader && _row._cells.empty();
+    if (auto* existing = load ? _loader.find_block(_block_index) : _row._cells.find_block(_block_index)) {
+        existing->for_each_cell([&] (const block_type::cell_entry& e) {
+            if (_builder.slots() & bitmask::bit<block_type::mask_type>(e.slot)) {
+                on_internal_error(mplog, format("row::cell_appender: column {} is already set", column_of(_block_index, e.slot)));
+            }
+            _builder.add_borrowed(e.slot, e.cell, e.hash_value(), e.external_storage);
+        });
+    }
+    auto new_block = _builder.build();
+    try {
+        if (load) {
+            _loader.set_block(_block_index, std::move(new_block));
+        } else {
+            _row.set_block(_block_index, std::move(new_block));
+        }
+    } catch (...) {
+        _builder.roll_back(std::move(new_block));
+        throw;
+    }
+    _builder.clear();
+}
+
+void
+row::cell_appender::append(column_id id, atomic_cell_or_collection&& cell) {
+    auto slot = prepare_append(id);
+    _builder.add_owned(slot, std::move(cell.data()), {});
+}
+
+void
+row::cell_appender::append(column_id id, atomic_cell_or_collection_view cell) {
+    auto slot = prepare_append(id);
+    _builder.add_copy(slot, cell.data(), {});
+}
+
+void
+row::cell_appender::finish() {
+    flush();
+    _loader.load_into(_row._cells);
+}
+
+bool
+row::merge_block(const schema& s, column_kind kind, block_index_type block_index, const block_type* this_block,
+        const block_type& other_block, bool steal,
+        db::large_data_cache_tracker* tracker, std::optional<unsigned> blocks_to_follow) {
+    using mask_type = block_type::mask_type;
+
+    atomic_cell_or_collection_block_builder builder;
+    auto add_theirs = [&] (unsigned slot) {
+        builder.add_borrowed(slot, other_block.cell(slot), other_block.hash_value(slot), steal ? other_block.external_storage(slot) : nullptr);
+    };
+
+    if (!this_block) {
+        bitmask::for_each_set(other_block.present(), add_theirs);
+        auto new_block = builder.build();
+        try {
+            set_block(block_index, std::move(new_block), blocks_to_follow);
+        } catch (...) {
+            builder.roll_back(std::move(new_block));
+            throw;
+        }
+        return false;
+    }
+
+    const auto ours = this_block->present();
+    const auto theirs = other_block.present();
+    const auto both = mask_type(ours & theirs);
+
+    // First decide the winner of each column present in both blocks; counters
+    // and collections need to be merged.
+    mask_type theirs_win = 0;
+    mask_type need_merge = 0;
+    bitmask::for_each_set(both, [&] (unsigned slot) {
+        const auto bit = bitmask::bit<mask_type>(slot);
+        const column_definition& def = s.column_at(kind, column_of(block_index, slot));
+        if (!def.is_atomic() || def.is_counter()) {
+            need_merge |= bit;
+            return;
+        }
+        auto ours_cell = atomic_cell_view::from_bytes(this_block->cell(slot));
+        auto theirs_cell = atomic_cell_view::from_bytes(other_block.cell(slot));
+        // The timestamps usually decide, and are cheap to compare inline.
+        const auto ours_ts = ours_cell.timestamp();
+        const auto theirs_ts = theirs_cell.timestamp();
+        if (ours_ts != theirs_ts ? ours_ts < theirs_ts : compare_atomic_cell_for_merge(ours_cell, theirs_cell) < 0) {
+            theirs_win |= bit;
+        }
+    });
+    if (!(theirs & ~ours) && !theirs_win && !need_merge) {
+        // Nothing to change.
+        return false;
+    }
+    if (steal && !(ours & ~theirs) && !need_merge && theirs_win == both) {
+        // The merged block is other_block.
+        return true;
+    }
+
+    // Collection mutations whose cells were merged, to notify the tracker of.
+    mask_type merged_collections = 0;
+    bitmask::for_each_set(mask_type(ours | theirs), [&] (unsigned slot) {
+        const auto bit = bitmask::bit<mask_type>(slot);
+        if (need_merge & bit) {
+            auto ours_cell = atomic_cell_or_collection_view(this_block->cell(slot));
+            auto theirs_cell = atomic_cell_or_collection_view(other_block.cell(slot));
+            const column_definition& def = s.column_at(kind, column_of(block_index, slot));
+            if (def.is_atomic()) {
+                auto dst = ours_cell.copy(*def.type);
+                auto src = theirs_cell.copy(*def.type);
+                counter_cell_view::apply(def, dst, src); // FIXME: Optimize
+                builder.add_owned(slot, std::move(dst.data()), {});
+            } else {
+                auto merged = atomic_cell_or_collection(merge(*def.type, ours_cell.as_collection_mutation(), theirs_cell.as_collection_mutation()));
+                builder.add_owned(slot, std::move(merged.data()), {});
+                merged_collections |= bit;
+            }
+        } else if (!(ours & bit) || (theirs_win & bit)) {
+            add_theirs(slot);
+        } else {
+            builder.add_borrowed(slot, this_block->cell(slot), this_block->hash_value(slot), this_block->external_storage(slot));
+        }
+    });
+    auto new_block = builder.build();
+    auto* installed = new_block.get();
+    try {
+        set_block(block_index, std::move(new_block));
+    } catch (...) {
+        builder.roll_back(std::move(new_block));
+        throw;
+    }
+    if (tracker) {
+        bitmask::for_each_set(merged_collections, [&] (unsigned slot) {
+            tracker->on_collection_merged(s.column_at(kind, column_of(block_index, slot)),
+                    atomic_cell_or_collection_view(installed->cell(slot)));
+        });
+    }
+    return false;
+}
+
+std::optional<cell_and_hash_view>
 row::find_cell_and_hash(column_id id) const {
-    return _cells.get(id);
+    auto* block = _cells.find_block(block_index_of(id));
+    auto slot = slot_of(id);
+    if (!block || !block->contains(slot)) {
+        return std::nullopt;
+    }
+    return cell_and_hash_view{atomic_cell_or_collection_view(block->cell(slot)), block->hash(slot)};
 }
 
-const atomic_cell_or_collection*
+std::optional<atomic_cell_or_collection_view>
 row::find_cell(column_id id) const {
-    auto c_a_h = find_cell_and_hash(id);
-    return c_a_h ? &c_a_h->cell : nullptr;
+    auto* block = _cells.find_block(block_index_of(id));
+    auto slot = slot_of(id);
+    if (!block || !block->contains(slot)) {
+        return std::nullopt;
+    }
+    return atomic_cell_or_collection_view(block->cell(slot));
 }
 
 size_t row::external_memory_usage(const schema& s, column_kind kind) const {
-    return _cells.memory_usage([&] (column_id id, const cell_and_hash& cah) noexcept {
-            auto& cdef = s.column_at(kind, id);
-            return cah.cell.external_memory_usage(*cdef.type);
+    return _cells.memory_usage();
+}
+
+size_t row::representation_independent_data_size() const {
+    size_t size = 0;
+    _cells.for_each_block([&] (block_index_type, const block_type& block) {
+        size += block.representation_independent_data_size();
     });
+    return size;
+}
+
+static constexpr size_t tombstone_data_size = sizeof(api::timestamp_type) + sizeof(gc_clock::rep);
+
+size_t rows_entry::representation_independent_data_size() const {
+    const auto& r = row();
+    size_t size = r.cells().representation_independent_data_size();
+    if (!dummy()) {
+        size += key().representation().size();
+    }
+    if (r.deleted_at()) {
+        size += tombstone_data_size;
+    }
+    if (!r.marker().is_missing()) {
+        size += sizeof(api::timestamp_type) + (r.marker().is_expiring() ? 2 * sizeof(gc_clock::rep) : 0);
+    }
+    return size;
+}
+
+size_t mutation_partition::representation_independent_data_size(const schema& s) const {
+    check_schema(s);
+    constexpr size_t tombstone_size = tombstone_data_size;
+    size_t size = 0;
+    if (_tombstone) {
+        size += tombstone_size;
+    }
+    size += static_row().get().representation_independent_data_size();
+    for (const auto& rt : _row_tombstones) {
+        size += rt.tombstone().start.representation().size() + rt.tombstone().end.representation().size() + tombstone_size;
+    }
+    for (const rows_entry& e : non_dummy_rows()) {
+        size += e.representation_independent_data_size();
+    }
+    return size;
 }
 
 size_t rows_entry::memory_usage(const schema& s) const {
@@ -1470,44 +1813,54 @@ void rows_entry::replace_with(rows_entry&& o) noexcept {
     _row = std::move(o._row);
 }
 
-row::row(const schema& s, column_kind kind, const row& o) : _size(o._size)
-{
-    auto clone_cell_and_hash = [&s, &kind] (column_id id, const cell_and_hash& cah) {
-        auto& cdef = s.column_at(kind, id);
-        return cell_and_hash(cah.cell.copy(*cdef.type), cah.hash);
-    };
+static atomic_cell_or_collection_block::ptr clone_block(const atomic_cell_or_collection_block& block) {
+    return block.clone();
+}
 
-    _cells.clone_from(o._cells, clone_cell_and_hash);
+row::row(const schema& s, column_kind kind, const row& o)
+    : _cells(o._cells.clone(clone_block))
+    , _row_hash(o._row_hash)
+{
+}
+
+[[gnu::noinline]] static row construct_slow(const schema& our_schema, const schema& their_schema, column_kind kind, const row& o) {
+    // A reversed schema differs only in clustering key types; row cells (and the cached row hash) are identical.
+    if (our_schema.version() == reversed(their_schema.version())) {
+        return row(our_schema, kind, o);
+    }
+    row r;
+    r.apply(our_schema, their_schema, kind, o);
+    return r;
 }
 
 row row::construct(const schema& our_schema, const schema& their_schema, column_kind kind, const row& o) {
     if (our_schema.version() == their_schema.version()) {
         return row(our_schema, kind, o);
-    } else {
-        row r;
-        r.apply(our_schema, their_schema, kind, o);
-        return r;
     }
+    return construct_slow(our_schema, their_schema, kind, o);
 }
 
 row::~row() {
 }
 
-const atomic_cell_or_collection& row::cell_at(column_id id) const {
-    auto&& cell = find_cell(id);
+atomic_cell_or_collection_view row::cell_at(column_id id) const {
+    auto cell = find_cell(id);
     if (!cell) {
         throw_with_backtrace<std::out_of_range>(format("Column not found for id = {:d}", id));
     }
     return *cell;
 }
 
+static_assert(std::forward_iterator<row::const_cell_iterator>);
+static_assert(std::sentinel_for<std::default_sentinel_t, row::const_cell_iterator>);
+
 bool row::equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const {
     if (size() != other.size()) {
         return false;
     }
 
-    auto cells_equal = [&] (column_id id1, const atomic_cell_or_collection& c1,
-                            column_id id2, const atomic_cell_or_collection& c2) {
+    auto cells_equal = [&] (column_id id1, atomic_cell_or_collection_view c1,
+                            column_id id2, atomic_cell_or_collection_view c2) {
         static_assert(schema::row_column_ids_are_ordered_by_name::value, "Relying on column ids being ordered by name");
         auto& at1 = *this_schema.column_at(kind, id1).type;
         auto& at2 = *other_schema.column_at(kind, id2).type;
@@ -1516,34 +1869,19 @@ bool row::equal(column_kind kind, const schema& this_schema, const row& other, c
                && c1.equals(at1, c2);
     };
 
-    auto i1 = _cells.begin();
-    auto i1_end = _cells.end();
-    auto i2 = other._cells.begin();
-    auto i2_end = other._cells.end();
-
-    while (true) {
-        if (i1 == i1_end) {
-            return i2 == i2_end;
-        }
-        if (i2 == i2_end) {
-            return i1 == i1_end;
-        }
-
-        if (!cells_equal(i1.key(), i1->cell, i2.key(), i2->cell)) {
-            return false;
-        }
-
-        i1++;
-        i2++;
-    }
+    // Both rows have the same number of cells, so comparing them pairwise in
+    // order is enough.
+    return std::ranges::equal(cell_range(), other.cell_range(), [&] (const cell_entry& e1, const cell_entry& e2) {
+        return cells_equal(e1.id, e1.cell, e2.id, e2.cell);
+    });
 }
 
 row::row() {
 }
 
 row::row(row&& other) noexcept
-    : _size(other._size), _cells(std::move(other._cells)) {
-    other._size = 0;
+    : _cells(std::move(other._cells))
+    , _row_hash(std::exchange(other._row_hash, {})) {
 }
 
 row& row::operator=(row&& other) noexcept {
@@ -1574,8 +1912,31 @@ void row::apply_monotonically(const schema& s, column_kind kind, row&& other, db
     if (other.empty()) {
         return;
     }
-    other.consume_with([&] (column_id id, cell_and_hash& c_a_h) {
-        apply_monotonically(s.column_at(kind, id), std::move(c_a_h.cell), std::move(c_a_h.hash), tracker);
+    if (empty()) {
+        _cells = std::move(other._cells);
+        _row_hash = std::exchange(other._row_hash, {});
+        return;
+    }
+    other._row_hash = {};
+    // Each block of other is consumed as soon as it is merged, so that on
+    // exception the sum of this and other is unchanged.
+    other._cells.rebuild_blocks([&] (block_index_type block_index, block_being_rebuilt& block) {
+        auto* this_block = _cells.find_block(block_index);
+        if (!this_block) {
+            // We don't have the block: move it over.
+            block.release_to([&] (block_ptr&& b) {
+                set_block(block_index, std::move(b), blocks_to_follow_from(other, block_index));
+            });
+            return;
+        }
+        if (merge_block(s, kind, block_index, this_block, *block, true, tracker, std::nullopt)) {
+            // other's block replaces ours: move it over.
+            block.release_to([&] (block_ptr&& b) {
+                set_block(block_index, std::move(b));
+            });
+            return;
+        }
+        block.remove();
     });
 }
 
@@ -1583,35 +1944,38 @@ void row::apply_monotonically(const schema& s, column_kind kind, const row& othe
     if (other.empty()) {
         return;
     }
-    other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
-        apply(s.column_at(kind, id), c_a_h.cell, c_a_h.hash, tracker);
+    other._cells.for_each_block([&] (block_index_type block_index, const block_type& block) {
+        auto* this_block = _cells.find_block(block_index);
+        std::optional<unsigned> blocks_to_follow;
+        if (!this_block) {
+            blocks_to_follow = blocks_to_follow_from(other, block_index);
+        }
+        merge_block(s, kind, block_index, this_block, block, false, tracker, blocks_to_follow);
     });
+}
+
+unsigned row::blocks_to_follow_from(const row& other, block_index_type block_index) const noexcept {
+    // Merging visits other's blocks in index order, so the blocks still to be added
+    // to this vector are other's blocks above block_index which we lack.
+    auto position = block_index & (atomic_cell_or_collection_block_vector_fanout - 1);
+    auto to_add = other._cells.group_present(block_index) & ~_cells.group_present(block_index);
+    return std::popcount((to_add >> position) >> 1);
 }
 
 void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, row&& other, db::large_data_cache_tracker* tracker) {
     if (our_schema.version() == their_schema.version()) {
         return apply_monotonically(our_schema, kind, std::move(other), tracker);
     }
-    other.consume_with([&] (column_id id, cell_and_hash& c_a_h) {
-        const column_definition& their_col = their_schema.column_at(kind, id);
-        const column_definition* our_col = our_schema.get_column_definition(their_col.name());
-        if (our_col) {
-            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell, tracker);
-        }
-    });
+    apply_monotonically(our_schema, kind, converting_mutation_partition_applier::upgrade_row(our_schema, their_schema, kind, other), tracker);
+    other._cells.clear();
+    other._row_hash = {};
 }
 
 void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other, db::large_data_cache_tracker* tracker) {
     if (our_schema.version() == their_schema.version()) {
         return apply_monotonically(our_schema, kind, other, tracker);
     }
-    other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
-        const column_definition& their_col = their_schema.column_at(kind, id);
-        const column_definition* our_col = our_schema.get_column_definition(their_col.name());
-        if (our_col) {
-            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell, tracker);
-        }
-    });
+    apply_monotonically(our_schema, kind, converting_mutation_partition_applier::upgrade_row(our_schema, their_schema, kind, other), tracker);
 }
 
 // When views contain a primary key column that is not part of the base table primary key,
@@ -1640,49 +2004,128 @@ compact_and_expire_result row::compact_and_expire(
         tomb.apply(shadowable_tombstone(api::max_timestamp, gc_clock::time_point::max()), row_marker());
     }
     compact_and_expire_result res{};
-    remove_if([&] (column_id id, atomic_cell_or_collection& c) {
-        bool erase = false;
-        const column_definition& def = s.column_at(kind, id);
-        if (def.is_atomic()) {
-            atomic_cell_view cell = c.as_atomic_cell(def);
-            auto can_erase_cell = [&] {
-                // Only row tombstones can be shadowable, (collection) cell tombstones aren't
-                return cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no);
-            };
 
-            if (cell.is_covered_by(tomb.regular(), def.is_counter())) {
-                erase = true;
-                res.dead_cells++;
-            } else if (cell.is_covered_by(tomb.shadowable().tomb(), def.is_counter())) {
-                erase = true;
-                res.dead_cells++;
-            } else if (cell.has_expired(query_time)) {
-                erase = can_erase_cell();
-                if (!erase) {
-                    c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
-                } else if (collector) {
-                    collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
-                }
-                res.dead_cells++;
-            } else if (!cell.is_live()) {
-                erase = can_erase_cell();
-                if (erase && collector) {
-                    collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
-                }
-                res.dead_cells++;
-            } else {
+    // Most compactions change nothing. Check that with a read-only pass first,
+    // which is much cheaper than rebuilding the blocks. Collections always take
+    // the full pass, as checking them is as expensive as compacting them.
+    // The walk stops at the first cell which needs a change.
+    const bool needs_change = bool(std::as_const(_cells).for_each_block([&] (block_index_type block_index, const block_type& block) {
+        return block.for_each_cell([&] (const block_type::cell_entry& e) {
+            const column_definition& def = s.column_at(kind, column_of(block_index, e.slot));
+            if (!def.is_atomic()) {
+                return stop_iteration::yes;
+            }
+            auto cell = atomic_cell_view::from_bytes(e.cell);
+            if (cell.is_covered_by(tomb.regular(), def.is_counter())
+                    || cell.is_covered_by(tomb.shadowable().tomb(), def.is_counter())
+                    || cell.has_expired(query_time)) {
+                return stop_iteration::yes;
+            }
+            if (cell.is_live()) {
                 res.live_cells++;
-            }
-        } else {
-            auto compact_res = ::compact_and_expire(c.as_collection_mutation(), id, *def.type, tomb, query_time, can_gc, gc_before, collector);
-            res += compact_res.result;
-            if (collection_mutation_view(compact_res.collection).empty()) {
-                 erase = true;
+            } else if (cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no)) {
+                return stop_iteration::yes;
             } else {
-                c = std::move(compact_res.collection);
+                res.dead_cells++;
             }
+            return stop_iteration::no;
+        });
+    }));
+    if (!needs_change) {
+        return res;
+    }
+    res = {};
+
+    rebuild_blocks([&] (block_index_type block_index, block_being_rebuilt& block) {
+        // Most compactions change nothing, so start building a new block only on
+        // the first change, adding the cells kept until then.
+        atomic_cell_or_collection_block_builder builder;
+        bool changed = false;
+        block_type::mask_type kept_before_change = 0;
+        auto start_changing = [&] {
+            if (!changed) {
+                changed = true;
+                bitmask::for_each_set(kept_before_change, [&] (unsigned slot) {
+                    builder.add_borrowed(slot, block->cell(slot), block->hash_value(slot), block->external_storage(slot));
+                });
+            }
+        };
+        block->for_each_cell([&] (const block_type::cell_entry& e) {
+            auto id = column_of(block_index, e.slot);
+            auto c = atomic_cell_or_collection_view(e.cell);
+            auto keep = [&] {
+                if (changed) {
+                    builder.add_borrowed(e.slot, e.cell, e.hash_value(), e.external_storage);
+                } else {
+                    kept_before_change |= bitmask::bit<block_type::mask_type>(e.slot);
+                }
+            };
+            auto replace = [&] (atomic_cell_or_collection&& replacement) {
+                start_changing();
+                builder.add_owned(e.slot, std::move(replacement.data()), {});
+            };
+            auto erase = [&] {
+                start_changing();
+            };
+            const column_definition& def = s.column_at(kind, id);
+            if (def.is_atomic()) {
+                atomic_cell_view cell = c.as_atomic_cell(def);
+                auto can_erase_cell = [&] {
+                    // Only row tombstones can be shadowable, (collection) cell tombstones aren't
+                    return cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no);
+                };
+
+                if (cell.is_covered_by(tomb.regular(), def.is_counter())) {
+                    erase();
+                    res.dead_cells++;
+                } else if (cell.is_covered_by(tomb.shadowable().tomb(), def.is_counter())) {
+                    erase();
+                    res.dead_cells++;
+                } else if (cell.has_expired(query_time)) {
+                    if (!can_erase_cell()) {
+                        replace(atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
+                    } else {
+                        if (collector) {
+                            collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
+                        }
+                        erase();
+                    }
+                    res.dead_cells++;
+                } else if (!cell.is_live()) {
+                    if (can_erase_cell()) {
+                        if (collector) {
+                            collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
+                        }
+                        erase();
+                    } else {
+                        keep();
+                    }
+                    res.dead_cells++;
+                } else {
+                    keep();
+                    res.live_cells++;
+                }
+            } else {
+                auto compact_res = ::compact_and_expire(c.as_collection_mutation(), id, *def.type, tomb, query_time, can_gc, gc_before, collector);
+                res += compact_res.result;
+                auto compacted = collection_mutation_view(compact_res.collection);
+                if (compacted.empty()) {
+                    erase();
+                } else if (compacted.data == e.cell) {
+                    keep();
+                } else {
+                    replace(atomic_cell_or_collection(std::move(compact_res.collection)));
+                }
+            }
+        });
+        if (!changed) {
+            return;
         }
-        return erase;
+        if (builder.empty()) {
+            block.remove();
+        } else {
+            block.replace(builder.build());
+        }
     });
     return res;
 }
@@ -1771,38 +2214,30 @@ deletable_row deletable_row::difference(const schema& s, column_kind kind, const
 row row::difference(const schema& s, column_kind kind, const row& other) const
 {
     row r;
-
-    auto c = _cells.begin();
-    auto c_end = _cells.end();
-    auto it = other._cells.begin();
-    auto it_end = other._cells.end();
-
-    while (c != c_end) {
-        while (it != it_end && it.key() < c.key()) {
-            ++it;
-        }
-        auto& cdef = s.column_at(kind, c.key());
-        if (it == it_end || it.key() != c.key()) {
-            r.append_cell(c.key(), c->cell.copy(*cdef.type));
+    cell_appender cells(r, s, kind);
+    for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
+        auto& cdef = s.column_at(kind, id);
+        auto other_cell = other.find_cell(id);
+        if (!other_cell) {
+            cells.append(id, c);
         } else if (cdef.is_counter()) {
-            auto cell = counter_cell_view::difference(c->cell.as_atomic_cell(cdef), it->cell.as_atomic_cell(cdef));
+            auto cell = counter_cell_view::difference(c.as_atomic_cell(cdef), other_cell->as_atomic_cell(cdef));
             if (cell) {
-                r.append_cell(c.key(), std::move(*cell));
+                cells.append(id, std::move(*cell));
             }
         } else if (cdef.is_atomic()) {
-            if (compare_atomic_cell_for_merge(c->cell.as_atomic_cell(cdef), it->cell.as_atomic_cell(cdef)) > 0) {
-                r.append_cell(c.key(), c->cell.copy(*cdef.type));
+            if (compare_atomic_cell_for_merge(c.as_atomic_cell(cdef), other_cell->as_atomic_cell(cdef)) > 0) {
+                cells.append(id, c);
             }
         } else {
             auto diff = ::difference(*cdef.type,
-                    c->cell.as_collection_mutation(), it->cell.as_collection_mutation());
+                    c.as_collection_mutation(), other_cell->as_collection_mutation());
             if (!static_cast<collection_mutation_view>(diff).empty()) {
-                r.append_cell(c.key(), std::move(diff));
+                cells.append(id, std::move(diff));
             }
         }
-        c++;
-    }
-
+    });
+    cells.finish();
     return r;
 }
 
@@ -1865,7 +2300,7 @@ mutation_partition mutation_partition::difference(const schema& s, const mutatio
 void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) const {
     check_schema(s);
     v.accept_partition_tombstone(_tombstone);
-    _static_row.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+    _static_row.for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
         const column_definition& def = s.static_column_at(id);
         if (def.is_atomic()) {
             v.accept_static_cell(id, cell.as_atomic_cell(def));
@@ -1879,7 +2314,7 @@ void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) 
     for (const rows_entry& e : _rows) {
         const deletable_row& dr = e.row();
         v.accept_row(e.position(), dr.deleted_at(), dr.marker(), e.dummy(), e.continuous());
-        dr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        dr.cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
             const column_definition& def = s.regular_column_at(id);
             if (def.is_atomic()) {
                 v.accept_row_cell(id, cell.as_atomic_cell(def));
@@ -1906,6 +2341,8 @@ mutation_querier::mutation_querier(const schema& s, query::result::partition_wri
     , _memory_accounter(memory_accounter)
     , _static_cells_wr(pw.start().start_static_row().start_cells())
     , _pw(std::move(pw))
+    , _static_all_columns(_pw.requested_digest() && _pw.digest().row_level() && is_all_columns(s, column_kind::static_column, _pw.slice().static_columns))
+    , _regular_all_columns(_pw.requested_digest() && _pw.digest().row_level() && is_all_columns(s, column_kind::regular_column, _pw.slice().regular_columns))
 {
 }
 
@@ -1930,7 +2367,7 @@ void mutation_querier::query_static_row(const row& r, tombstone current_tombston
             max_timestamp max_ts{_pw.last_modified()};
             _pw.digest().feed_hash(current_tombstone);
             max_ts.update(current_tombstone.timestamp);
-            _pw.digest().feed_hash(r, _schema, column_kind::static_column, slice.static_columns, max_ts);
+            feed_row(_pw.digest(), r, _schema, column_kind::static_column, slice.static_columns, _static_all_columns, max_ts);
             _pw.last_modified() = max_ts.max;
         }
     }
@@ -1961,7 +2398,7 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone curr
         _pw.digest().feed_hash(current_tombstone);
         max_timestamp max_ts{_pw.last_modified()};
         max_ts.update(current_tombstone.tomb().timestamp);
-        _pw.digest().feed_hash(cr.cells(), _schema, column_kind::regular_column, slice.regular_columns, max_ts);
+        feed_row(_pw.digest(), cr.cells(), _schema, column_kind::regular_column, slice.regular_columns, _regular_all_columns, max_ts);
         _pw.last_modified() = max_ts.max;
     }
 
