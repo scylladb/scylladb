@@ -725,8 +725,11 @@ async def run_workload(
     try:
         async with asyncio.TaskGroup() as tg:
             async def stop_timer():
+                # Ends the phase after duration_s, or returns at once when a disruptor ended it.
                 try:
-                    await asyncio.sleep(duration_s)
+                    await asyncio.wait_for(workload.stop_event.wait(), duration_s)
+                except TimeoutError:
+                    pass
                 finally:
                     workload.stop_event.set()
 
