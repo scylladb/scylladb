@@ -25,6 +25,7 @@ target_sources(scylla_auth
     service.cc
     standard_role_manager.cc
     transitional.cc
+    verified_password_cache.cc
     maintenance_socket_authenticator.cc
     maintenance_socket_role_manager.cc)
 target_include_directories(scylla_auth
@@ -36,6 +37,7 @@ target_link_libraries(scylla_auth
     xxHash::xxhash
   PRIVATE
     absl::headers
+    crypto
     OpenLDAP::ldap
     cql3
     idl

@@ -12,6 +12,8 @@
 
 #include <cerrno>
 
+#include <openssl/crypto.h>
+
 extern "C" {
 #include <crypt.h>
 #include <unistd.h>
@@ -83,7 +85,8 @@ no_supported_schemes::no_supported_schemes()
 
 seastar::future<bool> check(const sstring& pass, const sstring& salted_hash) {
     const auto pwd_hash = co_await detail::hash_with_salt_async(pass, salted_hash);
-    co_return pwd_hash == salted_hash;
+    co_return pwd_hash.size() == salted_hash.size()
+            && CRYPTO_memcmp(pwd_hash.data(), salted_hash.data(), salted_hash.size()) == 0;
 }
 
 } // namespace auth::passwords

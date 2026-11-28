@@ -744,6 +744,7 @@ perf_tests = set([
     'test/perf/perf_bytes_hash',
     'test/perf/perf_sort_by_proximity',
     'test/perf/perf_array_search',
+    'test/perf/perf_passwords',
 ])
 
 perf_standalone_tests = set([
@@ -1366,6 +1367,7 @@ scylla_core = (['message/messaging_service.cc',
                 'auth/default_authorizer.cc',
                 'auth/resource.cc',
                 'auth/passwords.cc',
+                'auth/verified_password_cache.cc',
                 'auth/maintenance_socket_authenticator.cc',
                 'auth/password_authenticator.cc',
                 'auth/permission.cc',
