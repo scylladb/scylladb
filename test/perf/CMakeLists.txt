@@ -34,6 +34,7 @@ target_sources(test-perf
     perf_compaction_efficiency.cc
     perf_sstable.cc
     perf_tablets.cc
+    perf_tls.cc
     tablet_load_balancing.cc
     perf.cc)
 target_include_directories(test-perf
