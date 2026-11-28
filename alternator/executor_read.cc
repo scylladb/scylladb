@@ -587,6 +587,18 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
         ++exploded_pk_it;
     }
     auto pos = paging_state.get_position_in_partition();
+    // In an Alternator table, the page ends on an item (or a deleted item),
+    // whose key attributes are all we put in LastEvaluatedKey. It can only
+    // end between items (e.g., just after a key) on a range tombstone (a
+    // deletion of a range of sort keys), and Alternator never writes those.
+    // But they can be written through CQL, and then we can't represent the
+    // position in LastEvaluatedKey: Using just its key would make the next
+    // page restart in the wrong place - possibly the same place, over and
+    // over. So we refuse this query - retrying it wouldn't help.
+    if (is_alternator_keyspace(schema.ks_name()) && pos.has_key() && pos.get_bound_weight() != bound_weight::equal) {
+        throw api_error::validation("Cannot page through a range tombstone (a deletion of a range of sort keys), "
+                "which Alternator doesn't write - it may have been written through CQL");
+    }
     if (pos.has_key()) {
         // A base table has at most one clustering key column, but the views
         // backing GSIs and LSIs carry the base table's key columns as extra
@@ -604,8 +616,9 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     }
     // To avoid possible conflicts (and thus having to reserve these names) we
     // avoid adding the weight and region fields of the position to the paging
-    // state. Alternator will never need these as it doesn't have range
-    // tombstones (the only thing that can generate a position other than at(row)).
+    // state. Alternator will never need these as it doesn't write range
+    // tombstones (the only thing that can generate a position other than at(row)),
+    // and refuses to page through range tombstones written through CQL (see above).
     // We conditionally include these fields when reading CQL tables through alternator.
     if (!is_alternator_keyspace(schema.ks_name()) && (!pos.has_key() || pos.get_bound_weight() != bound_weight::equal)) {
         rjson::add_with_string_name(last_evaluated_key, scylla_paging_region, rjson::empty_object());
@@ -614,6 +627,99 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
         rjson::add(last_evaluated_key[scylla_paging_weight.data()], "N", static_cast<int>(pos.get_bound_weight()));
     }
     return last_evaluated_key;
+}
+
+// Check that ExclusiveStartKey contains only key attributes of the table or
+// index being read - the attributes which encode_paging_state() puts in
+// LastEvaluatedKey. For an index, these are the index's key attributes and
+// the base table's key attributes. When reading a non-Alternator CQL table
+// (e.g., a system table), LastEvaluatedKey may also contain the region and
+// weight of the position, so these are allowed too.
+static void check_exclusive_start_key_attributes(const rjson::value& exclusive_start_key, const schema& schema) {
+    if (!exclusive_start_key.IsObject()) {
+        throw api_error::validation("The provided starting key is invalid: ExclusiveStartKey must be a map");
+    }
+    const bool is_alternator_ks = is_alternator_keyspace(schema.ks_name());
+    for (auto it = exclusive_start_key.MemberBegin(); it != exclusive_start_key.MemberEnd(); ++it) {
+        std::string_view name = rjson::to_string_view(it->name);
+        const column_definition* cdef = schema.get_column_definition(to_bytes(name));
+        if ((cdef && cdef->is_primary_key()) ||
+                (!is_alternator_ks && (name == scylla_paging_region || name == scylla_paging_weight))) {
+            continue;
+        }
+        throw api_error::validation(fmt::format(
+                "The provided starting key is invalid: {} is not a key attribute", name));
+    }
+}
+
+// Check that a Query's ExclusiveStartKey is inside the boundaries of the
+// query's key conditions: It must be in the partition being queried, and its
+// sort key must match the query's sort key condition. Moreover, it can't be
+// the last sort key which the condition allows (in the query's direction),
+// because no item can follow it - do_query() doesn't return such a
+// LastEvaluatedKey.
+static void check_exclusive_start_key_in_query_bounds(const rjson::value& exclusive_start_key, schema_ptr schema,
+        const dht::partition_range_vector& partition_ranges, const std::vector<query::clustering_range>& ck_bounds,
+        bool forward) {
+    // A Query of a table without a clustering key reads a single item, so
+    // starting after that item (ExclusiveStartKey is exclusive) makes no
+    // sense. do_query() never returns a LastEvaluatedKey for such a query.
+    // For an index, the schema is the view's, which has no clustering key
+    // only for a GSI whose key is the partition key of a table without a
+    // sort key - other indexes have the base table's key in their clustering
+    // key, so can have many items per partition.
+    if (schema->clustering_key_size() == 0) {
+        throw api_error::validation("The provided exclusive start key is invalid: "
+                "ExclusiveStartKey cannot be used in a Query of a table without a sort key");
+    }
+    auto ring_pos = dht::ring_position(dht::decorate_key(*schema, pk_from_json(exclusive_start_key, schema)));
+    bool in_partition = std::ranges::any_of(partition_ranges, [&] (const dht::partition_range& range) {
+        return range.contains(ring_pos, dht::ring_position_comparator(*schema));
+    });
+    if (!in_partition) {
+        throw api_error::validation("The provided starting key is outside query boundaries based on provided conditions");
+    }
+    // When reading a non-Alternator CQL table, ExclusiveStartKey may be a
+    // position which isn't a row (see pos_from_json()), so we only check the
+    // sort key of Alternator tables.
+    if (!is_alternator_keyspace(schema->ks_name())) {
+        return;
+    }
+    clustering_key ck = ck_from_json(exclusive_start_key, schema);
+    // A bound may be a prefix of the clustering key (e.g., for a GSI, whose
+    // clustering key also has the base table's key columns), so we compare
+    // only that prefix.
+    auto cmp = clustering_key_prefix::prefix_equal_tri_compare(*schema);
+    const size_t ck_size = schema->clustering_key_size();
+    bool in_range = std::ranges::any_of(ck_bounds, [&] (const query::clustering_range& range) {
+        if (range.start()) {
+            auto c = cmp(ck, range.start()->value());
+            if (c < 0 || (c == 0 && !range.start()->is_inclusive())) {
+                return false;
+            }
+            // A reversed query reads the keys before the start key, and
+            // there are none if it is the range's first key (if the bound is
+            // a prefix of the clustering key, many keys may be equal to it).
+            if (c == 0 && !forward && range.start()->value().size(*schema) == ck_size) {
+                return false;
+            }
+        }
+        if (range.end()) {
+            auto c = cmp(ck, range.end()->value());
+            if (c > 0 || (c == 0 && !range.end()->is_inclusive())) {
+                return false;
+            }
+            // A query reads the keys after the start key, and there are none
+            // if it is the range's last key.
+            if (c == 0 && forward && range.end()->value().size(*schema) == ck_size) {
+                return false;
+            }
+        }
+        return true;
+    });
+    if (!in_range) {
+        throw api_error::validation("The provided starting key does not match the range key predicate");
+    }
 }
 
 // RapidJSON allocates arrays contiguously in memory, so we want to avoid
@@ -646,6 +752,19 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     // reversed queries in the native reversed format.
     auto query_schema = table_schema;
     const bool reversed = custom_opts.contains<query::partition_slice::option::reversed>();
+    // The last clustering key which the query's range allows, in the query's
+    // direction - if the range's bound in this direction is inclusive and has
+    // all the clustering key columns (for an index, the bound is a prefix:
+    // many keys share it). If a page ends on this key, nothing can follow it,
+    // so we don't return a LastEvaluatedKey - and a Query refuses this key as
+    // ExclusiveStartKey (see check_exclusive_start_key_in_query_bounds()).
+    std::optional<clustering_key> last_key;
+    if (!ck_bounds.empty()) {
+        const auto& bound = reversed ? ck_bounds.front().start() : ck_bounds.back().end();
+        if (bound && bound->is_inclusive() && bound->value().size(*table_schema) == table_schema->clustering_key_size()) {
+            last_key = bound->value();
+        }
+    }
     if (reversed) {
         query_schema = table_schema->get_reversed();
 
@@ -687,10 +806,40 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(old_paging_state));
+    // A read of a single partition of a table (or index) without a clustering
+    // key reads at most one row, and we never return a LastEvaluatedKey for
+    // it - a Query doesn't accept an ExclusiveStartKey in this case (see
+    // check_exclusive_start_key_in_query_bounds()). If the page has the row,
+    // nothing is left to read, although the pager may not know it (e.g., when
+    // the page reached its limit of one row). If the page ended before the row
+    // (e.g., after reading query_tombstone_page_limit tombstones), we read
+    // more pages. This is quick, because without a clustering key, the
+    // partition has very few tombstones: The tombstone limit counts the
+    // tombstones after merging the memtables and sstables, i.e., at most one
+    // tombstone per position, and such a partition has just three positions -
+    // the partition tombstone, the static row, and the single clustering row
+    // (there are no range tombstones without a clustering key). So even if the
+    // item was deleted a million times, at most three tombstones are counted,
+    // and very few pages are read. In contrast, a partition with a clustering
+    // key can have a long run of tombstones, so a page must end in the middle
+    // of it and return a LastEvaluatedKey.
+    const bool single_row_read = table_schema->clustering_key_size() == 0
+            && partition_ranges.size() == 1 && partition_ranges.front().is_singular();
     auto p = service::pager::query_pagers::pager(proxy, query_schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
-    std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
-    if (!p->is_exhausted()) {
+    // All the pages read for this request share the request's deadline.
+    const auto timeout = executor::default_timeout();
+    std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), timeout);
+    while (single_row_read && rs->empty() && !p->is_exhausted()) {
+        rs = co_await p->fetch_page(limit, gc_clock::now(), timeout);
+    }
+    bool ended_on_last_key = false;
+    if (!p->is_exhausted() && last_key) {
+        auto state = p->state(std::nullopt);
+        ended_on_last_key = position_in_partition::tri_compare(*table_schema)(
+                state->get_position_in_partition(), position_in_partition::for_key(*last_key)) == 0;
+    }
+    if (!p->is_exhausted() && !single_row_read && !ended_on_last_key) {
         // No plan to record: this pager was pointed at the table or index to scan
         // here, rather than by a CQL plan a resumed page could pick differently.
         rs->get_metadata().set_paging_state(p->state(std::nullopt));
@@ -792,6 +941,9 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     }
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
+    if (exclusive_start_key) {
+        check_exclusive_start_key_attributes(*exclusive_start_key, *schema);
+    }
 
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
         return make_ready_future<request_return_type>(api_error::validation(
@@ -1876,6 +2028,9 @@ future<executor::request_return_type> executor::query(client_state& client_state
     auto start_time = std::chrono::steady_clock::now();
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
+    if (exclusive_start_key) {
+        check_exclusive_start_key_attributes(*exclusive_start_key, *schema);
+    }
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
         return make_ready_future<request_return_type>(api_error::validation(
                 "Consistent reads are not allowed on global indexes (GSI)"));
@@ -1944,6 +2099,9 @@ future<executor::request_return_type> executor::query(client_state& client_state
                         used_attribute_values,
                         expression_attribute_names,
                         used_attribute_names, *_parsed_expression_cache);
+    if (exclusive_start_key) {
+        check_exclusive_start_key_in_query_bounds(*exclusive_start_key, schema, partition_ranges, ck_bounds, forward);
+    }
 
     filter filter(*_parsed_expression_cache, request, filter::request_type::QUERY,
             used_attribute_names, used_attribute_values);
