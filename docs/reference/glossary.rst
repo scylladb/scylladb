@@ -37,6 +37,9 @@ Glossary
     Quorum
       Quorum is a *global* consistency level setting across the entire cluster including all data centers. See :doc:`Consistency Levels </cql/consistency>`.
 
+    Quarantined SSTable
+      An SSTable that ScyllaDB suspects is corrupt. A quarantined SSTable is moved to the ``quarantine`` subdirectory of the table's data directory. To prevent the corruption from spreading, it does not participate in compaction or repair, but it is still used for reads. SSTables are quarantined when :doc:`nodetool scrub </operating-scylla/nodetool-commands/scrub>` in ``VALIDATE`` mode finds them corrupt, or automatically when compaction detects a malformed SSTable. Quarantined SSTables indicate data corruption and should be investigated, and then removed with :doc:`nodetool dropquarantinedsstables </operating-scylla/nodetool-commands/dropquarantinedsstables>`. Dropping quarantined SSTables can resurrect deleted data.
+
     Entropy
       A state where data is not consistent. This is the result when replicas are not synced and data is random. ScyllaDB has measures in place to be antientropic. See :doc:`ScyllaDB Anti-Entropy </architecture/anti-entropy/index>`.
 
