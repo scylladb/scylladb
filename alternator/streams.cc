@@ -895,8 +895,6 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     auto ttl = std::chrono::seconds(opts.ttl());
 
-    rjson::add(stream_desc, "StreamStatus", rjson::from_string(status));
-
     stream_view_type type = cdc_options_to_stream_view_type(opts);
 
     rjson::add(stream_desc, "StreamArn", stream_arn);
@@ -927,6 +925,15 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - ttl);
         topologies = co_await _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners });
     }
+
+    // A stream which is enabled but has no shards yet is still "ENABLING".
+    // With tablets, this happens briefly after the stream is enabled, before
+    // the table's CDC streams are loaded; with vnodes, before the cluster
+    // publishes its first CDC generation (SCYLLADB-6446).
+    if (!stream_disabled && topologies.empty()) {
+        status = "ENABLING";
+    }
+    rjson::add(stream_desc, "StreamStatus", rjson::from_string(status));
 
     const auto e = topologies.end();
     std::optional<shard_id> shard_filter;
