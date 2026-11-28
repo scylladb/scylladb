@@ -191,6 +191,9 @@ public:
 using sink_source_for_get_full_row_hashes = sink_source_for_repair<repair_stream_cmd, repair_hash_with_cmd>;
 using sink_source_for_get_row_diff = sink_source_for_repair<repair_hash_with_cmd, repair_row_on_wire_with_cmd>;
 using sink_source_for_put_row_diff = sink_source_for_repair<repair_row_on_wire_with_cmd, repair_stream_cmd>;
+using sink_source_for_get_full_row_hashes_batched = sink_source_for_repair<repair_stream_cmd, repair_hash_with_cmd_batch>;
+using sink_source_for_get_row_diff_batched = sink_source_for_repair<repair_hash_with_cmd_batch, repair_row_on_wire_with_cmd_batch>;
+using sink_source_for_put_row_diff_batched = sink_source_for_repair<repair_row_on_wire_with_cmd_batch, repair_stream_cmd>;
 
 struct row_level_repair_metrics {
     seastar::metrics::metric_groups _metrics;
@@ -236,25 +239,129 @@ struct row_level_repair_metrics {
 
 static thread_local row_level_repair_metrics _metrics;
 
+// Takes up to hash_batch_max_count hashes from [it, end), advancing it.
+static std::vector<uint64_t> take_hash_batch(repair_hash_set::const_iterator& it, repair_hash_set::const_iterator end, size_t remaining) {
+    std::vector<uint64_t> batch;
+    batch.reserve(std::min(remaining, hash_batch_max_count));
+    while (it != end && batch.size() < hash_batch_max_count) {
+        batch.push_back(it->hash);
+        ++it;
+    }
+    return batch;
+}
+
+// Groups hashes via take_hash_batch, the same helper send_hashes_batched uses, so the tests
+// cover the wire path's grouping without an rpc::sink.
+future<std::vector<std::vector<uint64_t>>> batch_hashes_for_wire(const repair_hash_set& hashes) {
+    std::vector<std::vector<uint64_t>> batches;
+    size_t remaining = hashes.size();
+    for (auto it = hashes.begin(); it != hashes.end();) {
+        batches.push_back(take_hash_batch(it, hashes.end(), remaining));
+        remaining -= batches.back().size();
+        co_await coroutine::maybe_yield();
+    }
+    co_return batches;
+}
+
+// Sends hashes to sink grouped into hash_batch_max_count-sized repair_stream_cmd::hash_data_batch
+// frames, building one batch at a time. Caller still sends its own end_of_current_hash_set sentinel.
+static future<> send_hashes_batched(rpc::sink<repair_hash_with_cmd_batch>& sink, const repair_hash_set& hashes) {
+    size_t remaining = hashes.size();
+    for (auto it = hashes.begin(); it != hashes.end();) {
+        auto batch = take_hash_batch(it, hashes.end(), remaining);
+        remaining -= batch.size();
+        rlogger.trace("send_hashes_batched: batch of {} hashes", batch.size());
+        co_await sink(repair_hash_with_cmd_batch{repair_stream_cmd::hash_data_batch, std::move(batch)});
+    }
+}
+
+static size_t estimated_wire_size(const repair_row_on_wire& row) {
+    size_t size = row.get_key().representation().size();
+    for (const frozen_mutation_fragment& mf : row.get_mutation_fragments()) {
+        size += mf.representation().size();
+    }
+    return size;
+}
+
+// Pops one count/bytes-capped group off the front of `rows`; shared by
+// batch_rows_for_wire (tests) and send_rows_batched.
+static future<std::list<repair_row_on_wire>> next_row_batch(repair_rows_on_wire& rows) {
+    std::list<repair_row_on_wire> batch;
+    size_t batch_bytes = 0;
+    while (!rows.empty()) {
+        size_t row_bytes = estimated_wire_size(rows.front());
+        // Stop before adding, not after, so a batch never grows past the caps - except a
+        // single row already over row_batch_max_bytes on its own, which still gets sent.
+        if (!batch.empty() && (batch.size() >= row_batch_max_count || batch_bytes + row_bytes > row_batch_max_bytes)) {
+            break;
+        }
+        batch_bytes += row_bytes;
+        // splice: transfers the list node, no allocation and no moved-from husk left in rows.
+        batch.splice(batch.end(), rows, rows.begin());
+        co_await coroutine::maybe_yield();
+    }
+    co_return batch;
+}
+
+// Splits rows into batches via next_row_batch, preserving iteration order and consuming
+// `rows` — kept separate from send_rows_batched so the grouping math is unit-testable
+// without an rpc::sink.
+future<std::vector<std::list<repair_row_on_wire>>> batch_rows_for_wire(repair_rows_on_wire& rows) {
+    std::vector<std::list<repair_row_on_wire>> batches;
+    while (!rows.empty()) {
+        batches.push_back(co_await next_row_batch(rows));
+    }
+    co_return batches;
+}
+
+// Sends rows as row_data_batch frames, one batch at a time. sink() doesn't consume `cmd`,
+// so it is cleared gently to avoid a synchronous free.
+static future<> send_rows_batched(rpc::sink<repair_row_on_wire_with_cmd_batch>& sink, repair_rows_on_wire& rows) {
+    while (!rows.empty()) {
+        auto batch = co_await next_row_batch(rows);
+        rlogger.trace("send_rows_batched: batch of {} rows", batch.size());
+        auto cmd = repair_row_on_wire_with_cmd_batch{repair_stream_cmd::row_data_batch, std::move(batch)};
+        std::exception_ptr ep;
+        try {
+            co_await sink(cmd);
+        } catch (...) {
+            ep = std::current_exception();
+        }
+        co_await utils::clear_gently(cmd.rows);
+        if (ep) {
+            // clear the not-yet-batched remainder gently, not synchronously on unwind
+            co_await utils::clear_gently(rows);
+            std::rethrow_exception(ep);
+        }
+    }
+}
+
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
         row_level_diff_detect_algorithm::send_full_set,
         row_level_diff_detect_algorithm::send_full_set_rpc_stream,
+        row_level_diff_detect_algorithm::send_full_set_rpc_stream_batched,
     };
     return _algorithms;
 };
 
-static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const host_id_vector_replica_set& nodes) {
-    std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
-    parallel_for_each(std::views::iota(size_t(0), nodes.size()), coroutine::lambda([&] (size_t idx) -> future<> {
-        std::vector<row_level_diff_detect_algorithm> algorithms = co_await ser::repair_rpc_verbs::send_repair_get_diff_algorithms(&ms, nodes[idx]);
-        std::sort(algorithms.begin(), algorithms.end());
-        nodes_algorithms[idx] = std::move(algorithms);
-        rlogger.trace("Got node_algorithms={}, from node={}", nodes_algorithms[idx], nodes[idx]);
-    })).get();
+// Picks the highest-priority common algorithm: the input is sorted by enum value, so .back()
+// is the best only while enumerators are declared in strictly-improving order (enforced below).
+static_assert(row_level_diff_detect_algorithm::send_full_set < row_level_diff_detect_algorithm::send_full_set_rpc_stream
+        && row_level_diff_detect_algorithm::send_full_set_rpc_stream < row_level_diff_detect_algorithm::send_full_set_rpc_stream_batched,
+        "row_level_diff_detect_algorithm must be declared in increasing priority; highest_priority() relies on it");
+static row_level_diff_detect_algorithm highest_priority(const std::vector<row_level_diff_detect_algorithm>& common_algorithms) {
+    return common_algorithms.back();
+}
 
+// Pure selection logic behind get_common_diff_detect_algorithm: picks the best common
+// algorithm given each peer's advertised list and whether batching is allowed. Exposed
+// for unit testing the vnode/tablet gating (allow_batched).
+row_level_diff_detect_algorithm select_diff_detect_algorithm(
+        std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms, bool allow_batched) {
     auto common_algorithms = suportted_diff_detect_algorithms();
     for (auto& algorithms : nodes_algorithms) {
+        std::sort(algorithms.begin(), algorithms.end());
         std::sort(common_algorithms.begin(), common_algorithms.end());
         std::vector<row_level_diff_detect_algorithm> results;
         std::set_intersection(algorithms.begin(), algorithms.end(),
@@ -262,12 +369,31 @@ static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::me
                 std::back_inserter(results));
         common_algorithms = std::move(results);
     }
+    if (!allow_batched) {
+        common_algorithms.erase(std::remove(common_algorithms.begin(), common_algorithms.end(),
+                row_level_diff_detect_algorithm::send_full_set_rpc_stream_batched), common_algorithms.end());
+    }
+    // Logged unconditionally, before the throw below, so a negotiation failure still
+    // reports what each peer advertised.
     rlogger.trace("peer_algorithms={}, local_algorithms={}, common_diff_detect_algorithms={}",
             nodes_algorithms, suportted_diff_detect_algorithms(), common_algorithms);
     if (common_algorithms.empty()) {
         throw std::runtime_error("Can not find row level repair diff detect algorithm");
     }
-    return common_algorithms.back();
+    return highest_priority(common_algorithms);
+}
+
+// allow_batched gates send_full_set_rpc_stream_batched on the local table
+// being a tablet table (uses_tablets()) — vnode repair must never select it.
+static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const host_id_vector_replica_set& nodes, bool allow_batched) {
+    std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
+    parallel_for_each(std::views::iota(size_t(0), nodes.size()), coroutine::lambda([&] (size_t idx) -> future<> {
+        std::vector<row_level_diff_detect_algorithm> algorithms = co_await ser::repair_rpc_verbs::send_repair_get_diff_algorithms(&ms, nodes[idx]);
+        std::sort(algorithms.begin(), algorithms.end());
+        nodes_algorithms[idx] = std::move(algorithms);
+        rlogger.trace("Got node_algorithms={}, from node={}", nodes_algorithms[idx], nodes[idx]);
+    })).get();
+    return select_diff_detect_algorithm(nodes_algorithms, allow_batched);
 }
 
 static bool is_rpc_stream_supported(row_level_diff_detect_algorithm algo) {
@@ -905,6 +1031,9 @@ private:
     sink_source_for_get_full_row_hashes _sink_source_for_get_full_row_hashes;
     sink_source_for_get_row_diff _sink_source_for_get_row_diff;
     sink_source_for_put_row_diff _sink_source_for_put_row_diff;
+    sink_source_for_get_full_row_hashes_batched _sink_source_for_get_full_row_hashes_batched;
+    sink_source_for_get_row_diff_batched _sink_source_for_get_row_diff_batched;
+    sink_source_for_put_row_diff_batched _sink_source_for_put_row_diff_batched;
     tracker_link_type _tracker_link;
     row_level_repair* _row_level_repair_ptr;
     std::vector<repair_node_state> _all_node_states;
@@ -996,6 +1125,12 @@ public:
     bool use_rpc_stream() const {
         return is_rpc_stream_supported(_algo);
     }
+    bool use_start_with_estimate() const {
+        return _is_tablet && _db.local().features().repair_start_with_estimate;
+    }
+    bool use_batched_stream() const {
+        return _is_tablet && _algo == row_level_diff_detect_algorithm::send_full_set_rpc_stream_batched;
+    }
 
 public:
     // master constructor
@@ -1063,6 +1198,24 @@ public:
                         auto dst_cpu_id = dst_cpu_id_opt.value_or(repair_unspecified_shard);
                         rlogger.debug("put_row_diff: repair_meta_id={} dst_cpu_id={}", repair_meta_id, dst_cpu_id);
                         return rs.get_messaging().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, dst_cpu_id, addr);
+                })
+            , _sink_source_for_get_full_row_hashes_batched(_repair_meta_id, _nr_peer_nodes,
+                    [&rs] (uint32_t repair_meta_id, std::optional<shard_id> dst_cpu_id_opt, locator::host_id addr) {
+                        auto dst_cpu_id = dst_cpu_id_opt.value_or(repair_unspecified_shard);
+                        rlogger.debug("get_full_row_hashes_batched: repair_meta_id={} dst_cpu_id={}", repair_meta_id, dst_cpu_id);
+                        return rs.get_messaging().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream_batched(repair_meta_id, dst_cpu_id, addr);
+                })
+            , _sink_source_for_get_row_diff_batched(_repair_meta_id, _nr_peer_nodes,
+                    [&rs] (uint32_t repair_meta_id, std::optional<shard_id> dst_cpu_id_opt, locator::host_id addr) {
+                        auto dst_cpu_id = dst_cpu_id_opt.value_or(repair_unspecified_shard);
+                        rlogger.debug("get_row_diff_batched: repair_meta_id={} dst_cpu_id={}", repair_meta_id, dst_cpu_id);
+                        return rs.get_messaging().make_sink_and_source_for_repair_get_row_diff_with_rpc_stream_batched(repair_meta_id, dst_cpu_id, addr);
+                })
+            , _sink_source_for_put_row_diff_batched(_repair_meta_id, _nr_peer_nodes,
+                    [&rs] (uint32_t repair_meta_id, std::optional<shard_id> dst_cpu_id_opt, locator::host_id addr) {
+                        auto dst_cpu_id = dst_cpu_id_opt.value_or(repair_unspecified_shard);
+                        rlogger.debug("put_row_diff_batched: repair_meta_id={} dst_cpu_id={}", repair_meta_id, dst_cpu_id);
+                        return rs.get_messaging().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream_batched(repair_meta_id, dst_cpu_id, addr);
                 })
             , _row_level_repair_ptr(row_level_repair_ptr)
             , _repair_hasher(_seed, _schema)
@@ -1148,9 +1301,12 @@ public:
         auto f1 = _sink_source_for_get_full_row_hashes.close();
         auto f2 = _sink_source_for_get_row_diff.close();
         auto f3 = _sink_source_for_put_row_diff.close();
+        auto f4 = _sink_source_for_get_full_row_hashes_batched.close();
+        auto f5 = _sink_source_for_get_row_diff_batched.close();
+        auto f6 = _sink_source_for_put_row_diff_batched.close();
         rlogger.debug("repair_meta::stop");
         // move to background.  waited on via _stopped->get_future.
-        when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this] {
+        when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3), std::move(f4), std::move(f5), std::move(f6)).discard_result().finally([this] {
             return _repair_writer->wait_for_writer_done().finally([this] {
                 return close().then([this] {
                     return clear_gently();
@@ -1951,6 +2107,30 @@ private:
         throw std::runtime_error("get_full_row_hashes: Got unexpected end of stream");
     }
 
+    future<> get_full_row_hashes_source_op_batched(
+            lw_shared_ptr<repair_hash_set> current_hashes,
+            locator::host_id remote_node,
+            unsigned node_idx,
+            rpc::source<repair_hash_with_cmd_batch>& source) {
+        while (std::optional<std::tuple<repair_hash_with_cmd_batch>> hash_cmd_opt = co_await source()) {
+            repair_hash_with_cmd_batch hash_cmd = std::move(std::get<0>(hash_cmd_opt.value()));
+            rlogger.trace("get_full_row_hashes: Got repair_hash_with_cmd_batch from peer={}, nr_hashes={}, cmd={}", remote_node, hash_cmd.hashes.size(), int(hash_cmd.cmd));
+            if (hash_cmd.cmd == repair_stream_cmd::hash_data_batch) {
+                for (uint64_t h : hash_cmd.hashes) {
+                    current_hashes->insert(repair_hash(h));
+                }
+            } else if (hash_cmd.cmd == repair_stream_cmd::end_of_current_hash_set) {
+                co_return;
+            } else if (hash_cmd.cmd == repair_stream_cmd::error) {
+                throw std::runtime_error("get_full_row_hashes: Peer failed to process");
+            } else {
+                throw std::runtime_error("get_full_row_hashes: Got unexpected repair_stream_cmd");
+            }
+        }
+        _sink_source_for_get_full_row_hashes_batched.mark_source_closed(node_idx);
+        throw std::runtime_error("get_full_row_hashes: Got unexpected end of stream");
+    }
+
     future<> get_full_row_hashes_sink_op(rpc::sink<repair_stream_cmd>& sink) {
         std::exception_ptr ep;
         try {
@@ -1972,11 +2152,19 @@ public:
             co_return co_await get_full_row_hashes_handler();
         }
         auto current_hashes = make_lw_shared<repair_hash_set>();
-        auto [sink, source] = co_await _sink_source_for_get_full_row_hashes.get_sink_source(remote_node, node_idx, dst_cpu_id);
-        co_await coroutine::all(
-            [&] { return get_full_row_hashes_source_op(current_hashes, remote_node, node_idx, source); },
-            [&] { return get_full_row_hashes_sink_op(sink); }
-        );
+        if (use_batched_stream()) {
+            auto [sink, source] = co_await _sink_source_for_get_full_row_hashes_batched.get_sink_source(remote_node, node_idx, dst_cpu_id);
+            co_await coroutine::all(
+                [&] { return get_full_row_hashes_source_op_batched(current_hashes, remote_node, node_idx, source); },
+                [&] { return get_full_row_hashes_sink_op(sink); }
+            );
+        } else {
+            auto [sink, source] = co_await _sink_source_for_get_full_row_hashes.get_sink_source(remote_node, node_idx, dst_cpu_id);
+            co_await coroutine::all(
+                [&] { return get_full_row_hashes_source_op(current_hashes, remote_node, node_idx, source); },
+                [&] { return get_full_row_hashes_sink_op(sink); }
+            );
+        }
         stats().rx_hashes_nr += current_hashes->size();
         _metrics.rx_hashes_nr += current_hashes->size();
         co_return std::move(*current_hashes);
@@ -2017,10 +2205,11 @@ public:
     }
 
     // RPC API
-    future<>
+    // Returns the follower's partition estimate, if it sent one.
+    future<std::optional<uint64_t>>
     repair_row_level_start(locator::host_id remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version, streaming::stream_reason reason, gc_clock::time_point compaction_time, shard_id dst_cpu_id) {
         if (remote_node == myhostid()) {
-            co_return;
+            co_return std::nullopt;
         }
         stats().rpc_call_nr++;
         // Even though remote partitioner name is ignored in the current version of
@@ -2036,9 +2225,8 @@ public:
                 remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id, _frozen_topology_guard, _repaired_at, _incremental_mode);
         if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
             throw replica::no_such_column_family(ks_name, cf_name);
-        } else {
-            co_return;
         }
+        co_return resp ? resp->estimated_partitions : std::nullopt;
     }
 
     // RPC handler
@@ -2061,7 +2249,18 @@ public:
                 co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
             }
             co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode, explicit_dst_cpu_id);
-            co_return repair_row_level_start_response{repair_row_level_start_status::ok};
+            repair_row_level_start_response resp{repair_row_level_start_status::ok};
+            // Saves the master a repair_get_estimated_partitions round trip; on failure
+            // it falls back to the separate RPC.
+            try {
+                auto rm = repair.get_repair_meta(from_id, repair_meta_id);
+                if (rm->use_start_with_estimate()) {
+                    resp.estimated_partitions = co_await rm->get_estimated_partitions();
+                }
+            } catch (...) {
+                rlogger.debug("repair[{}]: estimate in repair_row_level_start failed: {}", repair_meta_id, std::current_exception());
+            }
+            co_return resp;
         } catch (replica::no_such_column_family&) {
             co_return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
         }
@@ -2108,6 +2307,7 @@ public:
 
     // RPC handler
     static future<uint64_t> repair_get_estimated_partitions_handler(repair_service& rs, locator::host_id from, uint32_t repair_meta_id) {
+        utils::get_local_injector().inject("repair_estimated_partitions_rpc_fail", [] { throw std::runtime_error("repair_estimated_partitions_rpc_fail"); });
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::get_estimated_partitions_started);
         uint64_t partitions = co_await rm->get_estimated_partitions();
@@ -2127,6 +2327,7 @@ public:
 
     // RPC handler
     static future<> repair_set_estimated_partitions_handler(repair_service& rs, locator::host_id from, uint32_t repair_meta_id, uint64_t estimated_partitions) {
+        utils::get_local_injector().inject("repair_estimated_partitions_rpc_fail", [] { throw std::runtime_error("repair_estimated_partitions_rpc_fail"); });
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_started);
         co_await rm->set_estimated_partitions(estimated_partitions);
@@ -2136,18 +2337,21 @@ public:
     // RPC API
     // Return the largest sync point contained in the _row_buf , current _row_buf checksum, and the _row_buf size
     future<get_sync_boundary_response>
-    get_sync_boundary(locator::host_id remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id) {
+    get_sync_boundary(locator::host_id remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id, std::optional<uint64_t> estimated_partitions) {
         if (remote_node == myhostid()) {
-            co_return co_await get_sync_boundary_handler(skipped_sync_boundary);
+            co_return co_await get_sync_boundary_handler(skipped_sync_boundary, estimated_partitions);
         }
         stats().rpc_call_nr++;
-        co_return co_await ser::repair_rpc_verbs::send_repair_get_sync_boundary(&_messaging, remote_node, _repair_meta_id, skipped_sync_boundary, dst_cpu_id);
+        co_return co_await ser::repair_rpc_verbs::send_repair_get_sync_boundary(&_messaging, remote_node, _repair_meta_id, skipped_sync_boundary, dst_cpu_id, estimated_partitions);
     }
 
     // RPC handler
     future<get_sync_boundary_response>
-    get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
+    get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary, std::optional<uint64_t> estimated_partitions) {
         auto gate_held = _gate.hold();
+        if (estimated_partitions) {
+            co_await set_estimated_partitions(*estimated_partitions);
+        }
         auto& cf = _db.local().find_column_family(_schema->id());
         cf.update_off_strategy_trigger();
         co_return co_await get_sync_boundary(std::move(skipped_sync_boundary));
@@ -2224,6 +2428,40 @@ private:
         }
     }
 
+    // Must run inside a seastar thread
+    void get_row_diff_source_op_batched(
+            update_peer_row_hash_sets update_hash_set,
+            locator::host_id remote_node,
+            unsigned node_idx,
+            rpc::sink<repair_hash_with_cmd_batch>& sink,
+            rpc::source<repair_row_on_wire_with_cmd_batch>& source) {
+        repair_rows_on_wire current_rows;
+        for (;;) {
+            std::optional<std::tuple<repair_row_on_wire_with_cmd_batch>> row_opt = source().get();
+            if (row_opt) {
+                if (inject_rpc_stream_error) {
+                    throw std::runtime_error("get_row_diff: Inject sender error in source loop");
+                }
+                auto row = std::move(std::get<0>(row_opt.value()));
+                if (row.cmd == repair_stream_cmd::row_data_batch) {
+                    rlogger.trace("get_row_diff: Got repair_row_on_wire_with_cmd_batch batch");
+                    current_rows.splice(current_rows.end(), row.rows);
+                } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
+                    rlogger.trace("get_row_diff: Got repair_row_on_wire_with_cmd_batch with nullopt");
+                    apply_rows_on_master_in_thread(std::move(current_rows), remote_node, update_working_row_buf::yes, update_hash_set, node_idx);
+                    break;
+                } else if (row.cmd == repair_stream_cmd::error) {
+                    throw std::runtime_error("get_row_diff: Peer failed to process");
+                } else {
+                    throw std::runtime_error("get_row_diff: Got unexpected repair_stream_cmd");
+                }
+            } else {
+                _sink_source_for_get_row_diff_batched.mark_source_closed(node_idx);
+                throw std::runtime_error("get_row_diff: Got unexpected end of stream");
+            }
+        }
+    }
+
     future<> get_row_diff_sink_op(
             repair_hash_set set_diff,
             needs_all_rows_t needs_all_rows,
@@ -2254,6 +2492,34 @@ private:
         }
     }
 
+    future<> get_row_diff_sink_op_batched(
+            repair_hash_set set_diff,
+            needs_all_rows_t needs_all_rows,
+            rpc::sink<repair_hash_with_cmd_batch>& sink,
+            locator::host_id remote_node) {
+        std::exception_ptr ep;
+        try {
+            if (inject_rpc_stream_error) {
+                throw std::runtime_error("get_row_diff: Inject sender error in sink loop");
+            }
+            if (needs_all_rows) {
+                rlogger.trace("get_row_diff: request with repair_stream_cmd::needs_all_rows");
+                co_await sink(repair_hash_with_cmd_batch{repair_stream_cmd::needs_all_rows, {}});
+                co_await sink.flush();
+                co_return;
+            }
+            co_await send_hashes_batched(sink, set_diff);
+            co_await sink(repair_hash_with_cmd_batch{repair_stream_cmd::end_of_current_hash_set, {}});
+            co_await sink.flush();
+        } catch (...) {
+            ep = std::current_exception();
+        }
+        if (ep) {
+            co_await sink.close();
+            std::rethrow_exception(ep);
+        }
+    }
+
 public:
     // Must run inside a seastar thread
     void get_row_diff_with_rpc_stream(
@@ -2274,12 +2540,51 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            auto f = _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx, dst_cpu_id).get();
-            rpc::sink<repair_hash_with_cmd>& sink = std::get<0>(f);
-            rpc::source<repair_row_on_wire_with_cmd>& source = std::get<1>(f);
-            auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
-            get_row_diff_source_op(update_hash_set, remote_node, node_idx, sink, source);
-            sink_op.get();
+            if (use_batched_stream()) {
+                auto f = _sink_source_for_get_row_diff_batched.get_sink_source(remote_node, node_idx, dst_cpu_id).get();
+                rpc::sink<repair_hash_with_cmd_batch>& sink = std::get<0>(f);
+                rpc::source<repair_row_on_wire_with_cmd_batch>& source = std::get<1>(f);
+                auto sink_op = get_row_diff_sink_op_batched(std::move(set_diff), needs_all_rows, sink, remote_node);
+                // sink_op references the local sink: wait for it even if the reader fails.
+                std::exception_ptr ep;
+                try {
+                    get_row_diff_source_op_batched(update_hash_set, remote_node, node_idx, sink, source);
+                } catch (...) {
+                    ep = std::current_exception();
+                }
+                try {
+                    sink_op.get();
+                } catch (...) {
+                    if (!ep) {
+                        ep = std::current_exception();
+                    }
+                }
+                if (ep) {
+                    std::rethrow_exception(ep);
+                }
+            } else {
+                auto f = _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx, dst_cpu_id).get();
+                rpc::sink<repair_hash_with_cmd>& sink = std::get<0>(f);
+                rpc::source<repair_row_on_wire_with_cmd>& source = std::get<1>(f);
+                auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
+                // sink_op references the local sink: wait for it even if the reader fails.
+                std::exception_ptr ep;
+                try {
+                    get_row_diff_source_op(update_hash_set, remote_node, node_idx, sink, source);
+                } catch (...) {
+                    ep = std::current_exception();
+                }
+                try {
+                    sink_op.get();
+                } catch (...) {
+                    if (!ep) {
+                        ep = std::current_exception();
+                    }
+                }
+                if (ep) {
+                    std::rethrow_exception(ep);
+                }
+            }
         }
     }
 
@@ -2333,6 +2638,25 @@ private:
         throw std::runtime_error("put_row_diff: Got unexpected end of stream");
     }
 
+    future<> put_row_diff_source_op_batched(
+            locator::host_id remote_node,
+            unsigned node_idx,
+            rpc::source<repair_stream_cmd>& source) {
+        while (std::optional<std::tuple<repair_stream_cmd>> status_opt = co_await source()) {
+            repair_stream_cmd status = std::move(std::get<0>(status_opt.value()));
+            rlogger.trace("put_row_diff: Got status code from follower={} for put_row_diff, status={}", remote_node, int(status));
+            if (status == repair_stream_cmd::put_rows_done) {
+                co_return;
+            } else if (status == repair_stream_cmd::error) {
+                throw std::runtime_error(format("put_row_diff: Repair follower={} failed in put_row_diff handler, status={}", remote_node, int(status)));
+            } else {
+                throw std::runtime_error("put_row_diff: Got unexpected repair_stream_cmd");
+            }
+        }
+        _sink_source_for_put_row_diff_batched.mark_source_closed(node_idx);
+        throw std::runtime_error("put_row_diff: Got unexpected end of stream");
+    }
+
     future<> put_row_diff_sink_op(
             repair_rows_on_wire rows,
             rpc::sink<repair_row_on_wire_with_cmd>& sink,
@@ -2345,6 +2669,27 @@ private:
             }
             rlogger.trace("put_row_diff: send empty row");
             co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
+            rlogger.trace("put_row_diff: send done");
+            co_await sink.flush();
+        } catch (...) {
+            ep = std::current_exception();
+        }
+        if (ep) {
+            co_await sink.close();
+            std::rethrow_exception(ep);
+        }
+    }
+
+    future<> put_row_diff_sink_op_batched(
+            repair_rows_on_wire rows,
+            rpc::sink<repair_row_on_wire_with_cmd_batch>& sink,
+            locator::host_id remote_node) {
+        std::exception_ptr ep;
+        try {
+            rlogger.trace("put_row_diff: send row batches");
+            co_await send_rows_batched(sink, rows);
+            rlogger.trace("put_row_diff: send empty row");
+            co_await sink(repair_row_on_wire_with_cmd_batch{repair_stream_cmd::end_of_current_rows, {}});
             rlogger.trace("put_row_diff: send done");
             co_await sink.flush();
         } catch (...) {
@@ -2406,14 +2751,25 @@ public:
 
         repair_rows_on_wire rows = co_await to_repair_rows_on_wire(std::move(row_diff));
 
-        auto [sink, source] = co_await _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx, dst_cpu_id);
-        auto source_op = [&] () mutable -> future<> {
-            co_await put_row_diff_source_op(remote_node, node_idx, source);
-        };
-        auto sink_op = [&] () mutable -> future<> {
-            co_await put_row_diff_sink_op(std::move(rows), sink, remote_node);
-        };
-        co_await coroutine::all(source_op, sink_op);
+        if (use_batched_stream()) {
+            auto [sink, source] = co_await _sink_source_for_put_row_diff_batched.get_sink_source(remote_node, node_idx, dst_cpu_id);
+            auto source_op = [&] () mutable -> future<> {
+                co_await put_row_diff_source_op_batched(remote_node, node_idx, source);
+            };
+            auto sink_op = [&] () mutable -> future<> {
+                co_await put_row_diff_sink_op_batched(std::move(rows), sink, remote_node);
+            };
+            co_await coroutine::all(source_op, sink_op);
+        } else {
+            auto [sink, source] = co_await _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx, dst_cpu_id);
+            auto source_op = [&] () mutable -> future<> {
+                co_await put_row_diff_source_op(remote_node, node_idx, source);
+            };
+            auto sink_op = [&] () mutable -> future<> {
+                co_await put_row_diff_sink_op(std::move(rows), sink, remote_node);
+            };
+            co_await coroutine::all(source_op, sink_op);
+        }
     }
 
     // RPC handler
@@ -2627,7 +2983,7 @@ static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
         bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
         _metrics.rx_hashes_nr += current_set_diff.size();
         auto fp = make_foreign(std::make_unique<repair_hash_set>(std::move(current_set_diff)));
-        repair_rows_on_wire rows_on_wire  = co_await repair.invoke_on(dst_cpu_id, [&] (repair_service& local_repair) -> future<repair_rows_on_wire> {
+        repair_rows_on_wire rows_on_wire = co_await repair.invoke_on(dst_cpu_id, [&] (repair_service& local_repair) -> future<repair_rows_on_wire> {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_row_diff_with_rpc_stream_started);
             if (fp.get_owner_shard() == this_shard_id()) {
@@ -2640,16 +2996,88 @@ static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
                 co_return rows;
             }
         });
-        if (rows_on_wire.empty()) {
-            co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
-        } else {
-            for (repair_row_on_wire& row : rows_on_wire) {
-                auto cmd = repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)};
-                co_await sink(cmd);
-                co_await cmd.row.clear_gently();
-            }
-            co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
+        for (repair_row_on_wire& row : rows_on_wire) {
+            auto cmd = repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)};
+            co_await sink(cmd);
+            co_await cmd.row.clear_gently();
         }
+        co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
+        co_await sink.flush();
+        co_return;
+    } else {
+        throw std::runtime_error("Got unexpected repair_stream_cmd");
+    }
+}
+
+static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path_batched(
+        sharded<repair_service>& repair,
+        locator::host_id from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_row_on_wire_with_cmd_batch> sink,
+        rpc::source<repair_hash_with_cmd_batch> source,
+        bool &error,
+        repair_hash_set& current_set_diff,
+        std::optional<std::tuple<repair_hash_with_cmd_batch>> hash_cmd_opt);
+
+static future<> repair_get_row_diff_with_rpc_stream_process_op_batched(
+        sharded<repair_service>& repair,
+        locator::host_id from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_row_on_wire_with_cmd_batch> sink,
+        rpc::source<repair_hash_with_cmd_batch> source,
+        bool &error,
+        repair_hash_set& current_set_diff,
+        std::optional<std::tuple<repair_hash_with_cmd_batch>> hash_cmd_opt) {
+    repair_hash_with_cmd_batch hash_cmd = std::move(std::get<0>(hash_cmd_opt.value()));
+    rlogger.trace("Got repair_hash_with_cmd_batch from peer={}, nr_hashes={}, cmd={}", from, hash_cmd.hashes.size(), int(hash_cmd.cmd));
+    if (hash_cmd.cmd == repair_stream_cmd::hash_data_batch) {
+        for (uint64_t h : hash_cmd.hashes) {
+            current_set_diff.insert(repair_hash(h));
+        }
+        return make_ready_future<>();
+    } else {
+        return repair_get_row_diff_with_rpc_stream_process_op_slow_path_batched(repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, std::move(sink), std::move(source), error, current_set_diff, std::move(hash_cmd_opt));
+    }
+}
+
+static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path_batched(
+        sharded<repair_service>& repair,
+        locator::host_id from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_row_on_wire_with_cmd_batch> sink,
+        rpc::source<repair_hash_with_cmd_batch> source,
+        bool &error,
+        repair_hash_set& current_set_diff,
+        std::optional<std::tuple<repair_hash_with_cmd_batch>> hash_cmd_opt) {
+    repair_hash_with_cmd_batch hash_cmd = std::move(std::get<0>(hash_cmd_opt.value()));
+    if (hash_cmd.cmd == repair_stream_cmd::end_of_current_hash_set || hash_cmd.cmd == repair_stream_cmd::needs_all_rows) {
+        if (inject_rpc_stream_error) {
+            throw std::runtime_error("get_row_diff_with_rpc_stream: Inject error in handler loop");
+        }
+        bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
+        _metrics.rx_hashes_nr += current_set_diff.size();
+        auto fp = make_foreign(std::make_unique<repair_hash_set>(std::move(current_set_diff)));
+        repair_rows_on_wire rows_on_wire = co_await repair.invoke_on(dst_cpu_id, [&] (repair_service& local_repair) -> future<repair_rows_on_wire> {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
+            rm->set_repair_state_for_local_node(repair_state::get_row_diff_with_rpc_stream_started);
+            if (fp.get_owner_shard() == this_shard_id()) {
+                repair_rows_on_wire rows = co_await rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows));
+                rm->set_repair_state_for_local_node(repair_state::get_row_diff_with_rpc_stream_finished);
+                co_return rows;
+            } else {
+                repair_rows_on_wire rows = co_await rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows));
+                rm->set_repair_state_for_local_node(repair_state::get_row_diff_with_rpc_stream_finished);
+                co_return rows;
+            }
+        });
+        co_await send_rows_batched(sink, rows_on_wire);
+        co_await sink(repair_row_on_wire_with_cmd_batch{repair_stream_cmd::end_of_current_rows, {}});
         co_await sink.flush();
         co_return;
     } else {
@@ -2706,6 +3134,46 @@ static future<> repair_put_row_diff_with_rpc_stream_process_op(
     }
 }
 
+static future<> repair_put_row_diff_with_rpc_stream_process_op_batched(
+        sharded<repair_service>& repair,
+        locator::host_id from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_stream_cmd> sink,
+        rpc::source<repair_row_on_wire_with_cmd_batch> source,
+        bool& error,
+        repair_rows_on_wire& current_rows,
+        std::optional<std::tuple<repair_row_on_wire_with_cmd_batch>> row_opt) {
+    auto row = std::move(std::get<0>(row_opt.value()));
+    if (row.cmd == repair_stream_cmd::row_data_batch) {
+        rlogger.trace("Got repair_rows_on_wire from peer={}, got row_data_batch", from);
+        current_rows.splice(current_rows.end(), row.rows);
+        co_return;
+    } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
+        rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
+        auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(current_rows)));
+        co_await repair.invoke_on(dst_cpu_id, [from, repair_meta_id, fp = std::move(fp)] (repair_service& local_repair) mutable -> future<> {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
+            rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_started);
+            if (fp.get_owner_shard() == this_shard_id()) {
+                co_await rm->put_row_diff_handler(std::move(*fp));
+                rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
+            } else {
+                // Gently clone to avoid copy stall on destination shard
+                repair_rows_on_wire local_rows = co_await clone_gently(*fp);
+                co_await seastar::when_all_succeed(rm->put_row_diff_handler(std::move(local_rows)), utils::clear_gently(fp));
+                rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
+            }
+        });
+        co_await sink(repair_stream_cmd::put_rows_done);
+        co_await sink.flush();
+        co_return;
+    } else {
+        throw std::runtime_error("Got unexpected repair_stream_cmd");
+    }
+}
+
 static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process_op(
         sharded<repair_service>& repair,
         locator::host_id from,
@@ -2731,6 +3199,36 @@ static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process
             co_await sink(repair_hash_with_cmd{repair_stream_cmd::hash_data, hash});
         }
         co_await sink(repair_hash_with_cmd{repair_stream_cmd::end_of_current_hash_set, repair_hash()});
+        co_await sink.flush();
+        co_return stop_iteration::no;
+    } else {
+        throw std::runtime_error("Got unexpected repair_stream_cmd");
+    }
+}
+
+static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process_op_batched(
+        sharded<repair_service>& repair,
+        locator::host_id from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_hash_with_cmd_batch> sink,
+        rpc::source<repair_stream_cmd> source,
+        bool &error,
+        std::optional<std::tuple<repair_stream_cmd>> status_opt) {
+    repair_stream_cmd status = std::get<0>(status_opt.value());
+    rlogger.trace("Got register_repair_get_full_row_hashes_with_rpc_stream_batched from peer={}, status={}", from, int(status));
+    if (status == repair_stream_cmd::get_full_row_hashes) {
+        repair_hash_set hashes = co_await repair.invoke_on(dst_cpu_id, [from, repair_meta_id] (repair_service& local_repair) -> future<repair_hash_set> {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
+            rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_started);
+            repair_hash_set hashes = co_await rm->get_full_row_hashes_handler();
+            rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_finished);
+            _metrics.tx_hashes_nr += hashes.size();
+            co_return hashes;
+        });
+        co_await send_hashes_batched(sink, hashes);
+        co_await sink(repair_hash_with_cmd_batch{repair_stream_cmd::end_of_current_hash_set, {}});
         co_await sink.flush();
         co_return stop_iteration::no;
     } else {
@@ -2863,6 +3361,142 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
             }
             if (ep) {
                 co_await sink(repair_hash_with_cmd{repair_stream_cmd::error, repair_hash()});
+            }
+        }
+    } catch (...) {
+        outer_exception = std::current_exception();
+    }
+    co_await sink.close();
+    if (outer_exception) {
+        std::rethrow_exception(outer_exception);
+    }
+}
+
+static future<> repair_get_row_diff_with_rpc_stream_handler_batched(
+        sharded<repair_service>& repair,
+        locator::host_id from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_row_on_wire_with_cmd_batch> sink,
+        rpc::source<repair_hash_with_cmd_batch> source) {
+    bool error = false;
+    repair_hash_set current_set_diff = repair_hash_set();
+    std::exception_ptr outer_exception;
+    try {
+        while (std::optional<std::tuple<repair_hash_with_cmd_batch>> hash_cmd_opt = co_await source()) {
+            std::exception_ptr ep;
+            try {
+                if (error) {
+                    continue;
+                }
+                co_await repair_get_row_diff_with_rpc_stream_process_op_batched(repair, from,
+                        src_cpu_id,
+                        dst_cpu_id,
+                        repair_meta_id,
+                        sink,
+                        source,
+                        error,
+                        current_set_diff,
+                        std::move(hash_cmd_opt));
+            } catch (...) {
+                    ep = std::current_exception();
+                    rlogger.warn("repair_get_row_diff_with_rpc_stream_handler_batched: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
+                    error = true;
+            }
+            if (ep) {
+                co_await sink(repair_row_on_wire_with_cmd_batch{repair_stream_cmd::error, {}});
+            }
+        }
+    } catch (...) {
+        outer_exception = std::current_exception();
+    }
+    co_await sink.close();
+    if (outer_exception) {
+        std::rethrow_exception(outer_exception);
+    }
+}
+
+static future<> repair_put_row_diff_with_rpc_stream_handler_batched(
+        sharded<repair_service>& repair,
+        locator::host_id from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_stream_cmd> sink,
+        rpc::source<repair_row_on_wire_with_cmd_batch> source) {
+    std::exception_ptr outer_exception;
+    bool error = false;
+    repair_rows_on_wire current_rows = repair_rows_on_wire();
+    try {
+        while (std::optional<std::tuple<repair_row_on_wire_with_cmd_batch>> row_opt = co_await source()) {
+            std::exception_ptr ep;
+            try {
+                if (error) {
+                    continue;
+                }
+                co_await repair_put_row_diff_with_rpc_stream_process_op_batched(repair, from,
+                        src_cpu_id,
+                        dst_cpu_id,
+                        repair_meta_id,
+                        sink,
+                        source,
+                        error,
+                        current_rows,
+                        std::move(row_opt));
+            } catch (...) {
+                ep = std::current_exception();
+                rlogger.warn("repair_put_row_diff_with_rpc_stream_handler_batched: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
+                error = true;
+            }
+            if (ep) {
+                co_await sink(repair_stream_cmd::error);
+            }
+        }
+    } catch (...) {
+        outer_exception = std::current_exception();
+    }
+    co_await sink.close();
+    if (outer_exception) {
+        std::rethrow_exception(outer_exception);
+    }
+}
+
+static future<> repair_get_full_row_hashes_with_rpc_stream_handler_batched(
+        sharded<repair_service>& repair,
+        locator::host_id from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_hash_with_cmd_batch> sink,
+        rpc::source<repair_stream_cmd> source) {
+    bool error = false;
+    std::exception_ptr outer_exception;
+    try {
+        while (std::optional<std::tuple<repair_stream_cmd>> status_opt = co_await source()) {
+            std::exception_ptr ep;
+            try {
+                if (error) {
+                    continue;
+                }
+                auto stop = co_await repair_get_full_row_hashes_with_rpc_stream_process_op_batched(repair, from,
+                        src_cpu_id,
+                        dst_cpu_id,
+                        repair_meta_id,
+                        sink,
+                        source,
+                        error,
+                        std::move(status_opt));
+                if (stop) {
+                    break;
+                }
+            } catch (...) {
+                ep = std::current_exception();
+                rlogger.warn("repair_get_full_row_hashes_with_rpc_stream_handler_batched: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
+                error = true;
+            }
+            if (ep) {
+                co_await sink(repair_hash_with_cmd_batch{repair_stream_cmd::error, {}});
             }
         }
     } catch (...) {
@@ -3111,6 +3745,42 @@ future<> repair_service::init_ms_handlers() {
         });
         return make_ready_future<rpc::sink<repair_hash_with_cmd>>(sink);
     });
+    ms.register_repair_get_row_diff_with_rpc_stream_batched([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd_batch> source, rpc::optional<shard_id> dst_cpu_id_opt) {
+        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto sink = ms.make_sink_for_repair_get_row_diff_with_rpc_stream_batched(source);
+        // Start a new fiber.
+        auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
+        (void)repair_get_row_diff_with_rpc_stream_handler_batched(container(), from, src_cpu_id, shard, repair_meta_id, sink, source).handle_exception(
+                [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
+            rlogger.warn("Failed to process get_row_diff_with_rpc_stream_handler_batched from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
+        });
+        return make_ready_future<rpc::sink<repair_row_on_wire_with_cmd_batch>>(sink);
+    });
+    ms.register_repair_put_row_diff_with_rpc_stream_batched([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd_batch> source, rpc::optional<shard_id> dst_cpu_id_opt) {
+        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto sink = ms.make_sink_for_repair_put_row_diff_with_rpc_stream_batched(source);
+        // Start a new fiber.
+        auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
+        (void)repair_put_row_diff_with_rpc_stream_handler_batched(container(), from, src_cpu_id, shard, repair_meta_id, sink, source).handle_exception(
+                [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
+            rlogger.warn("Failed to process put_row_diff_with_rpc_stream_handler_batched from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
+        });
+        return make_ready_future<rpc::sink<repair_stream_cmd>>(sink);
+    });
+    ms.register_repair_get_full_row_hashes_with_rpc_stream_batched([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt) {
+        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto sink = ms.make_sink_for_repair_get_full_row_hashes_with_rpc_stream_batched(source);
+        // Start a new fiber.
+        auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
+        (void)repair_get_full_row_hashes_with_rpc_stream_handler_batched(container(), from, src_cpu_id, shard, repair_meta_id, sink, source).handle_exception(
+                [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
+            rlogger.warn("Failed to process get_full_row_hashes_with_rpc_stream_handler_batched from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
+        });
+        return make_ready_future<rpc::sink<repair_hash_with_cmd_batch>>(sink);
+    });
     ser::repair_rpc_verbs::register_repair_get_full_row_hashes(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
@@ -3142,15 +3812,16 @@ future<> repair_service::init_ms_handlers() {
         });
     });
     ser::repair_rpc_verbs::register_repair_get_sync_boundary(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
-            std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt) {
+            std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt,
+            rpc::optional<std::optional<uint64_t>> estimated_partitions) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        return container().invoke_on(shard, [from, repair_meta_id,
+        return container().invoke_on(shard, [from, repair_meta_id, estimated_partitions = estimated_partitions.value_or(std::nullopt),
                 skipped_sync_boundary = std::move(skipped_sync_boundary)] (repair_service& local_repair) mutable {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_sync_boundary_started);
-            return rm->get_sync_boundary_handler(std::move(skipped_sync_boundary)).then([rm] (get_sync_boundary_response resp) {
+            return rm->get_sync_boundary_handler(std::move(skipped_sync_boundary), estimated_partitions).then([rm] (get_sync_boundary_response resp) {
                 rm->set_repair_state_for_local_node(repair_state::get_sync_boundary_finished);
                 return resp;
             });
@@ -3306,6 +3977,9 @@ future<> repair_service::uninit_ms_handlers() {
         ms.unregister_repair_get_row_diff_with_rpc_stream(),
         ms.unregister_repair_put_row_diff_with_rpc_stream(),
         ms.unregister_repair_get_full_row_hashes_with_rpc_stream(),
+        ms.unregister_repair_get_row_diff_with_rpc_stream_batched(),
+        ms.unregister_repair_put_row_diff_with_rpc_stream_batched(),
+        ms.unregister_repair_get_full_row_hashes_with_rpc_stream_batched(),
         ser::repair_rpc_verbs::unregister(&ms)
         ).discard_result();
 }
@@ -3511,7 +4185,8 @@ private:
             // `_skipped_sync_boundary` if it is not std::nullopt.
             ns.state = repair_state::get_sync_boundary_started;
             try {
-                get_sync_boundary_response res = co_await master.get_sync_boundary(node, _skipped_sync_boundary, dst_cpu_id);
+                get_sync_boundary_response res = co_await master.get_sync_boundary(node, _skipped_sync_boundary, dst_cpu_id,
+                        master.use_start_with_estimate() && master.stats().round_nr == 1 ? std::make_optional(_estimated_partitions) : std::nullopt);
                 ns.state = repair_state::get_sync_boundary_finished;
                 master.stats().row_from_disk_bytes[node] += res.new_rows_size;
                 master.stats().row_from_disk_nr[node] += res.new_rows_nr;
@@ -3851,7 +4526,8 @@ public:
         return seastar::async([this] {
             _rstate.check_in_abort_or_shutdown();
             auto repair_meta_id = _rstate.rs.get_next_repair_meta_id().get();
-            auto algorithm = get_common_diff_detect_algorithm(_rstate.messaging.local(), _all_live_peer_nodes);
+            bool uses_tablets = _rstate.db.local().find_column_family(_table_id).uses_tablets();
+            auto algorithm = get_common_diff_detect_algorithm(_rstate.messaging.local(), _all_live_peer_nodes, uses_tablets);
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
             auto& cf = _rstate.db.local().find_column_family(_table_id);
             auto& sharder = cf.get_effective_replication_map()->get_sharder(*(cf.schema()));
@@ -3941,12 +4617,17 @@ public:
                 parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                     const auto& node = ns.node;
                     ns.state = repair_state::row_level_start_started;
-                    co_await master.repair_row_level_start(node, _rstate.get_keyspace(), _cf_name, _range, schema_version, _rstate.reason(), compaction_time, ns.shard);
+                    auto estimate = co_await master.repair_row_level_start(node, _rstate.get_keyspace(), _cf_name, _range, schema_version, _rstate.reason(), compaction_time, ns.shard);
                     ns.state = repair_state::row_level_start_finished;
                     nodes_to_stop.push_back(ns);
-                    ns.state = repair_state::get_estimated_partitions_started;
-                    uint64_t partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
-                    ns.state = repair_state::get_estimated_partitions_finished;
+                    uint64_t partitions;
+                    if (estimate) {
+                        partitions = *estimate;
+                    } else {
+                        ns.state = repair_state::get_estimated_partitions_started;
+                        partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
+                        ns.state = repair_state::get_estimated_partitions_finished;
+                    }
                     rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
                     _estimated_partitions += partitions;
                 })).get();
@@ -3972,13 +4653,16 @@ public:
                     _estimated_partitions *= _rstate.rs.get_config().repair_partition_count_estimation_ratio();
                 }
 
-                parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
-                    const auto& node = ns.node;
-                    rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
-                    ns.state = repair_state::set_estimated_partitions_started;
-                    co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
-                    ns.state = repair_state::set_estimated_partitions_finished;
-                })).get();
+                // Otherwise the estimate goes out with the first-round get_sync_boundary.
+                if (!master.use_start_with_estimate()) {
+                    parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
+                        const auto& node = ns.node;
+                        rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
+                        ns.state = repair_state::set_estimated_partitions_started;
+                        co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
+                        ns.state = repair_state::set_estimated_partitions_finished;
+                    })).get();
+                }
 
                 while (true) {
                     auto status = negotiate_sync_boundary(master);

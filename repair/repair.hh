@@ -175,6 +175,7 @@ enum class repair_row_level_start_status: uint8_t {
 
 struct repair_row_level_start_response {
     repair_row_level_start_status status;
+    std::optional<uint64_t> estimated_partitions;
 };
 
 // Return value of the REPAIR_GET_SYNC_BOUNDARY RPC verb
@@ -245,6 +246,8 @@ enum class repair_stream_cmd : uint8_t {
     end_of_current_rows,
     get_full_row_hashes,
     put_rows_done,
+    hash_data_batch,
+    row_data_batch,
 };
 
 struct repair_hash_with_cmd {
@@ -257,9 +260,20 @@ struct repair_row_on_wire_with_cmd {
     repair_row_on_wire row;
 };
 
+struct repair_hash_with_cmd_batch {
+    repair_stream_cmd cmd;
+    std::vector<uint64_t> hashes;
+};
+
+struct repair_row_on_wire_with_cmd_batch {
+    repair_stream_cmd cmd;
+    std::list<repair_row_on_wire> rows;
+};
+
 enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set,
     send_full_set_rpc_stream,
+    send_full_set_rpc_stream_batched,
 };
 
 std::string_view format_as(row_level_diff_detect_algorithm);
