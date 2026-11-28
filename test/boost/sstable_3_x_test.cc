@@ -5079,6 +5079,62 @@ SEASTAR_TEST_CASE(test_sstable_reader_on_unknown_column) {
  });
 }
 
+// An sstable column which is static, while the current schema's column of the
+// same name is regular - or vice versa - and which wasn't dropped, can't be
+// read. Check that the error says so, rather than that the column is missing.
+SEASTAR_TEST_CASE(test_sstable_reader_on_column_of_other_kind) {
+ return test_env::do_with_async([] (test_env& env) {
+    api::timestamp_type write_timestamp = 1525385507816568;
+    // A schema with the column s of the given kind. If s is the clustering
+    // key, the regular column is named ck instead.
+    auto make_schema = [] (column_kind s_kind) {
+        auto builder = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key);
+        if (s_kind == column_kind::clustering_key) {
+            builder.with_column("s", int32_type, column_kind::clustering_key)
+                   .with_column("ck", int32_type);
+        } else {
+            builder.with_column("ck", int32_type, column_kind::clustering_key)
+                   .with_column("s", int32_type, s_kind);
+        }
+        return builder.build();
+    };
+    auto kind_name = [] (column_kind kind) {
+        return kind == column_kind::static_column ? "static" : "regular";
+    };
+  for (auto [write_kind, read_kind] : std::initializer_list<std::pair<column_kind, column_kind>>{
+          {column_kind::static_column, column_kind::regular_column},
+          {column_kind::regular_column, column_kind::static_column},
+          {column_kind::static_column, column_kind::clustering_key},
+          {column_kind::regular_column, column_kind::clustering_key}}) {
+    schema_ptr write_schema = make_schema(write_kind);
+    schema_ptr read_schema = make_schema(read_kind);
+    auto pk = partition_key::from_single_value(*write_schema, int32_type->decompose(int32_t(0)));
+    auto ck = clustering_key::from_single_value(*write_schema, int32_type->decompose(int32_t(1)));
+    mutation m(write_schema, pk);
+    if (write_kind == column_kind::static_column) {
+        m.set_static_cell("s", data_value{1}, write_timestamp);
+    } else {
+        m.set_cell(ck, "s", data_value{1}, write_timestamp);
+    }
+    auto mt = make_memtable(write_schema, {m}).get();
+    const auto expected = read_kind == column_kind::clustering_key
+            ? std::string("Column s is part of the primary key in the current schema but not in the sstable")
+            : fmt::format("Column s is {} in the sstable but {} in the current schema",
+                    kind_name(write_kind), kind_name(read_kind));
+    for (auto version : test_sstable_versions) {
+        auto _ = env.tempdir().make_sweeper();
+        auto sst = make_sstable_easy(env, mt, env.manager().configure_writer(), version);
+        BOOST_REQUIRE_EXCEPTION(
+            with_closeable(sst->make_reader(read_schema, env.make_reader_permit(), query::full_partition_range, read_schema->full_slice()),
+                    [] (mutation_reader& reader) { return read_mutation_from_mutation_reader(reader); }).get(),
+            sstables::malformed_sstable_exception,
+            exception_predicate::message_contains(expected));
+    }
+  }
+ });
+}
+
 namespace {
 // A large_data_handler with configurable thresholds for testing.
 // After refactoring, the handler only does threshold comparison + logging;
