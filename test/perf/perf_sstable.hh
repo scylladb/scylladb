@@ -21,6 +21,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/random_utils.hh"
+#include "test/perf/perf.hh"
 #include <boost/accumulators/framework/accumulator_set.hpp>
 #include <boost/accumulators/framework/features.hpp>
 #include <boost/accumulators/statistics/mean.hpp>
@@ -85,6 +86,32 @@ public:
     }
 };
 
+// Result of one run of a mode that also measures the work it does per unit processed.
+struct counted_run {
+    double units_per_sec = 0;
+    uint64_t units = 0;
+    perf_sample sample;
+
+    counted_run& operator+=(const counted_run& o) {
+        units_per_sec += o.units_per_sec;
+        units += o.units;
+        sample += o.sample;
+        return *this;
+    }
+};
+
+// How the input sstables of compaction mode share their data.
+enum class compaction_input_layout {
+    // Every sstable holds the same partitions with the same rows and cells.
+    identical,
+    // Every sstable holds its own partitions. Partition keys are dealt out to the
+    // sstables round-robin; since tokens are hashes, the sstables' partitions interleave.
+    interleaved_partitions,
+    // Every sstable holds all partitions, but each holds its own rows. Clustering
+    // keys are dealt out to the sstables in order, so the sstables' rows interleave.
+    interleaved_rows,
+};
+
 class perf_sstable_test_env {
     test_env _env;
 
@@ -99,6 +126,10 @@ public:
         sstring dir;
         compaction::compaction_strategy_type compaction_strategy;
         api::timestamp_type timestamp_range;
+        unsigned rows_per_partition;
+        compaction_input_layout compaction_layout;
+        // Memory a memtable may use while generating compaction input before it is flushed.
+        size_t memtable_size;
     };
 
 private:
@@ -128,10 +159,191 @@ private:
     std::uniform_int_distribution<char> _distribution;
     lw_shared_ptr<replica::memtable> _mt;
     std::vector<shared_sstable> _sst;
+    // Input of compaction mode, built once and compacted by every run.
+    std::vector<shared_sstable> _compaction_input;
+
+    bool has_clustering_key() const {
+        return _cfg.rows_per_partition > 1 || _cfg.compaction_layout == compaction_input_layout::interleaved_rows;
+    }
+
+    unsigned partitions_per_sstable() const {
+        return _cfg.partitions / _cfg.sstables;
+    }
+
+    // Builds a partition with rows_per_partition rows, whose clustering keys are
+    // first_row, first_row + row_stride, first_row + 2 * row_stride, ...
+    mutation make_partition(const dht::decorated_key& dk, int32_t first_row, int32_t row_stride) {
+        auto mut = mutation(s, dk);
+        for (unsigned row = 0; row < _cfg.rows_per_partition; ++row) {
+            auto ckey = has_clustering_key()
+                    ? clustering_key::from_single_value(*s, int32_type->decompose(int32_t(first_row + row * row_stride)))
+                    : clustering_key::make_empty();
+            for (auto& cdef: s->regular_columns()) {
+                // Drawn from _generator, like the values, so reseeding it reproduces the partition.
+                const auto ts = _cfg.timestamp_range
+                        ? std::uniform_int_distribution<api::timestamp_type>(-_cfg.timestamp_range, _cfg.timestamp_range)(_generator)
+                        : 0;
+                mut.set_clustered_cell(ckey, cdef, atomic_cell::make_live(*utf8_type, ts, utf8_type->decompose(random_column())));
+            }
+        }
+        return mut;
+    }
+
+    // Partition key number `index`. Keys are generated on demand rather than kept
+    // around, so that their memory doesn't limit the data set size; the memtable
+    // sorts them. A key is unique by construction, as it ends with its index; the
+    // rest of it is pseudo-random filler.
+    dht::decorated_key make_partition_key(uint64_t index) const {
+        static constexpr char first_char = '@', last_char = '~';
+        auto index_digits = fmt::format("{:x}", index);
+        if (index_digits.size() > _cfg.key_size) {
+            throw std::runtime_error(fmt::format("key_size {} is too small for {} partitions", _cfg.key_size, _cfg.partitions));
+        }
+        auto key = uninitialized_string<bytes>(_cfg.key_size);
+        auto filler_size = _cfg.key_size - index_digits.size();
+        uint64_t state = index;
+        uint64_t random_bits = 0;
+        for (size_t i = 0; i < filler_size; ++i) {
+            if (i % 8 == 0) {
+                // splitmix64
+                uint64_t z = (state += 0x9e3779b97f4a7c15);
+                z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
+                z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
+                random_bits = z ^ (z >> 31);
+            }
+            key[i] = first_char + (random_bits & 0xff) % (last_char - first_char + 1);
+            random_bits >>= 8;
+        }
+        std::ranges::copy(index_digits, key.begin() + filler_size);
+        return dht::decorate_key(*s, partition_key::from_single_value(*s, std::move(key)));
+    }
+
+    // Calls func(n, key) for the first `count` partition keys owned by this shard,
+    // with n counting them from 0. Must be called in a seastar thread.
+    template <typename Func>
+    void for_each_local_partition_key(uint64_t count, Func func) const {
+        for (uint64_t index = 0, n = 0; n < count; ++index) {
+            auto dk = make_partition_key(index);
+            if (dht::static_shard_of(*s, dk.token()) == this_shard_id()) {
+                func(n++, std::move(dk));
+                thread::maybe_yield();
+            }
+        }
+    }
+
+    shared_sstable make_new_sstable() {
+        return _env.make_sstable(s, dir(), _env.new_generation(), sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
+    }
+
+    // Compacts `input` into new sstables, which it returns. Only `input` is read:
+    // the table the compaction runs for holds no sstables, and the input is left
+    // in place. Must be called in a seastar thread.
+    compaction::compaction_result compact(sstables::test_env& env, std::vector<shared_sstable> input, bool garbage_collection, perf_sample* sample = nullptr) {
+        cache_tracker tracker;
+        cell_locker_stats cl_stats;
+        tasks::task_manager tm;
+        auto cm = make_lw_shared<compaction::compaction_manager>(tm, compaction::compaction_manager::for_testing_tag{});
+        auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), *cm, nullptr, env.manager(), cl_stats, tracker, nullptr);
+        // A table's compaction groups must be stopped before they are destroyed.
+        auto stop_cf = deferred_stop(*cf);
+
+        auto descriptor = compaction::compaction_descriptor(std::move(input));
+        if (garbage_collection) {
+            descriptor.enable_garbage_collection(cf->get_sstable_set());
+        }
+        descriptor.creator = [this] (unsigned dummy) {
+            return make_new_sstable();
+        };
+        descriptor.replacer = sstables::replacer_fn_no_op();
+        descriptor.gc_state = cf->try_get_compaction_group_view_with_static_sharding().get_tombstone_gc_state();
+        auto cdata = compaction::compaction_manager::create_compaction_data();
+        compaction::compaction_progress_monitor progress_monitor;
+        auto do_compact = [&] {
+            return compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
+        };
+        if (!sample) {
+            return do_compact();
+        }
+        perf_sampler sampler;
+        compaction::compaction_result ret;
+        *sample = sampler.measure([&] {
+            ret = do_compact();
+        });
+        return ret;
+    }
+
+    // Calls func(mutation) for each partition of compaction input sstable number sstable_index.
+    // Must be called in a seastar thread.
+    template <typename Func>
+    void for_each_compaction_input_partition(unsigned sstable_index, Func func) {
+        const auto sstables = _cfg.sstables;
+        switch (_cfg.compaction_layout) {
+        case compaction_input_layout::identical:
+            for_each_local_partition_key(partitions_per_sstable(), [&] (uint64_t, dht::decorated_key dk) {
+                func(make_partition(dk, 0, 1));
+            });
+            break;
+        case compaction_input_layout::interleaved_partitions:
+            for_each_local_partition_key(uint64_t(partitions_per_sstable()) * sstables, [&] (uint64_t n, dht::decorated_key dk) {
+                if (n % sstables == sstable_index) {
+                    func(make_partition(dk, 0, 1));
+                }
+            });
+            break;
+        case compaction_input_layout::interleaved_rows:
+            for_each_local_partition_key(partitions_per_sstable(), [&] (uint64_t, dht::decorated_key dk) {
+                func(make_partition(dk, sstable_index, sstables));
+            });
+            break;
+        }
+    }
+
+    // Builds compaction input sstable number sstable_index the way the database
+    // builds its sstables: the data is applied to a memtable, which is flushed
+    // whenever it reaches memtable_size, and the flushed sstables are compacted
+    // into one, with garbage collection disabled. Returns more than one sstable
+    // only if the compaction strategy splits its output (time window).
+    // Must be called in a seastar thread.
+    std::vector<shared_sstable> build_compaction_input(sstables::test_env& env, unsigned sstable_index) {
+        // The identical layout needs identical values and timestamps in every sstable,
+        // the others need different ones. Seeds start at 1, since a linear congruential
+        // engine treats 0 like 1.
+        _generator.seed(_cfg.compaction_layout == compaction_input_layout::identical ? 1 : sstable_index + 1);
+
+        std::vector<shared_sstable> flushed;
+        auto mt = make_lw_shared<replica::memtable>(s);
+        auto flush = [&] {
+            auto sst = make_new_sstable();
+            write_memtable_to_sstable(*mt, sst).get();
+            sst->open_data().get();
+            flushed.push_back(std::move(sst));
+            mt = make_lw_shared<replica::memtable>(s);
+        };
+        for_each_compaction_input_partition(sstable_index, [&] (mutation m) {
+            mt->apply(m);
+            if (mt->occupancy().total_space() >= _cfg.memtable_size) {
+                flush();
+            }
+        });
+        if (mt->partition_count()) {
+            flush();
+        }
+        if (flushed.size() <= 1) {
+            return flushed;
+        }
+        auto ret = compact(env, flushed, false);
+        for (auto& sst : flushed) {
+            sst->mark_for_deletion();
+        }
+        return std::move(ret.new_sstables);
+    }
 
     schema_ptr create_schema(compaction::compaction_strategy_type type) {
         schema_builder builder(this_smp_shard_count(), "ks", "perf-test", generate_legacy_id("ks", "perf-test"));
         builder.with_column("name", utf8_type, column_kind::partition_key);
+        if (has_clustering_key()) {
+            builder.with_column("ck", int32_type, column_kind::clustering_key);
+        }
         for (unsigned i = 0; i < _cfg.num_columns; ++i) {
             builder.with_column(to_bytes(format("column{:04d}", i)), utf8_type);
         }
@@ -200,24 +412,34 @@ public:
            , s(create_schema(cfg.compaction_strategy))
            , _distribution('@', '~')
            , _mt(make_lw_shared<replica::memtable>(s))
-    {}
+    {
+        if (!_cfg.memtable_size) {
+            _cfg.memtable_size = memory::stats().total_memory() / 4;
+        }
+    }
 
     future<> stop() {
         _sst.clear();
+        _compaction_input.clear();
         return _env.stop();
     }
 
     future<> fill_memtable() {
-        auto idx = std::views::iota(0, int(_cfg.partitions / _cfg.sstables));
-        auto local_keys = tests::generate_partition_keys(int(_cfg.partitions / _cfg.sstables), s, local_shard_only::yes, tests::key_size{_cfg.key_size, _cfg.key_size});
-        return do_for_each(idx.begin(), idx.end(), [this, local_keys = std::move(local_keys)] (auto iteration) {
-            auto mut = mutation(this->s, local_keys.at(iteration));
-            for (auto& cdef: this->s->regular_columns()) {
-                const auto ts = _cfg.timestamp_range ? tests::random::get_int<api::timestamp_type>(-_cfg.timestamp_range, _cfg.timestamp_range) : 0;
-                mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(*utf8_type, ts, utf8_type->decompose(this->random_column())));
+        return seastar::async([this] {
+            for_each_local_partition_key(partitions_per_sstable(), [this] (uint64_t, dht::decorated_key dk) {
+                _mt->apply(make_partition(dk, 0, 1));
+            });
+        });
+    }
+
+    // Every layout gives each input sstable partitions_per_sstable() partitions
+    // with rows_per_partition rows each, so they all compact the same amount of input.
+    future<> prepare_compaction_input() {
+        co_await test_setup::create_empty_test_dir(dir());
+        co_await sstables::test_env::do_with_async([this] (sstables::test_env& env) {
+            for (unsigned i = 0; i < _cfg.sstables; ++i) {
+                std::ranges::move(build_compaction_input(env, i), std::back_inserter(_compaction_input));
             }
-            this->_mt->apply(std::move(mut));
-            return make_ready_future<>();
         });
     }
 
@@ -255,54 +477,32 @@ public:
         });
     }
 
-    future<double> compaction(int idx) {
-        return test_setup::create_empty_test_dir(dir()).then([this] {
-            return sstables::test_env::do_with_async_returning<double>([this] (sstables::test_env& env) {
-                auto sst_gen = [this] () mutable {
-                    return _env.make_sstable(s, dir(), _env.new_generation(), sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
-                };
+    future<counted_run> compaction(int idx) {
+        return sstables::test_env::do_with_async_returning<counted_run>([this] (sstables::test_env& env) {
+            perf_sample sample;
+            auto ret = compact(env, _compaction_input, true, &sample);
+            // The input is reused by the next run, the output is not.
+            for (auto& sst : ret.new_sstables) {
+                sst->mark_for_deletion();
+            }
 
-                std::vector<shared_sstable> ssts;
-                for (auto i = 0u; i < _cfg.sstables; i++) {
-                    auto sst = sst_gen();
-                    write_memtable_to_sstable(*_mt, sst).get();
-                    sst->open_data().get();
-                    _mt->revert_flushed_memory();
-                    ssts.push_back(std::move(sst));
-                }
-
-                cache_tracker tracker;
-                cell_locker_stats cl_stats;
-                tasks::task_manager tm;
-                auto cm = make_lw_shared<compaction::compaction_manager>(tm, compaction::compaction_manager::for_testing_tag{});
-                auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), *cm, nullptr, env.manager(), cl_stats, tracker, nullptr);
-
-                auto start = perf_sstable_test_env::now();
-
-                auto descriptor = compaction::compaction_descriptor(std::move(ssts));
-                descriptor.enable_garbage_collection(cf->get_sstable_set());
-                descriptor.creator = [sst_gen = std::move(sst_gen)] (unsigned dummy) mutable {
-                    return sst_gen();
-                };
-                descriptor.replacer = sstables::replacer_fn_no_op();
-                descriptor.gc_state = cf->try_get_compaction_group_view_with_static_sharding().get_tombstone_gc_state();
-                auto cdata = compaction::compaction_manager::create_compaction_data();
-                compaction::compaction_progress_monitor progress_monitor;
-                auto ret = compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
-                auto end = perf_sstable_test_env::now();
-
-                auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
-                if (_cfg.compaction_strategy != compaction::compaction_strategy_type::time_window) {
-                    SCYLLA_ASSERT(ret.new_sstables.size() == 1);
-                }
-                auto total_keys_written = std::accumulate(ret.new_sstables.begin(), ret.new_sstables.end(), uint64_t(0), [] (uint64_t n, const sstables::shared_sstable& sst) {
-                    return n + sst->get_estimated_key_count();
-                });
-                SCYLLA_ASSERT(total_keys_written >= partitions_per_sstable);
-
-                auto duration = std::chrono::duration<double>(end - start).count();
-                return total_keys_written / duration;
+            auto partitions_per_sstable = this->partitions_per_sstable();
+            if (_cfg.compaction_strategy != compaction::compaction_strategy_type::time_window) {
+                SCYLLA_ASSERT(ret.new_sstables.size() == 1);
+            }
+            auto total_keys_written = std::accumulate(ret.new_sstables.begin(), ret.new_sstables.end(), uint64_t(0), [] (uint64_t n, const sstables::shared_sstable& sst) {
+                return n + sst->get_estimated_key_count();
             });
+            SCYLLA_ASSERT(total_keys_written >= partitions_per_sstable);
+
+            // The output size depends on how much the input overlaps, so report
+            // input rows, which are the same for all layouts.
+            uint64_t input_rows = uint64_t(partitions_per_sstable) * _cfg.rows_per_partition * _cfg.sstables;
+            return counted_run{
+                .units_per_sec = input_rows / sample.time.count(),
+                .units = input_rows,
+                .sample = sample,
+            };
         });
     }
 
@@ -353,23 +553,38 @@ public:
     }
 };
 
-// The function func should carry on with the test, and return the number of partitions processed.
-// time_runs will then map reduce it, and return the aggregate partitions / sec for the whole system.
+// The function func should carry on with the test, and return the number of units (partitions by default) processed
+// per second, or a counted_run. time_runs will then map reduce it, and return the aggregate units / sec for the whole
+// system. For a counted_run, it also reports the instructions and allocations per unit.
 template <typename Func>
-future<> time_runs(unsigned iterations, unsigned parallelism, sharded<perf_sstable_test_env>& dt, Func func) {
+future<> time_runs(unsigned iterations, unsigned parallelism, sharded<perf_sstable_test_env>& dt, Func func, std::string_view unit = "partitions", std::string_view unit_singular = "partition") {
     using namespace boost::accumulators;
+    using result_type = typename std::invoke_result_t<Func, perf_sstable_test_env&, int>::value_type;
+    constexpr bool counted = std::is_same_v<result_type, counted_run>;
     auto acc = make_lw_shared<accumulator_set<double, features<tag::mean, tag::error_of<tag::mean>>>>();
+    auto total = make_lw_shared<counted_run>();
     auto idx = std::views::iota(0, int(iterations));
-    return do_for_each(idx.begin(), idx.end(), [parallelism, acc, &dt, func] (auto iter) {
+    return do_for_each(idx.begin(), idx.end(), [parallelism, acc, total, &dt, func] (auto iter) {
         auto idx = std::views::iota(0, int(parallelism));
-        return parallel_for_each(idx.begin(), idx.end(), [&dt, func, acc] (auto idx) {
-            return dt.map_reduce(adder<double>(), func, std::move(idx)).then([acc] (double result) {
+        return parallel_for_each(idx.begin(), idx.end(), [&dt, func, acc, total] (auto idx) {
+            return dt.map_reduce(adder<result_type>(), func, std::move(idx)).then([acc, total] (result_type result) {
                 auto& a = *acc;
-                a(result);
+                if constexpr (counted) {
+                    a(result.units_per_sec);
+                    *total += result;
+                } else {
+                    a(result);
+                }
                 return make_ready_future<>();
             });
         });
-    }).then([acc, iterations, parallelism] {
-        std::cout << format("{:.2f}", mean(*acc)) << " +- " << format("{:.2f}", error_of<tag::mean>(*acc)) << " partitions / sec (" << iterations << " runs, " << parallelism << " concurrent ops)\n";
+    }).then([=] {
+        std::cout << format("{:.2f}", mean(*acc)) << " +- " << format("{:.2f}", error_of<tag::mean>(*acc)) << " " << unit << " / sec (";
+        if constexpr (counted) {
+            std::cout << format("{:.0f} insns/{}, {:.1f} allocs/{}, ",
+                    double(total->sample.instructions) / total->units, unit_singular,
+                    double(total->sample.allocations) / total->units, unit_singular);
+        }
+        std::cout << iterations << " runs, " << parallelism << " concurrent ops)\n";
     });
 }
