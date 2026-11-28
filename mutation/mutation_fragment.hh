@@ -435,6 +435,11 @@ public:
         return _data->_memory.resources().memory;
     }
 
+    // Stops charging this fragment to its permit; memory_usage() is 0 until it is mutated.
+    void release_memory() noexcept {
+        _data->_memory.reset_to_zero();
+    }
+
     reader_permit permit() const {
         return _data->_memory.permit();
     }

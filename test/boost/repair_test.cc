@@ -8,6 +8,10 @@
 
 #include "replica/memtable.hh"
 #include "readers/from_fragments.hh"
+#include "mutation/collection_mutation.hh"
+#include "mutation/counters.hh"
+#include "schema/schema_builder.hh"
+#include "types/map.hh"
 #include "repair/hash.hh"
 #include "repair/row.hh"
 #include "repair/writer.hh"
@@ -15,12 +19,14 @@
 #include "repair/row_level.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
 #include "service/storage_proxy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <boost/lexical_cast.hpp>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/short_streams.hh>
 #include "test/lib/sstable_utils.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
@@ -340,16 +346,125 @@ SEASTAR_TEST_CASE(repair_rows_size_considers_external_memory) {
 
         // Test that frozen mutation fragment memory is counted.
         repair_row row{frozen_mf, std::nullopt, nullptr, std::nullopt, is_dirty_on_master::no, nullptr};
-        BOOST_REQUIRE_EQUAL(row.size(), fmf_size + sizeof(repair_row));
+        BOOST_REQUIRE_EQUAL(row.size(), fmf_size + repair_row::overhead);
 
         // Test that mutation fragment memory is counted.
         repair_row row_with_mf{frozen_mf, std::nullopt, nullptr, std::nullopt, is_dirty_on_master::no, mf};
-        BOOST_REQUIRE_EQUAL(row_with_mf.size(), fmf_size + mf->memory_usage() + sizeof(repair_row));
+        BOOST_REQUIRE_EQUAL(row_with_mf.size(), fmf_size + mf->memory_usage() + repair_row::overhead);
 
         // Test that boundary memory is counted.
         repair_row row_with_boundary{frozen_mf, pos, dk_ptr, std::nullopt, is_dirty_on_master::no, nullptr};
-        BOOST_REQUIRE_EQUAL(row_with_boundary.size(), fmf_size + dk_ptr->dk.external_memory_usage() + pos.external_memory_usage() + sizeof(repair_row));
+        BOOST_REQUIRE_EQUAL(row_with_boundary.size(), fmf_size + dk_ptr->dk.external_memory_usage() + pos.external_memory_usage() + repair_row::overhead);
     });
+}
+
+// Fixed sizes of rows read from disk: they set round boundaries, which peers
+// of different versions must agree on.
+SEASTAR_THREAD_TEST_CASE(repair_row_size_from_disk_is_stable) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    reader_permit permit = semaphore.make_permit();
+    simple_schema ss;
+    schema_ptr s = ss.schema();
+    const uint64_t seed = 42;
+    using cases_t = std::vector<std::pair<mutation_fragment, size_t>>;
+    auto check = [&] (const schema_ptr& s, const dht::decorated_key& pk, cases_t& cases) {
+        repair_hasher hasher(seed, s);
+        auto dk = make_lw_shared<const decorated_key_with_hash>(*s, pk, seed);
+        for (auto& [mf, expected] : cases) {
+            auto row = make_repair_row_from_disk(dk, hasher, *s, mutation_fragment(*s, permit, mf));
+            BOOST_CHECK_EQUAL(row.size(), expected);
+            // Frozen on demand: same bytes as freezing the fragment, same size as before freezing.
+            row.freeze_for_send(*s);
+            BOOST_CHECK_EQUAL(row.size(), expected);
+            BOOST_CHECK(row.get_frozen_mutation().representation() == freeze(*s, mf).representation());
+            // Frozen at read time, as node operations do: same size, same bytes.
+            auto eager = make_repair_row_from_disk(dk, hasher, *s, mutation_fragment(*s, permit, mf), true);
+            BOOST_CHECK_EQUAL(eager.size(), expected);
+            BOOST_CHECK(eager.get_frozen_mutation().representation() == row.get_frozen_mutation().representation());
+        }
+    };
+
+    cases_t cases;
+    cases.emplace_back(mutation_fragment(*s, permit, partition_start(ss.make_pkey(0), ss.new_tombstone())), 140);
+    cases.emplace_back(ss.make_static_row(permit, "static"), 150);
+    cases.emplace_back(ss.make_row(permit, ss.make_ckey(0), "value"), 225);
+    cases.emplace_back(ss.make_row(permit, ss.make_ckey(sstring(100, 'k')), sstring(1000, 'v')), 1418);
+    cases.emplace_back(mutation_fragment(*s, permit, ss.make_range_tombstone(ss.make_ckey_range(1, 3))), 166);
+    check(s, ss.make_pkey(0), cases);
+
+    // Cells simple_schema lacks: TTL, collection, counter, and a value over 128 KiB (fragmented).
+    auto s2 = schema_builder(this_smp_shard_count(), "ks", "cf2")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", bytes_type)
+            .with_column("m", map_type_impl::get_instance(int32_type, utf8_type, true))
+            .build();
+    auto cs = schema_builder(this_smp_shard_count(), "ks", "cnt")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("c", counter_type)
+            .build();
+    auto pkey = [] (const schema& s) { return dht::decorate_key(s, partition_key::from_single_value(s, int32_type->decompose(0))); };
+    auto row_with = [&] (const schema_ptr& sp, int ck, const char* col, atomic_cell_or_collection cell) {
+        clustering_row cr(clustering_key::from_single_value(*sp, int32_type->decompose(ck)));
+        cr.cells().apply(*sp->get_column_definition(col), std::move(cell));
+        return mutation_fragment(*sp, permit, std::move(cr));
+    };
+    const auto expiry = gc_clock::time_point(gc_clock::duration(1'000'000));
+    collection_mutation_writer w(tombstone(1, expiry));
+    auto k1 = int32_type->decompose(1);
+    auto k2 = int32_type->decompose(2);
+    w.push_back(bytes_view(k1), atomic_cell::make_live(*utf8_type, 2, utf8_type->decompose(sstring("a")), atomic_cell::collection_member::yes));
+    w.push_back(bytes_view(k2), atomic_cell::make_dead(2, expiry));
+    counter_cell_builder cb;
+    cb.add_shard(counter_shard(counter_id(utils::UUID(1, 1)), 5, 1));
+    cb.add_shard(counter_shard(counter_id(utils::UUID(1, 2)), -4, 1));
+
+    cases_t cases2;
+    cases2.emplace_back(row_with(s2, 1, "v", atomic_cell::make_live(*bytes_type, 1, to_bytes("ttl"), expiry, std::chrono::seconds(3600))), 231);
+    cases2.emplace_back(row_with(s2, 2, "m", std::move(w).finish()), 293);
+    cases2.emplace_back(row_with(s2, 3, "v", atomic_cell::make_live(*bytes_type, 1, bytes(200 * 1024, int8_t('v')))), 205012);
+    check(s2, pkey(*s2), cases2);
+    cases_t cases3;
+    cases3.emplace_back(row_with(cs, 1, "c", cb.build(1)), 284);
+    check(cs, pkey(*cs), cases3);
+}
+
+SEASTAR_THREAD_TEST_CASE(repair_row_freezes_on_demand) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    reader_permit permit = semaphore.make_permit();
+    simple_schema ss;
+    schema_ptr s = ss.schema();
+    repair_hasher hasher(0, s);
+    auto dk = make_lw_shared<const decorated_key_with_hash>(*s, ss.make_pkey(0), 0);
+    auto ck = ss.make_ckey(0);
+    position_in_partition::equal_compare eq(*s);
+
+    // Row read from disk: held off the permit and frozen once.
+    auto mf = ss.make_row(permit, ck, "value");
+    auto expected = freeze(*s, mf);
+    const auto consumed = permit.consumed_resources().memory;
+    auto row = make_repair_row_from_disk(dk, hasher, *s, mutation_fragment(*s, permit, mf));
+    BOOST_REQUIRE_EQUAL(permit.consumed_resources().memory, consumed);
+    BOOST_REQUIRE(eq(row.position(), position_in_partition::for_key(ck)));
+    row.freeze_for_send(*s);
+    BOOST_REQUIRE(!row.get_mutation_fragment_ptr());
+    BOOST_REQUIRE(eq(row.position(), position_in_partition::for_key(ck)));
+    BOOST_REQUIRE(row.get_frozen_mutation().representation() == expected.representation());
+    // As copy_rows_from_working_row_buf*(): the next peer's copy reuses the frozen form.
+    auto fm_data = (*row.get_frozen_mutation().representation().begin()).data();
+    repair_row copy = row;
+    row.freeze_for_send(*s);
+    BOOST_REQUIRE((*row.get_frozen_mutation().representation().begin()).data() == fm_data);
+    BOOST_REQUIRE(copy.get_frozen_mutation().representation() == expected.representation());
+
+    // Row from a peer, built like to_repair_rows_list(): freeze_for_send() leaves it untouched.
+    auto kept = make_lw_shared<mutation_fragment>(expected.unfreeze(*s, permit));
+    repair_row dirty{freeze(*s, *kept), position_in_partition(kept->position()), dk, repair_hash(), is_dirty_on_master::yes, kept};
+    fm_data = (*dirty.get_frozen_mutation().representation().begin()).data();
+    dirty.freeze_for_send(*s);
+    BOOST_REQUIRE(dirty.get_mutation_fragment_ptr() == kept);
+    BOOST_REQUIRE((*dirty.get_frozen_mutation().representation().begin()).data() == fm_data);
 }
 
 SEASTAR_TEST_CASE(test_tablet_token_range_count) {
