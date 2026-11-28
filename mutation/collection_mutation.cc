@@ -189,8 +189,41 @@ collection_mutation_compact_and_expire_result compact_and_expire(
         tomb = tombstone();
     }
     t.apply(base_tomb.regular());
+    std::optional<collection_mutation_writer> losers;
+    if (collector) {
+        losers.emplace(purged_tomb);
+    }
+    auto finish = [&] (std::optional<collection_mutation> collection) -> collection_mutation_compact_and_expire_result {
+        if (collector) {
+            collector->collect(id, std::move(*losers).finish());
+        }
+        return {std::move(collection), std::move(res)};
+    };
+
+    // Most collections are either entirely newer or entirely older than the
+    // tombstones covering them; the timestamp range spots these without a rebuild.
+    const auto cover_ts = std::max(t.timestamp, base_tomb.shadowable().tomb().timestamp);
+    auto min_ts = api::max_timestamp;
+    auto max_ts = api::missing_timestamp; // so an empty collection takes the drop-all path
+    uint32_t cells = 0;
+    bool all_live = true;
+    for (auto& [key, cell] : cmv) {
+        min_ts = std::min(min_ts, cell.timestamp());
+        max_ts = std::max(max_ts, cell.timestamp());
+        all_live = all_live && cell.is_live() && !cell.has_expired(query_time);
+        ++cells;
+    }
+    if (max_ts <= cover_ts) {
+        res.dead_cells += cells;
+        return finish(collection_mutation_writer(tomb).finish());
+    }
+    // A collection tombstone dropped or purged above still needs a rebuild.
+    if (min_ts > cover_ts && all_live && tomb == cmv.tomb()) {
+        res.live_cells += cells;
+        return finish(std::nullopt);
+    }
+
     collection_mutation_writer survivors(tomb);
-    collection_mutation_writer losers(purged_tomb);
     for (auto& [key, cell] : cmv) {
         auto cannot_erase_cell = [&] {
             // Only row tombstones can be shadowable, (collection) cell tombstones aren't
@@ -204,27 +237,24 @@ collection_mutation_compact_and_expire_result compact_and_expire(
         if (cell.has_expired(query_time)) {
             auto dead = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
             if (cannot_erase_cell()) {
-                survivors.push_back(std::move(key), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
-            } else if (collector) {
-                losers.push_back(std::move(key), std::move(dead));
+                survivors.push_back(key, std::move(dead));
+            } else if (losers) {
+                losers->push_back(key, std::move(dead));
             }
             res.dead_cells++;
         } else if (!cell.is_live()) {
             if (cannot_erase_cell()) {
-                survivors.push_back(std::move(key), atomic_cell(type, cell));
-            } else if (collector) {
-                losers.push_back(key, atomic_cell(type, cell));
+                survivors.push_back(key, cell);
+            } else if (losers) {
+                losers->push_back(key, cell);
             }
             res.dead_cells++;
         } else {
-            survivors.push_back(key, atomic_cell(type, cell));
+            survivors.push_back(key, cell);
             res.live_cells++;
         }
     }
-    if (collector) {
-        collector->collect(id, std::move(losers).finish());
-    }
-    return {std::move(survivors).finish(), std::move(res)};
+    return finish(std::move(survivors).finish());
 }
 
 /// A CollectionMutationAdaptor is a static interface that adapts a collection

@@ -242,6 +242,20 @@ private:
         return SSTableCompaction == compact_for_sstables::yes;
     }
 
+    // Purged data is only collected when someone consumes it.
+    template <typename GCConsumer>
+    static constexpr bool collect_garbage() {
+        return sstable_compaction() && !std::is_same_v<GCConsumer, noop_compacted_fragments_consumer>;
+    }
+
+    template <typename GCConsumer>
+    compaction_garbage_collector* collector() const {
+        if constexpr (collect_garbage<GCConsumer>()) {
+            return _collector.get();
+        }
+        return nullptr;
+    }
+
     template <typename GCConsumer>
     void partition_is_not_empty_for_gc_consumer(GCConsumer& gc_consumer) {
         if (_empty_partition_in_gc_consumer) {
@@ -450,27 +464,32 @@ public:
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(static_row&& sr, Consumer& consumer, GCConsumer& gc_consumer) {
         _validator(mutation_fragment_v2::kind::static_row, sr.position(), {});
-        _last_static_row = static_row(_schema, sr);
+        if constexpr (!sstable_compaction()) {
+            // Only paging (start_new_page(), detach_state()) needs it.
+            _last_static_row = static_row(_schema, sr);
+        }
         _last_pos = position_in_partition(position_in_partition::static_row_tag_t());
         auto current_tombstone = _partition_tombstone;
-        if constexpr (sstable_compaction()) {
+        if constexpr (collect_garbage<GCConsumer>()) {
             _collector->start_collecting_static_row();
         }
         auto can_gc = make_can_gc_fn();
         auto gc_before = get_gc_before();
         auto res = sr.cells().compact_and_expire(_schema, column_kind::static_column, row_tombstone(current_tombstone),
-                _query_time, can_gc, gc_before, _collector.get());
+                _query_time, can_gc, gc_before, collector<GCConsumer>());
         _stats.static_rows.add_row(res);
         const auto is_live = res.is_live();
         if (is_live) {
             partition_is_live();
         }
         if constexpr (sstable_compaction()) {
-            _collector->consume_static_row([this, &gc_consumer, current_tombstone] (static_row&& sr_garbage) {
-                partition_is_not_empty_for_gc_consumer(gc_consumer);
-                // We are passing only dead (purged) data so pass is_live=false.
-                gc_consumer.consume(std::move(sr_garbage), current_tombstone, false);
-            });
+            if constexpr (collect_garbage<GCConsumer>()) {
+                _collector->consume_static_row([this, &gc_consumer, current_tombstone] (static_row&& sr_garbage) {
+                    partition_is_not_empty_for_gc_consumer(gc_consumer);
+                    // We are passing only dead (purged) data so pass is_live=false.
+                    gc_consumer.consume(std::move(sr_garbage), current_tombstone, false);
+                });
+            }
         } else {
             if (can_purge_tombstone(current_tombstone)) {
                 current_tombstone = {};
@@ -495,7 +514,7 @@ public:
         auto t = cr.tomb();
         t.apply(current_tombstone);
 
-        if constexpr (sstable_compaction()) {
+        if constexpr (collect_garbage<GCConsumer>()) {
             _collector->start_collecting_clustering_row(cr.key());
         }
 
@@ -504,7 +523,7 @@ public:
             if (rt.tomb() <= current_tombstone) {
                 cr.remove_tombstone();
             } else if (can_purge_tombstone(rt)) {
-                if constexpr (sstable_compaction()) {
+                if constexpr (collect_garbage<GCConsumer>()) {
                     _collector->collect(rt);
                 }
                 cr.remove_tombstone();
@@ -512,9 +531,9 @@ public:
         }
         auto can_gc = make_can_gc_fn();
         auto gc_before = get_gc_before();
-        const bool marker_is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, can_gc, gc_before, _collector.get());
+        const bool marker_is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, can_gc, gc_before, collector<GCConsumer>());
         const auto res = cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, can_gc, gc_before, cr.marker(),
-                _collector.get());
+                collector<GCConsumer>());
         _stats.clustering_rows.add_row(res, marker_is_live);
         const auto is_live = res.is_live() || marker_is_live;
 
@@ -523,11 +542,13 @@ public:
         }
 
         if constexpr (sstable_compaction()) {
-            _collector->consume_clustering_row([this, &gc_consumer, t] (clustering_row&& cr_garbage) {
-                partition_is_not_empty_for_gc_consumer(gc_consumer);
-                // We are passing only dead (purged) data so pass is_live=false.
-                gc_consumer.consume(std::move(cr_garbage), t, false);
-            });
+            if constexpr (collect_garbage<GCConsumer>()) {
+                _collector->consume_clustering_row([this, &gc_consumer, t] (clustering_row&& cr_garbage) {
+                    partition_is_not_empty_for_gc_consumer(gc_consumer);
+                    // We are passing only dead (purged) data so pass is_live=false.
+                    gc_consumer.consume(std::move(cr_garbage), t, false);
+                });
+            }
         } else {
             if (can_purge_tombstone(t)) {
                 t = {};
@@ -647,6 +668,7 @@ public:
             gc_clock::time_point query_time,
             partition_region next_fragment_region,
             Consumer& consumer) {
+        static_assert(!sstable_compaction(), "Paging is not supported for sstable compaction.");
         _empty_partition = true;
         _partition_is_live = false;
         _static_row_live = false;
@@ -704,6 +726,7 @@ public:
     /// If the currently compacted partition is exhausted a disengaged optional
     /// is returned -- in this case there is no state to detach.
     std::optional<detached_compaction_state> detach_state() && {
+        static_assert(!sstable_compaction(), "Paging is not supported for sstable compaction.");
         // If we exhausted the partition, there is no need to detach-restore the
         // compaction state.
         // We exhausted the partition if `consume_partition_end()` was called
