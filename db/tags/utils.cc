@@ -8,6 +8,9 @@
 
 #include "db/tags/utils.hh"
 
+#include <chrono>
+#include <string_view>
+
 #include "db/tags/extension.hh"
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
@@ -15,6 +18,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 
 static logging::logger tlogger("tags");
 
@@ -43,7 +47,14 @@ future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
                      std::function<void(std::map<sstring, sstring>&)> modify, abort_source& as) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     size_t retries = mm.get_concurrent_ddl_retries();
+    static constexpr std::string_view before_lock_injection = "modify_tags_before_lock";
+    static constexpr std::string_view after_apply_injection = "modify_tags_after_apply";
+    auto& injector = utils::get_local_injector();
     for (;;) {
+        const auto enter_table = injector.inject_parameter<std::string_view>(before_lock_injection, "table");
+        if (enter_table && *enter_table == cf) {
+            injector.enter(before_lock_injection);
+        }
         auto group0_guard = co_await mm.start_group0_operation(std::nullopt, &as);
         // After getting the schema-modification lock, we need to read the
         // table's *current* schema - it might have changed before we got
@@ -58,6 +69,10 @@ future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
             tags = *tags_ptr;
         }
         modify(tags);
+        const auto pause_table = injector.inject_parameter<std::string_view>(after_apply_injection, "table");
+        if (pause_table && *pause_table == cf) {
+            co_await injector.inject(after_apply_injection, utils::wait_for_message(std::chrono::minutes{5}));
+        }
         schema_builder builder(s);
         builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags));
 
