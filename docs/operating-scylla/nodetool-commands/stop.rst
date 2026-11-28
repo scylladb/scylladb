@@ -32,7 +32,10 @@ Supported compaction types:
    * - ``RESHAPE``
      - Reshape compactions
    * - ``SPLIT``
-     - Tablet split compactions
+     - Tablet split compactions. ScyllaDB restarts a stopped split compaction
+       while the table still needs to be split. To prevent that, disable tablet
+       splits and merges first, see
+       :doc:`Disabling Tablet Background Operations </operating-scylla/procedures/maintenance/tablet-background-operations>`.
    * - ``REWRITE_COMPONENT``
      - SSTable component rewrites
 

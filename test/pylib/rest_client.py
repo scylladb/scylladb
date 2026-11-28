@@ -340,6 +340,15 @@ class ScyllaRESTAPIClient:
             params["grace_period_in_seconds"] = str(grace_period_in_seconds)
         await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params=params)
 
+    async def enable_tablet_resize(self, node_ip: str) -> None:
+        await self.client.post(f"/storage_service/tablets/resize", host=node_ip, params={"enabled": "true"})
+
+    async def disable_tablet_resize(self, node_ip: str) -> None:
+        await self.client.post(f"/storage_service/tablets/resize", host=node_ip, params={"enabled": "false"})
+
+    async def get_tablet_resize_enabled(self, node_ip: str) -> bool:
+        return await self.client.get_json(f"/storage_service/tablets/resize", host=node_ip)
+
     async def create_vnode_tablet_migration(self, node_ip: str, ks: str) -> None:
         """Start vnodes-to-tablets migration for all tables in a keyspace"""
         await self.client.post(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}", host=node_ip)

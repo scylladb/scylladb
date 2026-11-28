@@ -7148,6 +7148,87 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_resize_disabling) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        topo.add_node(node_state::normal, 2);
+        topo.start_new_rack();
+        topo.add_node(node_state::normal, 2);
+
+        const size_t initial_tablets = 2;
+        auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, initial_tablets);
+        auto table1 = add_table(e, ks_name).get();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto tablet_count = [&] {
+            return stm.get()->tablets().get_tablet_map(table1).tablet_count();
+        };
+
+        auto resize_decision = [&] {
+            return stm.get()->tablets().get_tablet_map(table1).resize_decision();
+        };
+
+        auto set_resize_enabled = [&] (bool enabled) {
+            // Reloading tablet metadata takes the setting from the topology state.
+            e.get_topology_state_machine().local()._topology.tablet_resize_enabled = enabled;
+            stm.mutate_token_metadata([&] (token_metadata& tm) {
+                tm.tablets().set_resize_enabled(enabled);
+                return make_ready_future<>();
+            }).get();
+        };
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_default_tablet_sizes(stm.get());
+        auto do_rebalance_tablets = [&] () {
+            rebalance_tablets(e, &load_stats, {}, nullptr, false); // no auto-split
+        };
+
+        const uint64_t max_tablet_size = service::default_target_tablet_size * 2;
+        const uint64_t split_size = max_tablet_size * 1.1 * initial_tablets;
+
+        load_stats.set_split_ready_seq_number(table1, std::numeric_limits<locator::resize_decision::seq_number_t>::min());
+        load_stats.set_size(table1, split_size);
+
+        // No decision is made while resize is disabled.
+        {
+            set_resize_enabled(false);
+
+            do_rebalance_tablets();
+            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
+            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
+        }
+
+        {
+            set_resize_enabled(true);
+
+            do_rebalance_tablets();
+            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
+            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::split>(resize_decision().way));
+        }
+
+        // A pending split is not finalized while resize is disabled, even though the replicas are split ready.
+        {
+            load_stats.set_split_ready_seq_number(table1, resize_decision().sequence_number);
+            set_resize_enabled(false);
+
+            do_rebalance_tablets();
+            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
+            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::split>(resize_decision().way));
+        }
+
+        // The split completes once resize is enabled.
+        {
+            set_resize_enabled(true);
+
+            do_rebalance_tablets();
+            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets * 2);
+            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
+        }
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_drain_node_without_capacity) {
     do_with_cql_env_thread([] (auto& e) {
         scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);

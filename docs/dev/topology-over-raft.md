@@ -1042,6 +1042,7 @@ CREATE TABLE system.topology (
     enabled_features set<text> static,
     session uuid static,
     tablet_balancing_enabled boolean static,
+    tablet_resize_enabled boolean static,
     upgrade_state text static,
     new_cdc_generation_data_uuid timeuuid static,
     new_keyspace_rf_change_ks_name text static,
@@ -1094,6 +1095,9 @@ There are also a few static columns for cluster-global properties:
 - `enabled_features` - the list of cluster features enabled by the cluster
 - `session` - if set contains the ID of the current session
 - `tablet_balancing_enabled` - if false, the tablet balancing has been disabled
+- `tablet_resize_enabled` - if false, tablet splits and merges have been disabled: the load balancer
+  makes no resize decisions. The pending ones are revoked in the same group0 command which disables
+  resize.
 
 # Join procedure
 
