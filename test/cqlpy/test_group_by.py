@@ -116,8 +116,11 @@ def test_group_by_clustering_prefix_with_limit(cql, table1):
         assert results[:i] == list(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p,c1 LIMIT {i}'))
 
 # Same as the above test, but also add paging, and check that the LIMIT
-# is handled correctly (limits the total number of returned results)
-@pytest.mark.xfail(reason="issue #5362")
+# is handled correctly (limits the total number of returned results), and
+# that the first page has page_size groups.
+# Reproduces SCYLLADB-5393: Scylla ignores the page size of a GROUP BY
+# query, and returns all the groups in the first page.
+@pytest.mark.xfail(reason="SCYLLADB-5393")
 def test_group_by_clustering_prefix_with_limit_and_paging(cql, table1):
     results = list(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p,c1'))
     assert len(results) == 4
