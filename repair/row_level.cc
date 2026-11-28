@@ -1423,6 +1423,13 @@ private:
             co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(10min));
             rlogger.debug("Disabling compaction for range={} for incremental repair", _range);
             reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
+            co_await utils::get_local_injector().inject("incremental_repair_prepare_wait_after_lock", utils::wait_for_message(5min));
+            // on_cleanup_for_drop_table() may have run while we waited for the locks, and
+            // end_repair does not run for a dropped table, so nothing would release a lock
+            // stored now. The table is removed from the database before that cleanup runs.
+            if (!_db.local().column_family_exists(tid)) {
+                throw replica::no_such_column_family(tid);
+            }
             for (auto& lock_holder : reenablers_and_holders->lock_holders) {
                 _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
             }
