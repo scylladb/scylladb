@@ -6,5 +6,23 @@
 trap 'echo "error $? in $0 line $LINENO"' ERR
 
 here=$(dirname "$0")
-exec "$here/../tools/cqlsh/bin/cqlsh.py" "$@"
+
+# The binary comes from either of two places: the package build downloads it
+# into tools/cqlsh-rs-pkg/bin, and a developer working on cqlsh-rs itself
+# builds it from the submodule with cargo.  Prefer a cargo build, so local
+# changes win over the packaged release.
+for candidate in "$here/../tools/cqlsh-rs/target/release/cqlsh-rs" \
+                 "$here/../tools/cqlsh-rs-pkg/bin/cqlsh-rs"; do
+    if [ -x "$candidate" ]; then
+        exec "$candidate" "$@"
+    fi
+done
+
+cat >&2 <<'MSG'
+cqlsh-rs binary not found.  Get it either by building the package:
+    ninja dist-cqlsh-tar
+or, when working on cqlsh-rs itself, from the submodule:
+    cd tools/cqlsh-rs && cargo build --release
+MSG
+exit 1
 

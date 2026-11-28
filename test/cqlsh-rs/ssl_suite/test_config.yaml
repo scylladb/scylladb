@@ -1,0 +1,12 @@
+extra_scylla_config_options:
+  authenticator: AllowAllAuthenticator
+  authorizer: AllowAllAuthorizer
+  # Serve both ports: the tests connect over TLS on 9142, while the framework
+  # and anything else asking for --port keeps using 9042.  ScyllaServer copies
+  # these certificates into the server's conf/ directory.
+  client_encryption_options:
+    enabled: true
+    certificate: conf/scylla.crt
+    keyfile: conf/scylla.key
+  native_transport_port: 9042
+  native_transport_port_ssl: 9142
