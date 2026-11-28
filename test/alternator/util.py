@@ -276,6 +276,22 @@ def scylla_inject_error(rest_api, err, one_shot=False, parameters={}):
         print("Disabling error injection", err)
         requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
 
+# Waits until the given error injection was entered `count` times. The enter
+# count is bumped before the injected code runs, so for a one-shot injection
+# whose code pauses until it gets a message, once the count reaches 1 the
+# fiber which reached it is paused there. Note that the count includes
+# entries whose code decided not to pause (e.g., because of a parameter that
+# didn't match), and a one-shot injection is disabled by its first entry.
+def wait_for_injection_enter(rest_api, err, timeout=60, count=1):
+    deadline = time.monotonic() + timeout
+    while requests.get(f'{rest_api}/v2/error_injection/injection/{err}/enters').json() < count:
+        assert time.monotonic() < deadline, f'timed out waiting for injection {err}'
+        time.sleep(0.01)
+
+# Sends a message to a fiber paused on the given error injection, resuming it.
+def message_injection(rest_api, err):
+    requests.post(f'{rest_api}/v2/error_injection/injection/{err}/message')
+
 # Send a message to the Scylla log. E.g., we can write a message to the log
 # indicating that a test has started, which will make it easier to see which
 # test caused which errors in the log.

@@ -246,7 +246,7 @@ static bool is_expired(const big_decimal& expiration_time, gc_clock::time_point 
     // the same.
     return is_expired(gc_clock::time_point(gc_clock::duration(std::chrono::seconds(t))), now);
 }
-static bool is_expired(const rjson::value& expiration_time, gc_clock::time_point now) {
+bool is_expired(const rjson::value& expiration_time, gc_clock::time_point now) {
     std::optional<big_decimal> n = try_unwrap_number(expiration_time);
     return n && is_expired(*n, now);
 }
@@ -534,6 +534,9 @@ struct scan_ranges_context {
     std::unique_ptr<service::query_state> query_state_ptr;
     std::unique_ptr<cql3::query_options> query_options;
     ::lw_shared_ptr<query::read_command> command;
+    // The limit on the number of rows of the scan's next page, see
+    // next_expiration_page_rows(). 0 before the first page.
+    uint32_t page_rows = 0;
 
     scan_ranges_context(schema_ptr s, service::storage_proxy& proxy, bytes column_name, std::optional<std::string> member)
         : s(s)
@@ -568,13 +571,59 @@ struct scan_ranges_context {
     }
 };
 
+// An expired item is deleted with a tombstone timestamped when the scan read
+// the item, not when the deletion is made, so that a write to the item made
+// after the read survives the deletion. But the tombstone's timestamp is also
+// that of the deletion's CDC log entry (e.g., the REMOVE event of Alternator
+// Streams), and an Alternator Streams reader, which reads the entries older
+// than alternator_streams_time_window_s (10 seconds by default), can miss an
+// entry added with an older timestamp than that. With vnodes, CDC also
+// rejects a write older than its generation leeway (5 seconds) during a
+// change of CDC generation. So the tombstone is never older than this before
+// the time it's made, which must stay well below both.
+static constexpr std::chrono::seconds max_expiration_tombstone_age{1};
+
+// So a write to an item made after the scan read it is lost only if the
+// deletion of the item is made more than max_expiration_tombstone_age after
+// the read. A page has no limit on its number of rows besides its limit in
+// bytes, so it can have thousands of rows, and when most of them have
+// expired, deleting them one by one takes many seconds. So the number of rows
+// in a page is limited, to have its read and deletions take about
+// target_expiration_page_time, according to the time per row of the previous
+// page. The first page of a table's scan has min_expiration_page_rows rows,
+// and the limit at most doubles from one page to the next, so after pages
+// with no expired items, which take no time, the next page isn't much bigger
+// than them in case its items have expired. This estimate is good when the
+// share of expired items changes slowly from page to page, as it usually
+// does since items are spread over the pages by the hash of their partition
+// key. When it changes suddenly (e.g., between partitions with many rows
+// ordered by their expiration time), or when writes suddenly become much
+// slower, a page can take longer, and a write to one of its last items made
+// after the read can still be lost.
+static constexpr std::chrono::milliseconds target_expiration_page_time{250};
+static constexpr uint32_t min_expiration_page_rows = 100;
+
+// Returns the limit on the number of rows of the scan's next page, given the
+// limit on the previous page, the number of rows it had, and the time it took
+// to read them and delete the expired ones among them.
+static uint32_t next_expiration_page_rows(uint32_t limit, size_t rows, std::chrono::steady_clock::duration time) {
+    if (rows == 0) {
+        return limit;
+    }
+    uint64_t next = uint64_t(limit) * 2;
+    if (time.count() > 0) {
+        next = std::min<uint64_t>(next, rows * target_expiration_page_time / time);
+    }
+    return std::clamp<uint64_t>(next, min_expiration_page_rows, std::numeric_limits<uint32_t>::max());
+}
+
 // Scan data in a list of token ranges in one table, looking for expired
 // items and deleting them.
 // Because of issue #9167, partition_ranges must have a single partition
 // range for this code to work correctly.
 static future<> scan_table_ranges(
         service::storage_proxy& proxy,
-        const scan_ranges_context& scan_ctx,
+        scan_ranges_context& scan_ctx,
         dht::partition_range_vector&& partition_ranges,
         abort_source& abort_source,
         named_semaphore& page_sem,
@@ -589,16 +638,24 @@ static future<> scan_table_ranges(
             co_return;
         }
         auto units = co_await get_units(page_sem, 1);
-        // We don't need to limit page size in number of rows because there is
-        // a builtin limit of the page's size in bytes. Setting this limit to
-        // 1 is useful for debugging the paging code with moderate-size data.
-        uint32_t limit = std::numeric_limits<uint32_t>::max();
+        // Besides this limit on the number of rows (see
+        // next_expiration_page_rows()), there is a builtin limit of the
+        // page's size in bytes. Setting this limit to 1 is useful for
+        // debugging the paging code with moderate-size data.
+        const uint32_t limit = std::max(scan_ctx.page_rows, min_expiration_page_rows);
         // Read a page, and if that times out, try again after a small sleep.
         // If we didn't catch the timeout exception, it would cause the scan
         // be aborted and only be restarted at the next scanning period.
         // If we retry too many times, give up and restart the scan later.
         std::unique_ptr<cql3::result_set> rs;
+        // The time of the read, for the tombstones of the expired items
+        // found in the page (see max_expiration_tombstone_age). It is taken
+        // before the read, so a write which the read didn't see is newer.
+        api::timestamp_type page_read_ts;
+        std::chrono::steady_clock::time_point page_read_time;
         for (int retries=0; ; retries++) {
+            page_read_ts = api::new_timestamp();
+            page_read_time = std::chrono::steady_clock::now();
             try {
                 // FIXME: which timeout?
                 rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
@@ -692,7 +749,13 @@ static future<> scan_table_ranges(
             }
             if (expired) {
                 expiration_stats.items_deleted++;
-                // FIXME: maybe don't recalculate new_timestamp() all the time
+                // The tombstone is timestamped when the page was read, but
+                // not older than max_expiration_tombstone_age (see above).
+                // The timestamp is taken before the following injection
+                // point, so a test which pauses there can write the item
+                // while its deletion, with an older timestamp, is pending.
+                const api::timestamp_type ts = std::max(page_read_ts,
+                        api::new_timestamp() - std::chrono::duration_cast<std::chrono::microseconds>(max_expiration_tombstone_age).count());
                 // FIXME: if expire_item() throws on timeout, we need to retry it.
                 co_await utils::get_local_injector().inject("alternator_ttl_before_expire_item", [&s] (auto& handler) -> future<> {
                     if (s->cf_name() != handler.get("cf_name")) {
@@ -700,10 +763,10 @@ static future<> scan_table_ranges(
                     }
                     co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
                 });
-                auto ts = api::new_timestamp();
                 co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts);
             }
         }
+        scan_ctx.page_rows = next_expiration_page_rows(limit, rows.size(), std::chrono::steady_clock::now() - page_read_time);
         // FIXME: once in a while, persist p->state(), so on reboot
         // we don't start from scratch.
     }

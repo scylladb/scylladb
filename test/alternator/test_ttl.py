@@ -14,7 +14,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from test.pylib.skip_types import skip_bug, skip_env
-from .util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform, multiset, scylla_config_read
+from .util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform, multiset, scylla_config_read, scylla_inject_error, wait_for_injection_enter, message_injection
 
 # The following fixture is to ensure that Alternator TTL is being tested with both vnodes and tablets.
 # This fixture will run automatically for every test in the module.
@@ -805,6 +805,102 @@ def test_ttl_expiration_long(dynamodb, waits_for_expiration):
                 break
             time.sleep(max_duration/100.0)
         assert count == 99*N
+
+# The following tests check what happens when an item is written while the
+# expiration service is deleting it: after the service read the item and
+# found it expired, but before it deleted the item. The error injection
+# alternator_ttl_before_expire_item pauses the service exactly there.
+ttl_injection = 'alternator_ttl_before_expire_item'
+
+# A table with TTL enabled on the attribute "expiration", for one test.
+# The tests use the sort key c (see expire_during() below).
+@contextmanager
+def new_ttl_table(dynamodb):
+    with new_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                   {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                              {'AttributeName': 'c', 'AttributeType': 'N'}]) as table:
+        table.meta.client.update_time_to_live(TableName=table.name,
+            TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+        yield table
+
+# Writes the given expired item, which must have c=1, to the table, and calls
+# write() while the expiration service is about to delete it, and returns
+# when the service has deleted it. To know when that happened, it also writes
+# an expired item with c=2 in the same partition, which the service deletes
+# after the first item, because it deletes the expired items of a partition
+# one by one, in order.
+def expire_during(rest_api, table, item, write):
+    assert item['c'] == 1
+    with scylla_inject_error(rest_api, ttl_injection, one_shot=True, parameters={'cf_name': table.name}):
+        table.put_item(Item=item)
+        wait_for_injection_enter(rest_api, ttl_injection)
+        write()
+        table.put_item(Item={'p': item['p'], 'c': 2, 'expiration': int(time.time()) - 60})
+        message_injection(rest_api, ttl_injection)
+    deadline = time.time() + 60
+    while 'Item' in table.get_item(Key={'p': item['p'], 'c': 2}, ConsistentRead=True):
+        assert time.time() < deadline, 'the expiration service did not delete the items'
+        time.sleep(0.1)
+
+# A PutItem which replaces an expired item while the expiration service is
+# deleting it must not be lost: DynamoDB never deletes an item which isn't
+# expired, and the new item isn't. The deletion must not delete the new item,
+# because it was written after the service read the old one.
+# Reproduces SCYLLADB-6726.
+def test_ttl_put_item_during_expiration(dynamodb, rest_api, waits_for_expiration):
+    with new_ttl_table(dynamodb) as table:
+        key = {'p': random_string(), 'c': 1}
+        new_item = {**key, 'expiration': int(time.time()) + 3600, 'y': 'new'}
+        expire_during(rest_api, table, {**key, 'expiration': int(time.time()) - 60, 'x': 'old'},
+                      lambda: table.put_item(Item=new_item))
+        # Check that the new item survived the deletion of the old one.
+        assert table.get_item(Key=key, ConsistentRead=True).get('Item') == new_item
+
+# DynamoDB documents that an expired item which wasn't deleted yet can be
+# updated, and if its expiration time is moved to the future, it is no
+# longer deleted. If such an update happens while the expiration service is
+# deleting the item, the item must not be lost either. The item's older
+# attributes may be deleted, as if the deletion came first and the update
+# then created the item again, but not the new expiration time.
+# Reproduces SCYLLADB-6726.
+def test_ttl_extend_expiration_during_expiration(dynamodb, rest_api, waits_for_expiration):
+    with new_ttl_table(dynamodb) as table:
+        key = {'p': random_string(), 'c': 1}
+        new_expiration = int(time.time()) + 3600
+        expire_during(rest_api, table, {**key, 'expiration': int(time.time()) - 60, 'x': 'old'},
+                      lambda: table.update_item(Key=key,
+                          AttributeUpdates={'expiration': {'Value': new_expiration, 'Action': 'PUT'}}))
+        item = table.get_item(Key=key, ConsistentRead=True).get('Item')
+        # Check that the item survived, with its new expiration time.
+        assert item is not None
+        assert item['expiration'] == new_expiration
+
+# An UpdateItem which deletes some elements of a set is a read-modify-write:
+# it reads the item, and writes the remaining elements. If it does this while
+# the expiration service is deleting the item, its write survives the
+# deletion. It must not leave behind an item without its expiration time,
+# which would never expire. This is the failure seen in CI, of the dtest
+# test_ttl_with_load_and_decommission: an item survived every scan with
+# 14 of its 20 set elements, and no expiration time.
+# Reproduces SCYLLADB-6726.
+def test_ttl_update_set_during_expiration(dynamodb, rest_api, waits_for_expiration):
+    with new_ttl_table(dynamodb) as table:
+        key = {'p': random_string(), 'c': 1}
+        expire_during(rest_api, table, {**key, 'expiration': int(time.time()) - 60, 's': {f'e{i}' for i in range(20)}},
+                      lambda: table.update_item(Key=key,
+                          AttributeUpdates={'s': {'Action': 'DELETE', 'Value': {f'e{i}' for i in range(6)}}}))
+        item = table.get_item(Key=key, ConsistentRead=True).get('Item')
+        # Check that what's left of the item, if anything, still has its
+        # expiration time.
+        assert item is None or 'expiration' in item
+        # Check that the next scan deletes whatever was left of the item.
+        deadline = time.time() + 60
+        while 'Item' in table.get_item(Key=key, ConsistentRead=True):
+            assert time.time() < deadline, 'the item was not deleted'
+            time.sleep(0.1)
 
 # Alternator uses a tag "system:ttl_attribute" to store the TTL attribute
 # chosen by UpdateTimeToLive. However, this tag is not supposed to be
