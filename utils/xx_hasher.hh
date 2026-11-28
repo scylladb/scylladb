@@ -60,8 +60,9 @@ private:
 // which is cheaper when fields are fed a few bytes at a time.
 class buffered_xx_hasher {
 public:
-    static constexpr size_t buffer_size = 4096;
+    static constexpr size_t buffer_size = 512;
     static constexpr size_t bypass_size = 256;
+    static_assert(bypass_size <= buffer_size);
 
 private:
     xx_hasher _h;
