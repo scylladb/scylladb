@@ -18,6 +18,7 @@
 
 #include "sstables/checksum_utils.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/hyperloglog.hh"
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "sstables/open_info.hh"
@@ -1343,6 +1344,36 @@ static future<> test_component_digest_validation(component_type component, sstab
 
 SEASTAR_TEST_CASE(test_digest_validation_statistics) {
     return test_component_digest_validation(component_type::Statistics, sstable::version_types::me, "Statistics digest mismatch");
+}
+
+// A Statistics rewrite re-reads the cardinality sketch from disk; it must not launder a corrupt file.
+// Reading the sketch alone only reads the Compaction section, so corruption elsewhere doesn't affect it.
+SEASTAR_TEST_CASE(test_statistics_rewrite_validates_digest) {
+    return test_env::do_with_async([] (test_env& env) {
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        auto sst = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
+        auto dir_path = std::filesystem::path(fmt::to_string(sst->toc_filename())).parent_path().string();
+        const auto sketch = sst->read_cardinality_estimator().get();
+        BOOST_REQUIRE(sketch);
+
+        // Flips the last byte, which is in the Serialization header, not the Compaction section.
+        slightly_corrupt_sstable(sst, component_type::Statistics);
+
+        const auto corrupt_sketch = sst->read_cardinality_estimator().get();
+        BOOST_REQUIRE(corrupt_sketch);
+        BOOST_REQUIRE_EQUAL(corrupt_sketch->estimate(), sketch->estimate());
+        BOOST_REQUIRE_EXCEPTION(mutate_sstable_level(env, sst, dir_path, 10).get(), malformed_sstable_exception,
+            exception_predicate::message_contains("Statistics digest mismatch"));
+    });
 }
 
 SEASTAR_TEST_CASE(test_digest_validation_filter) {

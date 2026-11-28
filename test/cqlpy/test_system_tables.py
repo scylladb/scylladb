@@ -89,10 +89,8 @@ def test_partitions_estimate_simple_large(cql, test_keyspace):
 # if the partition estimate, it should *not* return double the accurate count
 # just because it naively sums up the estimates for the different sstables.
 # Rather it should use the cardinality estimator to estimate the overlap.
-# Currently both Cassandra and Scylla fail this test. They are simply not
-# meant to provide accurate partition-count estimates when faced with high
-# space amplification.
-@pytest.mark.xfail(reason="partition count estimator does not use cardinality estimator")
+# Cassandra fails this test.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
     N = 500
     with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
@@ -115,6 +113,42 @@ def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
             print(counts)
             print(count)
             assert count > N/1.5 and count < N*1.5
+
+# Partial overlap: 500 keys in the first sstable, 250 of them plus 250 new keys
+# in the second. There are 750 distinct partitions; the plain sum is 1000.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_partitions_estimate_partial_overlap(cassandra_bug, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+        with nodetool.no_autocompaction_context(cql, table):
+            write = cql.prepare(f"INSERT INTO {table} (k) VALUES (?)")
+            for i in range(500):
+                cql.execute(write, [i])
+            nodetool.flush(cql, table)
+            for i in range(250, 750):
+                cql.execute(write, [i])
+            nodetool.flush(cql, table)
+            nodetool.refreshsizeestimates(cql)
+            table_name = table[len(test_keyspace)+1:]
+            count = sum(x.partitions_count for x in cql.execute(
+                f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"))
+            assert count > 750/1.2 and count < 750*1.2
+
+# Disjoint sstables: there is no overlap to discount (the sketch ratio is
+# within noise of 1), so the estimate must stay near the plain sum.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_partitions_estimate_no_overlap(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+        with nodetool.no_autocompaction_context(cql, table):
+            write = cql.prepare(f"INSERT INTO {table} (k) VALUES (?)")
+            for start in (0, 500):
+                for i in range(start, start + 500):
+                    cql.execute(write, [i])
+                nodetool.flush(cql, table)
+            nodetool.refreshsizeestimates(cql)
+            table_name = table[len(test_keyspace)+1:]
+            count = sum(x.partitions_count for x in cql.execute(
+                f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"))
+            assert count > 1000/1.25 and count < 1000*1.25
 
 # A tablet table reports one row per tablet, and clustering restrictions on
 # table_name and range_start select the same rows as filtering the full list.

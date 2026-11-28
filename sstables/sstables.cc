@@ -1265,14 +1265,24 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 
 future<> sstable::do_read_simple(component_type type,
                                  noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component) {
+    _metadata_size_on_disk += co_await do_read_component(type, std::move(read_component));
+}
+
+future<uint64_t> sstable::do_read_component(component_type type,
+                                 noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component) const {
     auto component_name = filename(type);
     sstlog.trace("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), component_name);
     try {
         file fi = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
-        uint64_t size = co_await fi.size();
+        auto size_fut = co_await coroutine::as_future(fi.size());
+        if (size_fut.failed()) {
+            co_await fi.close();
+            std::rethrow_exception(size_fut.get_exception());
+        }
+        uint64_t size = size_fut.get();
 
         co_await read_component(_version, std::move(fi), size);
-        _metadata_size_on_disk += size;
+        co_return size;
     }  catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
             throw_missing_sstable_component_exception(component_name);
@@ -1752,8 +1762,18 @@ double sstable::estimate_droppable_tombstone_ratio(const gc_clock::time_point& c
     return 0.0f;
 }
 
+// The 1KiB cardinality sketch is only needed by size estimates; read_compaction_metadata() reloads it.
+static bool drop_cardinality_sketch(statistics& s) {
+    if (auto it = s.contents.find(metadata_type::Compaction); it != s.contents.end()) {
+        static_cast<compaction_metadata&>(*it->second).cardinality.elements = {};
+        return true;
+    }
+    return false;
+}
+
 future<> sstable::read_statistics() {
     co_await read_simple_and_verify_digest<component_type::Statistics>(_components->statistics);
+    _cardinality_sketch_dropped = drop_cardinality_sketch(_components->statistics);
 }
 
 future<> sstable::read_partitions_db_footer() {
@@ -1767,8 +1787,13 @@ future<> sstable::read_partitions_db_footer() {
 }
 
 void sstable::write_statistics() {
+    // The sketch is dropped after each write; persisting again without reloading it would lose it.
+    if (_cardinality_sketch_dropped) {
+        on_internal_error(sstlog, format("Refusing to write {} without its cardinality sketch", get_filename(component_type::Statistics)));
+    }
     auto digest = write_simple_with_digest<component_type::Statistics>(_components->statistics);
     _components_digests.map[component_type::Statistics] = digest;
+    _cardinality_sketch_dropped = drop_cardinality_sketch(_components->statistics);
 }
 
 void sstable::mark_as_being_repaired(const service::session_id& id) {
@@ -1904,6 +1929,11 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         }
 
         new_sst->_components->statistics = _components->statistics;
+        if (component == component_type::Statistics && _components->statistics.contents.contains(metadata_type::Compaction)) {
+            // The in-memory copy lacks the cardinality sketch; carry it over from disk.
+            new_sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>(read_compaction_metadata().get());
+            new_sst->_cardinality_sketch_dropped = false;
+        }
         new_sst->_components->digest = _components->digest;
         new_sst->_components->checksum = _components->checksum;
 
@@ -2213,6 +2243,94 @@ void sstable::write_filter() {
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
     auto digest = write_simple_with_digest<component_type::Filter>(filter_ref);
     _components_digests.map[component_type::Filter] = digest;
+}
+
+// Parses the Compaction section of an open Statistics.db and closes the file. A rewrite passes
+// verify_digest so it can't copy corrupt bytes under a fresh digest; read-only callers read just
+// the section. Throws plain malformed_sstable_exception, never aborting: this runs on user queries.
+future<compaction_metadata> sstable::read_compaction_metadata_from(file f, uint64_t size, bool verify_digest) const {
+    const auto filename = get_filename(component_type::Statistics);
+    auto& offsets = _components->statistics.offsets.elements;
+    auto it = std::ranges::find(offsets, metadata_type::Compaction, &std::pair<metadata_type, uint32_t>::first);
+    std::unique_ptr<file_random_access_reader> r;
+    if (verify_digest) {
+        r = std::make_unique<digest_file_random_access_reader>(std::move(f), size, sstable_buffer_size);
+    } else {
+        // The section ends at the next one, or at EOF; a short section fails the parse.
+        const uint64_t start = it != offsets.end() ? it->second : 0;
+        uint64_t end = std::max(size, start);
+        for (auto& [_, off] : offsets) {
+            if (off > start && off < end) {
+                end = off;
+            }
+        }
+        r = std::make_unique<file_random_access_reader>(std::move(f), end, sstable_buffer_size);
+    }
+    compaction_metadata m;
+    std::exception_ptr ex;
+    try {
+        if (it == offsets.end()) {
+            throw malformed_sstable_exception("Compaction metadata not available", filename);
+        }
+        if (verify_digest) {
+            for (uint64_t pos = 0; pos < size;) {
+                auto buf = co_await r->read_exactly(std::min<uint64_t>(size - pos, sstable_buffer_size));
+                if (buf.empty()) {
+                    break;
+                }
+                pos += buf.size();
+            }
+            auto digest = static_cast<digest_file_random_access_reader&>(*r).digest();
+            if (!digest) {
+                throw malformed_sstable_exception("Statistics is truncated", filename);
+            }
+            auto expected = get_component_digest(component_type::Statistics);
+            if (expected && *expected != *digest) {
+                auto msg = fmt::format("{} digest mismatch in {}: expected {}, computed {}", component_type::Statistics, filename, *expected, *digest);
+                if (!_ignore_component_digest_mismatch) {
+                    throw malformed_sstable_exception(msg);
+                }
+                sstlog.warn("{}", msg);
+            }
+        }
+        co_await r->seek(it->second);
+        co_await parse(*_schema, _version, *r, m);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await r->close();
+    maybe_rethrow_exception(std::move(ex));
+    co_return m;
+}
+
+future<compaction_metadata> sstable::read_compaction_metadata() const {
+    compaction_metadata m;
+    co_await do_read_component(component_type::Statistics, [&] (version_types, file&& f, uint64_t size) -> future<> {
+        m = co_await read_compaction_metadata_from(std::move(f), size, true);
+    });
+    co_return m;
+}
+
+future<std::optional<hll::HyperLogLog>> sstable::read_cardinality_estimator() const {
+    file f;
+    uint64_t size;
+    {
+        // Open under the lock: a concurrent change_state()/unlink() would make the open abort (see read_digest()).
+        auto lock = co_await get_units(_mutate_sem, 1);
+        if (_unlinked_at) {
+            co_return std::nullopt;
+        }
+        f = co_await new_sstable_component_file(_read_error_handler, component_type::Statistics, open_flags::ro);
+    }
+    // An open file stays readable after unlink, so the read needs no lock.
+    auto size_fut = co_await coroutine::as_future(f.size());
+    if (size_fut.failed()) {
+        co_await f.close();
+        std::rethrow_exception(size_fut.get_exception());
+    }
+    size = size_fut.get();
+    auto m = co_await read_compaction_metadata_from(std::move(f), size, false);
+    co_return hll::HyperLogLog::from_bytes(m.cardinality.elements);
 }
 
 void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {

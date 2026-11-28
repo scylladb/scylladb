@@ -1665,7 +1665,17 @@ void write_statistics_component(const sstables::shared_sstable& sst, json_writer
                 dump_validation_metadata(writer, version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
                 break;
             case sstables::metadata_type::Compaction:
-                dump_compaction_metadata(writer, version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
+                // The cardinality sketch is not kept in memory; without it, dump what we have.
+                try {
+                    dump_compaction_metadata(writer, version, sst->read_compaction_metadata().get());
+                } catch (...) {
+                    auto ex = std::current_exception();
+                    sst_log.warn("Failed to read the Compaction metadata of {}: {}", sst->get_filename(), ex);
+                    // The in-memory copy has an empty cardinality; flag it so it isn't mistaken for the real one.
+                    dump_compaction_metadata(writer, version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
+                    writer.Key("compaction_read_error");
+                    writer.String(fmt::format("{}", ex));
+                }
                 break;
             case sstables::metadata_type::Stats:
                 dump_stats_metadata(writer, version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));
