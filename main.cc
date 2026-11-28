@@ -2092,6 +2092,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }).get();
 
+            static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> scrub_throughput_registrations;
+            scrub_throughput_registrations.start(std::nullopt).get();
+            auto stop_scrub_throughput_registrations = defer_verbose_shutdown("auto scrub throughput config callbacks", [] {
+                scrub_throughput_registrations.stop().get();
+            });
+
+            const auto& scrub_throughput_opt = *db::cluster_config_registry::find(db::cluster_config_registry::option_name::auto_scrub_io_throughput_mb_per_sec_per_shard);
+            cluster_config_manager.invoke_on_all([&db, &scrub_throughput_opt] (db::cluster_config_manager& ccm) {
+                scrub_throughput_registrations.local() = ccm.register_config_callback(
+                        sstring(scrub_throughput_opt.name),
+                        [&db, &scrub_throughput_opt] (const db::cluster_config_manager::lookup_context&, std::optional<sstring> value) {
+                    auto mb_per_sec = uint64_t(db::cluster_config_registry::to_integer(scrub_throughput_opt, value));
+                    db.local().get_compaction_manager().set_automatic_scrub_throughput(mb_per_sec << 20);
+                    return make_ready_future<>();
+                });
+            }).get();
+
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
             auto repair_config = sharded_parameter([&] {

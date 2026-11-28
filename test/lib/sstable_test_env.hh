@@ -105,6 +105,16 @@ public:
     void trigger_auto_scrub_timer();
     future<> submit_automatic_scrub(compaction::compaction_group_view& t);
     future<> reevaluate_automatic_scrub();
+    // Automatic scrub is not paced in tests by default, see compaction_manager::_automatic_scrub_throughput.
+    void set_automatic_scrub_throughput(uint64_t bytes_per_sec) {
+        _cm._automatic_scrub_throughput = bytes_per_sec;
+    }
+    void set_automatic_scrub_credit(int64_t bytes) {
+        _cm._automatic_scrub_credit = bytes;
+    }
+    int64_t get_automatic_scrub_credit() const {
+        return _cm._automatic_scrub_credit;
+    }
 
     // Marks those of the sstables which hold data outside of the owned ranges as requiring
     // cleanup, the way cleanup does before it compacts them.

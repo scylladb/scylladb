@@ -1908,7 +1908,6 @@ SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_does_not_retry_failed_sstable) {
 
         {
             scoped_error_injection injection{"automatic_scrub_compaction", true, {{"what", "throw"}}};
-            scoped_error_injection retry_immediately{"automatic_scrub_retry_immediately", true, {}};
             cm.reevaluate_automatic_scrub().get();
         }
 
@@ -1926,6 +1925,188 @@ SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_does_not_retry_failed_sstable) {
         }
 
         BOOST_REQUIRE_EQUAL(validated, table_count * sst_count - 1);
+    });
+}
+
+// After scrubbing an sstable, automatic scrub has to pause before scrubbing the next one,
+// and the sstable which was validated the longest time ago has to be scrubbed first.
+SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_is_paced_and_scrubs_oldest_sstable_first) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 4;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        // All are eligible, the oldest one is neither the first nor the last one.
+        sstables[0]->set_scrub_time(db_clock::from_time_t(3000));
+        sstables[1]->set_scrub_time(db_clock::from_time_t(2000));
+        sstables[2]->set_scrub_time(db_clock::from_time_t(1000));
+        sstables[3]->set_scrub_time(db_clock::from_time_t(4000));
+        const std::array expected_order = {2, 1, 0, 3};
+
+        cm.set_automatic_scrub_throughput(1);
+        table->set_scrub_period(std::chrono::hours(5));
+
+        auto scrubbed_count = [&sstables] {
+            return std::ranges::count_if(sstables, [] (const sstables::shared_sstable& sst) { return bool(sst->unlinked_at()); });
+        };
+
+        for (size_t round = 0; round < expected_order.size(); ++round) {
+            // Any sstable uses up a credit of one byte: one sstable is planned.
+            cm.set_automatic_scrub_credit(1);
+            cm.submit_automatic_scrub(ts).get();
+
+            BOOST_REQUIRE(sstables[expected_order[round]]->unlinked_at());
+            BOOST_REQUIRE_EQUAL(size_t(scrubbed_count()), round + 1);
+
+            // No credit: nothing is scrubbed.
+            cm.submit_automatic_scrub(ts).get();
+            BOOST_REQUIRE_EQUAL(size_t(scrubbed_count()), round + 1);
+        }
+
+        BOOST_REQUIRE_EQUAL(table->get_sstables()->size(), sstables.size());
+    });
+}
+
+// The sstables to scrub are picked across all the views: the one which was validated the
+// longest time ago comes first, whichever view it belongs to.
+SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_paced_scrubs_oldest_sstable_of_all_views_first) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto table_count = 3;
+    constexpr auto sst_count = 2;
+
+    test.run_with_many_tables(table_count, sst_count, [&test_env] (std::span<table_for_tests> tables, std::span<compaction::compaction_group_view*> views, std::span<std::vector<sstables::shared_sstable>> sstable_sets) {
+        auto& cm = test_env.test_compaction_manager();
+
+        // The validation order goes back and forth between the views.
+        std::vector<sstables::shared_sstable> expected_order;
+        for (size_t sst_idx = 0; sst_idx < sst_count; ++sst_idx) {
+            for (size_t table_idx = 0; table_idx < table_count; ++table_idx) {
+                auto& sst = sstable_sets[table_idx][sst_idx];
+                sst->set_scrub_time(db_clock::from_time_t(1000 * (expected_order.size() + 1)));
+                expected_order.push_back(sst);
+            }
+        }
+        for (auto& t : tables) {
+            t->set_scrub_period(std::chrono::hours(5));
+        }
+        cm.set_automatic_scrub_throughput(1);
+
+        auto scrubbed_count = [&expected_order] {
+            return size_t(std::ranges::count_if(expected_order, [] (const sstables::shared_sstable& sst) { return bool(sst->unlinked_at()); }));
+        };
+
+        for (size_t scrubbed = 1; scrubbed <= expected_order.size(); ++scrubbed) {
+            // All views are submitted each time, like the timer does it.
+            // Any sstable uses up a credit of one byte: one sstable is planned.
+            cm.set_automatic_scrub_credit(1);
+            cm.get_awaiting_automatic_scrub().insert_range(views);
+            cm.reevaluate_automatic_scrub().get();
+
+            BOOST_REQUIRE(cm.get_awaiting_automatic_scrub().empty());
+            BOOST_REQUIRE(expected_order[scrubbed - 1]->unlinked_at());
+            BOOST_REQUIRE_EQUAL(scrubbed_count(), scrubbed);
+        }
+    });
+}
+
+// When a task stops before scrubbing all the sstables it was planned for, because compaction
+// was disabled in the meantime, the credit of the sstables it did not scrub is given back, so
+// that they can be planned again before the next refill.
+SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_refunds_credit_of_unscrubbed_sstables) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 3;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+        auto& injector = utils::get_local_injector();
+        scoped_error_injection pause_injection{"automatic_scrub_compaction", true, {{"what", "pause"}}};
+
+        // The sstable which is scrubbed first is the one which was validated the longest time ago.
+        for (auto [i, sst] : std::views::enumerate(sstables)) {
+            sst->set_scrub_time(db_clock::from_time_t(1000 * (i + 1)));
+        }
+        table->set_scrub_period(std::chrono::hours(5));
+
+        // Enough credit for all the sstables, and not a byte more.
+        uint64_t total_bytes = 0;
+        for (const auto& sst : sstables) {
+            total_bytes += sst->bytes_on_disk();
+        }
+        // The refund is capped at one interval's worth, which is far more than all the
+        // sstables at this throughput.
+        cm.set_automatic_scrub_throughput(total_bytes);
+        cm.set_automatic_scrub_credit(total_bytes);
+
+        auto scrub = cm.submit_automatic_scrub(ts);
+        wait_for_injection_enter("automatic_scrub_compaction").get();
+        BOOST_REQUIRE_EQUAL(cm.get_automatic_scrub_credit(), 0);
+
+        // Compaction is disabled right away, the scrub in progress is waited for, and the
+        // task stops before the next sstable.
+        auto disable = cm.get_compaction_manager().await_and_disable_compaction(ts);
+        injector.receive_message("automatic_scrub_compaction");
+        scrub.get();
+        auto reenabler = disable.get();
+
+        BOOST_REQUIRE(sstables[0]->unlinked_at());
+        BOOST_REQUIRE(!sstables[1]->unlinked_at());
+        BOOST_REQUIRE(!sstables[2]->unlinked_at());
+        BOOST_REQUIRE_EQUAL(cm.get_automatic_scrub_credit(), int64_t(sstables[1]->bytes_on_disk() + sstables[2]->bytes_on_disk()));
+    });
+}
+
+// When the limit changes, the tasks stop before their next sstable, as their plan is no longer
+// good, and the credit of the sstables they did not scrub is given back.
+SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_refunds_credit_on_limit_change) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 3;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+        auto& injector = utils::get_local_injector();
+        scoped_error_injection pause_injection{"automatic_scrub_compaction", true, {{"what", "pause"}}};
+
+        for (auto [i, sst] : std::views::enumerate(sstables)) {
+            sst->set_scrub_time(db_clock::from_time_t(1000 * (i + 1)));
+        }
+        table->set_scrub_period(std::chrono::hours(5));
+
+        uint64_t total_bytes = 0;
+        for (const auto& sst : sstables) {
+            total_bytes += sst->bytes_on_disk();
+        }
+        cm.set_automatic_scrub_throughput(total_bytes);
+        cm.set_automatic_scrub_credit(total_bytes);
+
+        auto scrub = cm.submit_automatic_scrub(ts);
+        wait_for_injection_enter("automatic_scrub_compaction").get();
+        BOOST_REQUIRE_EQUAL(cm.get_automatic_scrub_credit(), 0);
+
+        cm.get_compaction_manager().set_automatic_scrub_throughput(2 * total_bytes);
+        injector.receive_message("automatic_scrub_compaction");
+        scrub.get();
+
+        BOOST_REQUIRE(sstables[0]->unlinked_at());
+        BOOST_REQUIRE(!sstables[1]->unlinked_at());
+        BOOST_REQUIRE(!sstables[2]->unlinked_at());
+        BOOST_REQUIRE_EQUAL(cm.get_automatic_scrub_credit(), int64_t(sstables[1]->bytes_on_disk() + sstables[2]->bytes_on_disk()));
     });
 }
 
