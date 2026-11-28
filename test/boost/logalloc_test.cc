@@ -131,6 +131,31 @@ SEASTAR_TEST_CASE(test_occupancy) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_global_occupancy_counts_free_segments) {
+    // A live object keeps in-use non-zero, so used and total cannot both collapse to free.
+    region live;
+    auto* obj = live.allocator().construct<int>(42);
+    auto destroy_obj = defer([&] () noexcept {
+        live.allocator().destroy(obj);
+    });
+    {
+        region reg;
+        with_allocator(reg.allocator(), [] {
+            make_managed<int>();
+        });
+    }
+
+    auto global = shard_tracker().global_occupancy();
+    auto regions = shard_tracker().region_occupancy();
+    auto total = shard_tracker().occupancy();
+    testlog.info("global_occupancy = {}, region_occupancy = {}", global, regions);
+    BOOST_REQUIRE_GT(global.free_space(), 0);
+    BOOST_REQUIRE_GT(global.used_space(), 0);
+    BOOST_REQUIRE_EQUAL(global.used_space(), regions.total_space());
+    BOOST_REQUIRE_EQUAL(global.total_space(), global.used_space() + global.free_space());
+    BOOST_REQUIRE_EQUAL(global.total_space(), total.total_space());
+}
+
 
 SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
     return seastar::async([] {
