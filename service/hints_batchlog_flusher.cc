@@ -115,7 +115,7 @@ future<std::optional<gc_clock::time_point>> hints_batchlog_flusher::run_flush() 
             (_cluster->is_alive(node) ? to_flush : down).push_back(node);
         }
     }
-    // A failed flush fails the repairs waiting for it, and the topology
+    // A failed flush fails the auto repairs waiting for it, and the topology
     // coordinator retries them, so these repeat for as long as it lasts.
     // One limit per message, so that one cause does not hide another.
     static thread_local logger::rate_limit nodes_down_rate_limit{std::chrono::seconds(10)};
