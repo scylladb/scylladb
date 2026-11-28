@@ -29,6 +29,15 @@ if(DEFINED CMAKE_BUILD_TYPE)
 endif(DEFINED CMAKE_BUILD_TYPE)
 
 option(Scylla_ENABLE_LTO "Turn on link-time optimization for the 'release' mode." ON)
+if(DEFINED ENV{XDG_CACHE_HOME} AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
+  set(_thinlto_cache_dir "$ENV{XDG_CACHE_HOME}/scylladb/thinlto")
+else()
+  set(_thinlto_cache_dir "$ENV{HOME}/.cache/scylladb/thinlto")
+endif()
+set(Scylla_THINLTO_CACHE_DIR "${_thinlto_cache_dir}" CACHE PATH
+  "Directory where ThinLTO links (lld only) keep the code generated for each module; empty disables it.")
+set(Scylla_THINLTO_CACHE_POLICY "cache_size_bytes=20g:prune_after=72h" CACHE STRING
+  "lld --thinlto-cache-policy for Scylla_THINLTO_CACHE_DIR.")
 
 include(mode.common)
 get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
