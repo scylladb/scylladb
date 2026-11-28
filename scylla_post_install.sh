@@ -65,4 +65,8 @@ EOS
     fi
 fi
 
+# On upgrade, pin scylla-helper.slice to the CPUs outside the existing cpuset.
+# A failure prints a warning and must not fail the package install.
+"$(dirname "$(readlink -f "$0")")"/scylla_pin_helper_slice || true
+
 systemctl --system daemon-reload >/dev/null || true

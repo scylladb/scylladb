@@ -8,8 +8,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 import os
-import re
-from scylla_util import etcdir, datadir, bindir, scriptsdir, is_nonroot, is_container, is_developer_mode
+from scylla_util import etcdir, datadir, bindir, scriptsdir, is_nonroot, is_container, is_developer_mode, parse_cpuset_conf, parse_cpu_list
 import resource
 import subprocess
 import argparse
@@ -19,42 +18,15 @@ import sys
 import scylla_blocktune as blocktune
 
 
-# Regular expression helpers
-# non-advancing comment matcher
-_nocomment = r"^\s*(?!#)"
-# non-capturing grouping
-_scyllaeq = r"(?:\s*|=)"
-_cpuset = r"(?:\s*--cpuset" + _scyllaeq + r"(?P<cpuset>\d+(?:[-,]\d+)*))"
-_smp = r"(?:\s*--smp" + _scyllaeq + r"(?P<smp>\d+))"
-
-
-def _reopt(s):
-    return s + r"?"
-
 class scylla_cpuinfo:
     """Class containing information about how Scylla sees CPUs in this machine.
     Information that can be probed include in which hyperthreads Scylla is configured
     to run, how many total threads exist in the system, etc"""
 
     def __parse_cpuset(self):
-        f = open(etcdir() + "/scylla.d/cpuset.conf", "r")
-        pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + r"\s*\"")
-        grp = [pattern.match(x) for x in f.readlines() if pattern.match(x)]
-        if not grp:
-            d = {"cpuset": None, "smp": None}
-        else:
-            # if more than one, use last
-            d = grp[-1].groupdict()
-        actual_set = set()
-        if d["cpuset"]:
-            groups = d["cpuset"].split(",")
-            for g in groups:
-                ends = [int(x) for x in g.split("-")]
-                actual_set = actual_set.union(set(range(ends[0], ends[-1] + 1)))
-            d["cpuset"] = actual_set
-        if d["smp"]:
-            d["smp"] = int(d["smp"])
-        self._cpu_data = d
+        with open(etcdir() + "/scylla.d/cpuset.conf", "r") as f:
+            cpuset, smp = parse_cpuset_conf(f.read())
+        self._cpu_data = {"cpuset": parse_cpu_list(cpuset) if cpuset else None, "smp": smp}
 
     def __system_cpus(self):
         cur_proc = -1
