@@ -568,6 +568,18 @@ struct scan_ranges_context {
     }
 };
 
+// An expired item is deleted with a tombstone timestamped when the scan read
+// the item, not when the deletion is made, so that a write to the item made
+// after the read survives the deletion. But the tombstone's timestamp is also
+// that of the deletion's CDC log entry (e.g., the REMOVE event of Alternator
+// Streams), and an Alternator Streams reader, which reads the entries older
+// than alternator_streams_time_window_s (10 seconds by default), can miss an
+// entry added with an older timestamp than that. With vnodes, CDC also
+// rejects a write older than its generation leeway (5 seconds) during a
+// change of CDC generation. So the tombstone is never older than this before
+// the time it's made, which must stay well below both.
+static constexpr std::chrono::seconds max_expiration_tombstone_age{1};
+
 // Scan data in a list of token ranges in one table, looking for expired
 // items and deleting them.
 // Because of issue #9167, partition_ranges must have a single partition
@@ -598,7 +610,12 @@ static future<> scan_table_ranges(
         // be aborted and only be restarted at the next scanning period.
         // If we retry too many times, give up and restart the scan later.
         std::unique_ptr<cql3::result_set> rs;
+        // The time of the read, for the tombstones of the expired items
+        // found in the page (see max_expiration_tombstone_age). It is taken
+        // before the read, so a write which the read didn't see is newer.
+        api::timestamp_type page_read_ts;
         for (int retries=0; ; retries++) {
+            page_read_ts = api::new_timestamp();
             try {
                 // FIXME: which timeout?
                 rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
@@ -692,7 +709,13 @@ static future<> scan_table_ranges(
             }
             if (expired) {
                 expiration_stats.items_deleted++;
-                // FIXME: maybe don't recalculate new_timestamp() all the time
+                // The tombstone is timestamped when the page was read, but
+                // not older than max_expiration_tombstone_age (see above).
+                // The timestamp is taken before the following injection
+                // point, so a test which pauses there can write the item
+                // while its deletion, with an older timestamp, is pending.
+                const api::timestamp_type ts = std::max(page_read_ts,
+                        api::new_timestamp() - std::chrono::duration_cast<std::chrono::microseconds>(max_expiration_tombstone_age).count());
                 // FIXME: if expire_item() throws on timeout, we need to retry it.
                 co_await utils::get_local_injector().inject("alternator_ttl_before_expire_item", [&s] (auto& handler) -> future<> {
                     if (s->cf_name() != handler.get("cf_name")) {
@@ -700,7 +723,6 @@ static future<> scan_table_ranges(
                     }
                     co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
                 });
-                auto ts = api::new_timestamp();
                 co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts);
             }
         }

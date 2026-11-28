@@ -330,6 +330,17 @@ In Alternator, the expiration delay is configurable - it can be set
 with the `--alternator-ttl-period-in-seconds` configuration option.
 The default is 24 hours.
 
+Like in DynamoDB, an item which has expired but was not deleted yet can
+still be read and written. Alternator deletes expired items in the
+background, without isolation from concurrent writes to them, so a write
+made while an item is being deleted may partly survive: usually, what
+the write wrote survives the deletion, but the item's older attributes
+may be deleted. For example, a `PutItem` which replaces the expired item
+keeps its whole new item, but an `UpdateItem` may keep only the
+attributes it wrote. But a write made more than about a second after
+Alternator read the expired item, if Alternator deletes the item even
+later, may be deleted with it.
+
 ## Scan ordering
 
 In DynamoDB, scanning the _entire_ table returns the partitions sorted by
