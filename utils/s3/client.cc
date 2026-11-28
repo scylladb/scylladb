@@ -203,6 +203,16 @@ void client::report_object_storage_metrics(utils::object_storage_metrics_labels 
     }
 }
 
+void client::unregister_metrics() {
+    _metrics_unregistered = true;
+    _client_metrics.clear();
+    _object_storage_metrics_labels.reset();
+    for (auto& [name, gc] : _pools) {
+        gc.metrics.clear();
+        gc.object_storage_metrics.reset();
+    }
+}
+
 static std::unique_ptr<throttling_controller> make_default_throttling_controller() {
     return std::make_unique<aws_throttling_controller>();
 }
@@ -410,9 +420,8 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     try {
         metrics.add_group("s3", defs);
     } catch (const seastar::metrics::double_registration& e) {
-        // Reached when a second client serves one endpoint on this shard, which
-        // happens while an endpoint dropped from the configuration is still
-        // referenced. This runs on the request path, so it must not throw.
+        // Defensive: reached only if another client for this endpoint holds the series
+        // on this shard. This runs on the request path, so it must not throw.
         s3l.warn("Not reporting s3 metrics for {}: {}", host, e.what());
     }
 }
@@ -493,7 +502,9 @@ client::group_client& client::find_or_create_client_slow() {
             std::forward_as_tuple(name),
             std::forward_as_tuple(std::move(factory), *max_conn)
         ).first;
-        it->second.register_metrics(it->first, _host);
+        if (!_metrics_unregistered) {
+            it->second.register_metrics(it->first, _host);
+        }
         if (_object_storage_metrics_labels) {
             auto labels = *_object_storage_metrics_labels;
             labels.class_name = it->first;

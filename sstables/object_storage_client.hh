@@ -107,6 +107,10 @@ public:
     virtual void update_config_sync(const db::object_storage_endpoint_param&) = 0;
     virtual void update_group_connections(const s3::group_connections&) = 0;
 
+    // Releases the client's metric series, for a client whose endpoint was dropped from
+    // the configuration but which sstables still reference.
+    virtual void unregister_metrics() = 0;
+
     virtual future<> close() = 0;
 };
 
