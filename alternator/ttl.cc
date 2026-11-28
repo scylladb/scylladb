@@ -246,7 +246,7 @@ static bool is_expired(const big_decimal& expiration_time, gc_clock::time_point 
     // the same.
     return is_expired(gc_clock::time_point(gc_clock::duration(std::chrono::seconds(t))), now);
 }
-static bool is_expired(const rjson::value& expiration_time, gc_clock::time_point now) {
+bool is_expired(const rjson::value& expiration_time, gc_clock::time_point now) {
     std::optional<big_decimal> n = try_unwrap_number(expiration_time);
     return n && is_expired(*n, now);
 }

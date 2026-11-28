@@ -878,6 +878,30 @@ def test_ttl_extend_expiration_during_expiration(dynamodb, rest_api, waits_for_e
         assert item is not None
         assert item['expiration'] == new_expiration
 
+# An UpdateItem which deletes some elements of a set is a read-modify-write:
+# it reads the item, and writes the remaining elements. If it does this while
+# the expiration service is deleting the item, its write survives the
+# deletion. It must not leave behind an item without its expiration time,
+# which would never expire. This is the failure seen in CI, of the dtest
+# test_ttl_with_load_and_decommission: an item survived every scan with
+# 14 of its 20 set elements, and no expiration time.
+# Reproduces SCYLLADB-6726.
+def test_ttl_update_set_during_expiration(dynamodb, rest_api, waits_for_expiration):
+    with new_ttl_table(dynamodb) as table:
+        key = {'p': random_string(), 'c': 1}
+        expire_during(rest_api, table, {**key, 'expiration': int(time.time()) - 60, 's': {f'e{i}' for i in range(20)}},
+                      lambda: table.update_item(Key=key,
+                          AttributeUpdates={'s': {'Action': 'DELETE', 'Value': {f'e{i}' for i in range(6)}}}))
+        item = table.get_item(Key=key, ConsistentRead=True).get('Item')
+        # Check that what's left of the item, if anything, still has its
+        # expiration time.
+        assert item is None or 'expiration' in item
+        # Check that the next scan deletes whatever was left of the item.
+        deadline = time.time() + 60
+        while 'Item' in table.get_item(Key=key, ConsistentRead=True):
+            assert time.time() < deadline, 'the item was not deleted'
+            time.sleep(0.1)
+
 # Alternator uses a tag "system:ttl_attribute" to store the TTL attribute
 # chosen by UpdateTimeToLive. However, this tag is not supposed to be
 # readable or writable by the user directly - it should be read or written

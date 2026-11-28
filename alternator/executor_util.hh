@@ -36,6 +36,7 @@
 #include "audit/audit.hh"
 #include "utils/managed_bytes.hh"
 #include "exceptions/coordinator_result.hh"
+#include "gc_clock.hh"
 
 class index_metadata;
 
@@ -154,6 +155,13 @@ bool is_alternator_keyspace(std::string_view ks_name);
 /// Wraps db::get_tags_of_table() and throws api_error::validation if the
 /// table is missing the tags extension.
 const std::map<sstring, sstring>& get_tags_of_table_or_throw(schema_ptr schema);
+
+/// Checks whether an item whose expiration-time attribute (see TTL_TAG_KEY)
+/// has the given value expired at the given time, according to the rules of
+/// DynamoDB's TTL: the value must be a number of seconds since the UNIX
+/// epoch, in the past, but not more than 5 years in the past.
+/// Defined in ttl.cc, with the expiration service which uses it.
+bool is_expired(const rjson::value& expiration_time, gc_clock::time_point now);
 
 /// Returns a type object representing the type of the ":attrs" column used
 /// by Alternator to store all non-key attribute. This type is a map from

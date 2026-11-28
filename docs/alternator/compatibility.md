@@ -340,6 +340,10 @@ keeps its whole new item, but an `UpdateItem` may keep only the
 attributes it wrote. But a write made more than about a second after
 Alternator read the expired item, if Alternator deletes the item even
 later, may be deleted with it.
+An `UpdateItem` which needs to read the item to update it (e.g.,
+deleting elements from a set) also keeps the item's expiration time, so
+if it was still expired, what remains of the item is deleted by the next
+expiration scan.
 
 ## Scan ordering
 
