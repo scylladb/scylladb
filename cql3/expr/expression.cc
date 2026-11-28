@@ -361,12 +361,24 @@ bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_h
     return limits(*lhs_bytes, op, *rhs_bytes, type_of(lhs)->without_reversed());
 }
 
+/// The result of CONTAINS or CONTAINS KEY when one of its operands is null.
+/// In an LWT condition, a null value to look for is an error instead.
+bool_or_null contains_null_operand(oper_t op, bool rhs_is_null, null_handling_style null_handling) {
+    if (null_handling == null_handling_style::sql) {
+        return bool_or_null::null();
+    }
+    if (rhs_is_null) {
+        throw exceptions::invalid_request_exception(fmt::format("Invalid comparison with null for operator \"{}\"", op));
+    }
+    return false;
+}
+
 /// True iff a column is a collection containing value.
-bool_or_null contains(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null contains(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
     std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS, inputs);
     if (!sides_bytes.first || !sides_bytes.second) {
-        return bool_or_null::null();
+        return contains_null_operand(oper_t::CONTAINS, !sides_bytes.second, null_handling);
     }
 
     const abstract_type& lhs_type = type_of(lhs)->without_reversed();
@@ -396,11 +408,11 @@ bool_or_null contains(const expression& lhs, const expression& rhs, const evalua
 }
 
 /// True iff a column is a map containing \p key.
-bool_or_null contains_key(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null contains_key(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
     std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS_KEY, inputs);
     if (!sides_bytes.first || !sides_bytes.second) {
-        return bool_or_null::null();
+        return contains_null_operand(oper_t::CONTAINS_KEY, !sides_bytes.second, null_handling);
     }
     auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
@@ -1280,10 +1292,10 @@ cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_input
             binop_result = limits(binop.lhs, binop.op, binop.null_handling, binop.rhs, inputs);
             break;
         case oper_t::CONTAINS:
-            binop_result = contains(binop.lhs, binop.rhs, inputs);
+            binop_result = contains(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::CONTAINS_KEY:
-            binop_result = contains_key(binop.lhs, binop.rhs, inputs);
+            binop_result = contains_key(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::LIKE:
             binop_result = like(binop.lhs, binop.rhs, inputs);

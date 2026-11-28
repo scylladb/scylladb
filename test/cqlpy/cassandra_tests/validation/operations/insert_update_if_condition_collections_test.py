@@ -36,7 +36,6 @@ def testInsertSetIfNotExists(cql, test_keyspace, is_scylla):
                    row(True,None,None) if is_scylla else row(True))
         assertRows(execute(cql, table, "SELECT * FROM %s "), row(0, {1, 2, 3}))
 
-@pytest.mark.xfail(reason="Issue #13586")
 def testWholeUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b text)") as typename:
         for frozen in [False, True]:   
@@ -437,10 +436,8 @@ def testWholeList(cql, test_keyspace):
             check_invalid_list(cql, table, "l IN null", SyntaxException)
             check_invalid_list(cql, table, "l IN 367", SyntaxException)
 
-# The CONTAINS and CONTAINS KEY checks of testWholeList, split into a separate
-# test because Scylla does not yet support CONTAINS in LWT conditions
-# (issue #13586), so the rest of testWholeList can run on Scylla.
-@pytest.mark.xfail(reason="Issue #13586")
+# The CONTAINS and CONTAINS KEY checks of testWholeList.
+# Reproduces #13586 (CONTAINS in LWT conditions)
 def testWholeListContains(cql, test_keyspace):
     for frozen in [False, True]:
         typename = "list<text>"
@@ -604,10 +601,8 @@ def testWholeSet(cql, test_keyspace):
             # "SELECT s['foo']" - so this check is commented out.
             #check_invalid_set(cql, table, "s['foo'] = 'foobar'", InvalidRequest)
 
-# The CONTAINS and CONTAINS KEY checks of testWholeSet, split into a separate
-# test because Scylla does not yet support CONTAINS in LWT conditions
-# (issue #13586), so the rest of testWholeSet can run on Scylla.
-@pytest.mark.xfail(reason="Issue #13586")
+# The CONTAINS and CONTAINS KEY checks of testWholeSet.
+# Reproduces #13586 (CONTAINS in LWT conditions)
 def testWholeSetContains(cql, test_keyspace):
     for frozen in [False, True]:
         typename = "set<text>"
@@ -683,10 +678,8 @@ def testWholeMap(cql, test_keyspace):
             check_invalid_map(cql, table, "m < null", InvalidRequest)
             check_invalid_map(cql, table, "m IN null", SyntaxException)
 
-# The CONTAINS and CONTAINS KEY checks of testWholeMap, split into a separate
-# test because Scylla does not yet support CONTAINS in LWT conditions
-# (issue #13586), so the rest of testWholeMap can run on Scylla.
-@pytest.mark.xfail(reason="Issue #13586")
+# The CONTAINS and CONTAINS KEY checks of testWholeMap.
+# Reproduces #13586 (CONTAINS in LWT conditions)
 def testWholeMapContains(cql, test_keyspace):
     for frozen in [False, True]:
         typename = "map<text,text>"
@@ -939,7 +932,6 @@ def check_invalid_map(cql, table, condition, expected):
     assertInvalidThrow(cql, table, expected, "DELETE FROM %s WHERE k=0 IF " + condition)
     assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, {"foo": "bar"}))
 
-@pytest.mark.xfail(reason="Issue #13586")
 def testInMarkerWithUDTs(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b text)") as typename:
         for frozen in [False, True]:
@@ -971,8 +963,9 @@ def testInMarkerWithUDTs(cql, test_keyspace):
                        row(False, v))
                 assertRows(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", [1, 2]),
                        row(False, v))
-                assertRows(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, unset()),
-                       row(False, v))
+                # Scylla doesn't allow this - see discussion in #13659.
+                #assertRows(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, unset()),
+                #       row(False, v))
 
                 # Does apply
                 assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", userType("a", 0, "b", "abc"), userType("a", 0, "b", "ac")))[0][0] == True
@@ -984,7 +977,8 @@ def testInMarkerWithUDTs(cql, test_keyspace):
                 assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, 0))[0][0] == True
                 assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v.a IN (?, ?)", 0, None))[0][0] == True
                 assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", [0, 1]))[0][0] == True
-                assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v.a IN (?, ?, ?)", 1, unset(), 0))[0][0] == True
+                # Scylla doesn't allow this - see discussion in #13659.
+                #assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v.a IN (?, ?, ?)", 1, unset(), 0))[0][0] == True
 
                 # Scylla does allow "IN null", the condition simply fails.
                 #assertInvalidMessage(cql, table, "Invalid null list in IN condition",
@@ -998,36 +992,50 @@ def testInMarkerWithUDTs(cql, test_keyspace):
 # The Java testNonFrozenEmptyCollection also checks that an unset value in a
 # CONTAINS or CONTAINS KEY condition is an error. Cassandra 5 considers such
 # a condition to just not apply, so we split these checks into this separate
-# test, which is skipped on Cassandra 5.
+# test, which is skipped on Cassandra 5. ScyllaDB and Cassandra have different
+# error messages here.
 # Reproduces #13586 (CONTAINS in LWT conditions)
-@pytest.mark.xfail(reason="#13586")
 def testNonFrozenEmptyCollectionUnset(cql, test_keyspace, new_to_cassandra_6):
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, l list<text>)") as table:
         execute(cql, table, "INSERT INTO %s (k, l) VALUES (0, null)")
-        assertInvalidMessage(cql, table, "Invalid 'unset' value in condition",
+        assertInvalidMessageRE(cql, table, "unset.*value",
                              "UPDATE %s SET l = null WHERE k = 0 IF l CONTAINS ?", unset())
 
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, s set<text>)") as table:
         execute(cql, table, "INSERT INTO %s (k, s) VALUES (0, null)")
-        assertInvalidMessage(cql, table, "Invalid 'unset' value in condition",
+        assertInvalidMessageRE(cql, table, "unset.*value",
                              "UPDATE %s SET s = null WHERE k = 0 IF s CONTAINS ?", unset())
 
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, m map<text, text>)") as table:
         execute(cql, table, "INSERT INTO %s (k, m) VALUES (0, null)")
-        assertInvalidMessage(cql, table, "Invalid 'unset' value in condition",
+        assertInvalidMessageRE(cql, table, "unset.*value",
                              "UPDATE %s SET m = null WHERE k = 0 IF m CONTAINS ?", unset())
-        assertInvalidMessage(cql, table, "Invalid 'unset' value in condition",
+        assertInvalidMessageRE(cql, table, "unset.*value",
                              "UPDATE %s SET m = null WHERE k = 0 IF m CONTAINS KEY ?", unset())
 
-@pytest.mark.xfail(reason="Issues #13586, #5855")
+# The Java testNonFrozenEmptyCollection also checks that a condition comparing
+# a null non-frozen collection with an empty one applies. ScyllaDB doesn't
+# consider them equal (#5855), so we split these checks into this separate test.
+@pytest.mark.xfail(reason="Issue #5855")
+def testNonFrozenEmptyCollectionEqualsEmpty(cql, test_keyspace):
+    with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, l list<text>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, l) VALUES (0, null)")
+        assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l = ?", []))[0][0] == True
+
+    with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, s set<text>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (0, null)")
+        assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s = ?", set()))[0][0] == True
+
+    with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, m map<text, text>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (0, null)")
+        assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m = ?", {}))[0][0] == True
+
 def testNonFrozenEmptyCollection(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, l list<text>)") as table:
         execute(cql, table, "INSERT INTO %s (k, l) VALUES (0, null)")
 
         # Does apply
         assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l = ?", None))[0][0] == True
-        # Reproduces #5855:
-        assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l = ?", []))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l != ?", ["bar"]))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l IN (?, ?)", None, ["bar"]))[0][0] == True
 
@@ -1054,8 +1062,6 @@ def testNonFrozenEmptyCollection(cql, test_keyspace):
 
         # Does apply
         assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s = ?", None))[0][0] == True
-        # Reproduces #5855:
-        assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s = ?", set()))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s != ?", {"bar"}))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s IN (?, ?)", None, {"bar"}))[0][0] == True
 
@@ -1082,8 +1088,6 @@ def testNonFrozenEmptyCollection(cql, test_keyspace):
 
         # Does apply
         assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m = ?", None))[0][0] == True
-        # Reproduces #5855:
-        assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m = ?", {}))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m != ?", {"foo":"bar"}))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m IN (?, ?)", None, {"foo":"bar"}))[0][0] == True
 

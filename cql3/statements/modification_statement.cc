@@ -353,6 +353,16 @@ update_for_lwt_null_equality_rules(const expr::expression& e) {
 static
 expr::expression
 column_condition_prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema, const dialect& d){
+    // IF is parsed with the WHERE relation rule, which also accepts token(), multi-column and function-call relations.
+    expr::for_each_boolean_factor(expr, [] (const expr::expression& condition) {
+        const auto* binop = expr::as_if<expr::binary_operator>(&condition);
+        const bool lhs_is_one_column = binop && (expr::is<expr::unresolved_identifier>(binop->lhs)
+                || expr::is<expr::subscript>(binop->lhs) || expr::is<expr::field_selection>(binop->lhs));
+        if (!lhs_is_one_column) {
+            throw exceptions::invalid_request_exception(format("IF condition {:user} is not supported: its left-hand side must be a column, "
+                    "a collection element or a user-defined type field", condition));
+        }
+    });
     auto prepared = expr::prepare_expression_allowing_relations(expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type), d);
     expr::verify_no_aggregate_functions(prepared, "IF clause");
 

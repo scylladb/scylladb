@@ -372,6 +372,17 @@ update lwt set c=12 where a = 1 if mapint[1] = 1;
 select * from lwt allow filtering;
 update lwt set c=13 where a = 1 if mapint[1] = null;
 select * from lwt allow filtering;
+-- contains and contains key, see #13586
+update lwt set c=14 where a = 1 if listint contains 1;
+select * from lwt allow filtering;
+update lwt set c=15 where a = 1 if listint contains 2;
+select * from lwt allow filtering;
+update lwt set c=16 where a = 1 if mapint contains 1 and mapint contains key 1;
+select * from lwt allow filtering;
+update lwt set c=17 where a = 1 if mapint contains key 2;
+select * from lwt allow filtering;
+update lwt set c=18 where a = 1 if setint contains 1;
+select * from lwt allow filtering;
 drop table lwt;
 --
 -- conditions: null handling
