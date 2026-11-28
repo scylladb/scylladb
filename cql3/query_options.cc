@@ -159,6 +159,7 @@ void query_options::prepare(const std::vector<lw_shared_ptr<column_specification
     }
     _value_views = std::move(ordered_values);
     _unset = std::move(ordered_unset);
+    _validated_as.clear();
 }
 
 void query_options::fill_value_views()

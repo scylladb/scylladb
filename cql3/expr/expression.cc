@@ -1688,11 +1688,14 @@ static cql3::raw_value do_evaluate(const bind_variable& bind_var, const evaluati
     }
 
     const abstract_type& value_type = bind_var.receiver->type->without_reversed();
-    try {
-        value.validate(value_type);
-    } catch (const marshal_exception& e) {
-        throw exceptions::invalid_request_exception(format("Exception while binding column {:s}: {:s}",
-                                                           bind_var.receiver->name->to_cql_string(), e.what()));
+    if (!inputs.options->is_validated_as(bind_var.bind_index, value_type)) {
+        try {
+            value.validate(value_type);
+        } catch (const marshal_exception& e) {
+            throw exceptions::invalid_request_exception(format("Exception while binding column {:s}: {:s}",
+                                                               bind_var.receiver->name->to_cql_string(), e.what()));
+        }
+        inputs.options->set_validated_as(bind_var.bind_index, value_type);
     }
 
     if (value_type.bound_value_needs_to_be_reserialized()) {
