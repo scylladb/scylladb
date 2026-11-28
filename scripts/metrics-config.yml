@@ -24,6 +24,8 @@
 "seastar/tests/unit/metrics_tester.cc": "skip"
 "seastar/tests/unit/prometheus_http_test.cc": "skip"
 "seastar/tests/unit/prometheus_text_test.cc": "skip"
+"seastar/src/core/metrics.cc": "skip"
+"seastar/tests/perf/metrics_perf.cc": "skip"
 "service/storage_proxy.cc":
   params:
     COORDINATOR_STATS_CATEGORY: "storage_proxy_coordinator"
