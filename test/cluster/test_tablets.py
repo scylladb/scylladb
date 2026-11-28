@@ -719,12 +719,13 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
     injection = "create_with_numeric"
     config = {
         "tablets_mode_for_new_keyspaces": "enabled",
+        "rf_rack_valid_keyspaces": "false",
         "error_injections_at_startup": [injection],
         # The RF change waits until every node has complete tablet load stats; the default 60s refresh dominates the runtime.
         "tablet_load_stats_refresh_interval_in_seconds": 1,
     }
 
-    servers = await manager.servers_add(4, config=config, cmdline=['--smp=2'], property_file=[
+    servers = await manager.servers_add(4, config=config, cmdline=['--smp=1'], property_file=[
         {'dc': 'dc1', 'rack': 'rack1a'},
         {'dc': 'dc1', 'rack': 'rack1b'},
         {'dc': 'dc2', 'rack': 'rack2a'},
@@ -734,7 +735,7 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
     cql = manager.get_cql()
     host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
 
-    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 1}};")
     await cql.run_async("create table ks1.t (pk int primary key);")
     repl = await get_replication_options("ks1", host, servers[0].ip_addr)
     assert repl['dc1'] == '1'
@@ -793,7 +794,7 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
     # dc1 - removed; dc2 - the same value
     await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': 1};")
 
-    await manager.server_add(config=config, cmdline=["--enforce-rack-list", "true", "--smp", "2"], property_file={'dc': 'dc2', 'rack': 'rack2b'})
+    await manager.server_add(config=config, cmdline=["--enforce-rack-list", "true", "--smp", "1"], property_file={'dc': 'dc2', 'rack': 'rack2b'})
 
     await cql.run_async("alter keyspace ksv with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1};")
 

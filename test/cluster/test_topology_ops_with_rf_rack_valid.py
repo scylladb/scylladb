@@ -10,6 +10,8 @@ import asyncio
 import logging
 import pytest
 
+from cassandra.protocol import InvalidRequest
+
 
 logger = logging.getLogger(__name__)
 
@@ -406,3 +408,47 @@ async def test_remove_last_node_in_dc_violating_rf_rack(manager: ScyllaClusterMa
         await manager.remove_node(servers[0].server_id, target_server.server_id)
     elif op == "decommission":
         await manager.decommission_node(target_server.server_id)
+
+
+async def test_remove_last_node_in_listed_rack_without_rf_rack_valid_keyspaces(manager: ScyllaClusterManager):
+    """
+    Test that removing the last node of a rack listed by a keyspace is rejected
+    even when rf_rack_valid_keyspaces is disabled and the keyspace has no views.
+
+    The keyspace has no tables, so the node holds no tablets and the removal
+    wouldn't fail on draining them. It used to succeed, leaving a keyspace
+    that lists a rack with no nodes, in which no table could be created.
+    """
+    cfg = {'rf_rack_valid_keyspaces': False}
+    servers = await manager.servers_add(3, config=cfg, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ])
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r3']} AND tablets = {'enabled': true}")
+
+    await manager.decommission_node(servers[2].server_id,
+            expected_error="node decommission rejected: Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid")
+
+    await cql.run_async("ALTER KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2']}")
+    await manager.decommission_node(servers[2].server_id)
+
+
+async def test_alter_to_rack_without_normal_nodes_without_rf_rack_valid_keyspaces(manager: ScyllaClusterManager):
+    """
+    Test that changing a numeric replication factor to a rack list is rejected
+    if a listed rack has no normal token owner, even when rf_rack_valid_keyspaces
+    is disabled and the keyspace has no views.
+
+    The keyspace doesn't use rack lists before the change, so it's the new
+    replication options that have to be taken into account.
+    """
+    cfg = {'rf_rack_valid_keyspaces': False}
+    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
+    await manager.server_add(config=cfg | {'join_ring': False}, property_file={"dc": "dc1", "rack": "r2"})
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'enabled': true}")
+
+    with pytest.raises(InvalidRequest, match="required to be RF-rack-valid"):
+        await cql.run_async("ALTER KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r2']}")
