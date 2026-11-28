@@ -141,6 +141,34 @@ BOOST_AUTO_TEST_CASE(test_estimated_statistics) {
     BOOST_CHECK_EQUAL(hist.get(1), 1);
 }
 
+// Checks that remove() undoes add() of the same value, also in the bucket of the values above the
+// last offset, and that remove() changes nothing when the bucket of the value is empty.
+BOOST_AUTO_TEST_CASE(test_estimated_histogram_remove) {
+    utils::estimated_histogram hist(150);
+    const int64_t overflow_value = hist.get_bucket_offsets().back() + 1;
+    // 11 and 12 go to the same bucket, whose offset is 12.
+    hist.add(5);
+    hist.add(11);
+    hist.add(12);
+    hist.add(overflow_value);
+    BOOST_REQUIRE(hist.remove(12));
+    BOOST_REQUIRE(hist.remove(overflow_value));
+    BOOST_REQUIRE(!hist.remove(100));
+
+    utils::estimated_histogram expected(150);
+    expected.add(5);
+    expected.add(11);
+    BOOST_REQUIRE(hist.get_buckets() == expected.get_buckets());
+    BOOST_REQUIRE_EQUAL(hist._count, expected._count);
+    BOOST_REQUIRE_EQUAL(hist._sample_sum, expected._sample_sum);
+
+    BOOST_REQUIRE(hist.remove(5));
+    BOOST_REQUIRE(hist.remove(11));
+    BOOST_REQUIRE(!hist.remove(11));
+    BOOST_REQUIRE_EQUAL(hist.count(), 0);
+    BOOST_REQUIRE_EQUAL(hist._sample_sum, 0);
+}
+
 BOOST_AUTO_TEST_CASE(test_summary_p95_p99) {
     utils::summary_calculator sc;
     std::vector<int> ms{512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048, 2560,

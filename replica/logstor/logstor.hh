@@ -11,6 +11,7 @@
 #include <seastar/core/temporary_buffer.hh>
 #include <map>
 #include <seastar/core/scheduling.hh>
+#include <seastar/util/noncopyable_function.hh>
 #include "db/cache_tracker.hh"
 #include "readers/mutation_reader.hh"
 #include "readers/mutation_reader_fwd.hh"
@@ -96,11 +97,19 @@ public:
     // group.
     future<> flush_to_separator();
 
-    future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout) noexcept;
+    // Writes a mutation, and calls `on_persisted` once the record is persisted and in the index.
+    // `on_persisted` does not run when the write fails.
+    // `on_persisted` runs while the holders of `target` are still held. The write buffer keeps
+    // `target` with the copy of the record for the separator, and the buffer gives the copy to the
+    // separator only after each write in the buffer ends.
+    future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout,
+            noncopyable_function<void() noexcept> on_persisted = {}) noexcept;
 
-    // Writes a frozen mutation without unfreezing it. s must be the schema version that the
-    // mutation was frozen with.
-    future<> write(const frozen_mutation&, const schema& s, write_target target, db::timeout_clock::time_point timeout) noexcept;
+    // Writes a frozen mutation without unfreezing it, and calls `on_persisted` as the other write()
+    // does.
+    // `s` must be the schema version that the mutation was frozen with.
+    future<> write(const frozen_mutation&, const schema& s, write_target target, db::timeout_clock::time_point timeout,
+            noncopyable_function<void() noexcept> on_persisted = {}) noexcept;
 
     // Creates a mutation reader for a partition range.
     // The reader fails with key_mismatch_error if the record or the cached partition at the indexed
@@ -127,7 +136,7 @@ private:
     future<> do_flush_to_separator();
 
     future<> do_write(const schema&, dht::decorated_key, api::timestamp_type, record_value,
-            write_target target, db::timeout_clock::time_point timeout);
+            write_target target, db::timeout_clock::time_point timeout, noncopyable_function<void() noexcept> on_persisted);
 };
 
 } // namespace logstor

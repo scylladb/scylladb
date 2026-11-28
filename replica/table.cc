@@ -281,8 +281,15 @@ table::make_mutation_reader(schema_ptr s,
         return (*_virtual_reader).make_mutation_reader(s, std::move(permit), range, slice, trace_state, fwd, fwd_mr);
     }
 
+    auto with_data_listeners = [&] (mutation_reader rd) {
+        if (_config.data_listeners && !_config.data_listeners->empty()) {
+            rd = _config.data_listeners->on_read(s, range, slice, std::move(rd));
+        }
+        return rd;
+    };
+
     if (_logstor) [[unlikely]] {
-        return _logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
+        return with_data_listeners(_logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr));
     }
 
     std::vector<mutation_reader> readers;
@@ -321,13 +328,7 @@ table::make_mutation_reader(schema_ptr s,
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
     }
 
-    auto rd = make_combined_reader(s, permit, std::move(readers), fwd, fwd_mr);
-
-    if (_config.data_listeners && !_config.data_listeners->empty()) {
-        rd = _config.data_listeners->on_read(s, range, slice, std::move(rd));
-    }
-
-    return rd;
+    return with_data_listeners(make_combined_reader(s, permit, std::move(readers), fwd, fwd_mr));
 }
 
 sstables::shared_sstable table::make_streaming_sstable_for_write() {
@@ -2653,6 +2654,14 @@ uint64_t table::logstor_disk_space_used() const {
 
 uint64_t table::logstor_live_record_bytes() const {
     return uses_logstor() ? logstor_index().get_usage().live_record_bytes : 0;
+}
+
+uint64_t table::logstor_key_count() const {
+    return uses_logstor() ? logstor_index().get_usage().key_count : 0;
+}
+
+utils::estimated_histogram table::logstor_record_size_histogram() const {
+    return uses_logstor() ? logstor_index().record_sizes() : utils::estimated_histogram(0);
 }
 
 utils::file_size_stats table::live_disk_space_used() const {
@@ -5529,6 +5538,16 @@ static future<> run_write_when_memory_available(const schema& s, dirty_memory_ma
     return rg.run_when_memory_available(std::forward<Func>(func), timeout);
 }
 
+static noncopyable_function<void() noexcept> start_logstor_write_latency(utils::timed_rate_moving_average_summary_and_histogram& stats) {
+    utils::latency_counter lc;
+    stats.set_latency(lc);
+    auto mark = [&stats, lc] () mutable noexcept {
+        stats.mark(lc);
+    };
+    static_assert(sizeof(mark) <= 32, "A larger capture does not fit in noncopyable_function and allocates on each write");
+    return mark;
+}
+
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     if (_virtual_writer) [[unlikely]] {
         return (*_virtual_writer)(freeze(m));
@@ -5539,7 +5558,8 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
     auto ss_holder = cg.sstable_add_gate().hold();
 
     if (_logstor) [[unlikely]] {
-        return _logstor->write(m, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout);
+        return _logstor->write(m, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout,
+                start_logstor_write_latency(_stats.writes));
     }
 
     return run_write_when_memory_available(*m.schema(), dirty_memory_region_group(), [this, &m, h = std::move(h), &cg, holder = std::move(holder), ss_holder = std::move(ss_holder)] () mutable {
@@ -5561,7 +5581,8 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
     auto ss_holder = cg.sstable_add_gate().hold();
 
     if (_logstor) [[unlikely]] {
-        return _logstor->write(m, *m_schema, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout);
+        return _logstor->write(m, *m_schema, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout,
+                start_logstor_write_latency(_stats.writes));
     }
 
     return run_write_when_memory_available(s, dirty_memory_region_group(), [this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), ss_holder = std::move(ss_holder), guardrails = std::move(guardrails), violations_out]() mutable {
@@ -6590,7 +6611,52 @@ dht::shard_replica_set table::shard_for_writes(dht::token t) const {
                 : dht::shard_replica_set{dht::static_shard_of(*_schema, t)}; // for tests.
 }
 
+// Returns an estimate of the number of keys of `index` in `tr`.
+// The estimate is exact when `tr` holds a small number of keys, because the function then counts
+// them. For a larger range, the function scales the key count of the index by the part of the ranges of
+// `storage_groups` that `tr` covers. The token of a key is a hash, so the keys of a shard are
+// uniform over the token ranges that its storage groups own.
+// The function assumes that the table uses tablets, because logstor is meant for tablets and not
+// for vnodes. The single storage group of a vnode table covers the whole ring, but the index holds
+// only the keys of the ranges that the node replicates. So with vnodes on more than one node, the
+// scaled estimate is too small by the part of the ring that the node does not replicate.
+// The scaled estimate is also wrong while the shard receives the keys of a pending tablet by
+// streaming, because the storage group of the tablet adds its range before its keys arrive. Until
+// the streaming ends, the estimates of the other ranges of the shard are too small by up to the
+// part of the pending tablet in the ranges of the shard.
+static uint64_t estimate_logstor_keys_in_range(const logstor::primary_index& index, const storage_group_map& storage_groups,
+        const dht::token_range& tr) {
+    // Counting this many keys takes tens of microseconds, so the count does not need a yield.
+    // With more keys than this in the range, the standard deviation of the scaled estimate is
+    // at most about 3% of the estimate.
+    constexpr uint64_t exact_count_limit = 1024;
+    if (auto count = index.count_keys_in_token_range(tr, exact_count_limit)) {
+        return *count;
+    }
+
+    const auto full_range = dht::token_range::make(dht::first_token(), dht::last_token());
+    double owned_width = 0;
+    double covered_width = 0;
+    for (const auto& sg : storage_groups | std::views::values) {
+        const auto& range = sg->token_range();
+        owned_width += dht::overlap_ratio(full_range, range);
+        if (auto common = range.intersection(tr, dht::token_comparator())) {
+            covered_width += dht::overlap_ratio(full_range, *common);
+        }
+    }
+    uint64_t estimate = 0;
+    if (owned_width > 0) {
+        estimate = static_cast<uint64_t>(index.get_usage().key_count * (covered_width / owned_width));
+    }
+    // The count found more than `exact_count_limit` keys in the range.
+    return std::max(estimate, exact_count_limit + 1);
+}
+
 future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const {
+    if (_logstor) {
+        co_return estimate_logstor_keys_in_range(logstor_index(), storage_groups(), tr);
+    }
+
     // FIXME: use a better estimation for the set than a simple sum of individual estimations for each sstable.
     //
     // If sstables can be grouped by token range,

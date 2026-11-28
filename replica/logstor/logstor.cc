@@ -139,27 +139,29 @@ future<> logstor::do_flush_to_separator() {
     co_await _segment_manager.await_pending_writes();
 }
 
-future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) noexcept {
+future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout,
+        noncopyable_function<void() noexcept> on_persisted) noexcept {
     try {
         return do_write(*m.schema(), m.decorated_key(), record_timestamp(m), encode_record_value(m),
-                std::move(target), timeout);
+                std::move(target), timeout, std::move(on_persisted));
     } catch (...) {
         return current_exception_as_future();
     }
 }
 
-future<> logstor::write(const frozen_mutation& m, const schema& s, write_target target, db::timeout_clock::time_point timeout) noexcept {
+future<> logstor::write(const frozen_mutation& m, const schema& s, write_target target, db::timeout_clock::time_point timeout,
+        noncopyable_function<void() noexcept> on_persisted) noexcept {
     try {
         check_schema_version(m.schema_version(), s);
         return do_write(s, m.decorated_key(s), record_timestamp(m), encode_record_value(m, s),
-                std::move(target), timeout);
+                std::move(target), timeout, std::move(on_persisted));
     } catch (...) {
         return current_exception_as_future();
     }
 }
 
 future<> logstor::do_write(const schema& s, dht::decorated_key dk, api::timestamp_type ts, record_value value,
-        write_target target, db::timeout_clock::time_point timeout) {
+        write_target target, db::timeout_clock::time_point timeout, noncopyable_function<void() noexcept> on_persisted) {
     auto count_failure = defer([this] noexcept { ++_stats.write_failures; });
     auto gate_holder = _async_gate.hold();
 
@@ -181,6 +183,9 @@ future<> logstor::do_write(const schema& s, dht::decorated_key dk, api::timestam
         .location = location,
         .timestamp = ts,
     });
+    if (on_persisted) {
+        on_persisted();
+    }
     count_failure.cancel();
 }
 

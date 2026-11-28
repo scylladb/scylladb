@@ -7,7 +7,9 @@ import asyncio
 import logging
 import time
 
-from test.cluster.util import new_test_keyspace, new_test_table
+import pytest
+
+from test.cluster.util import new_test_keyspace, new_test_table, FeatureConfig, FeatureConfigurations, feature_configs
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_all_tablet_replicas
@@ -45,8 +47,12 @@ async def check_estimates(manager, server, ks, cf, estimates, n):
 
 
 # Reproduces CUSTOMER-742: size_estimates reported vnode ranges for tablet tables.
-async def test_size_estimates_report_primary_tablets(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(3, property_file=[
+# A logstor table takes its estimates from its index and not from sstables, so the test also runs
+# on a logstor table.
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+    FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
+async def test_size_estimates_report_primary_tablets(manager: ScyllaClusterManager, feature_config: FeatureConfig):
+    servers = await manager.servers_add(3, config=feature_config.get_cluster_cfg(), property_file=[
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r2"},
@@ -56,9 +62,11 @@ async def test_size_estimates_report_primary_tablets(manager: ScyllaClusterManag
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
     N = 100
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} "
-                                          "AND tablets = {'enabled': true}") as ks, \
-               new_test_table(manager, ks, "pk int PRIMARY KEY", " WITH tablets = {'min_tablet_count': 8}") as table:
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': true}")
+    table_opts = feature_config.get_table_opts(" WITH tablets = {'min_tablet_count': 8}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks, \
+               new_test_table(manager, ks, "pk int PRIMARY KEY", table_opts) as table:
         cf = table.split(".")[1]
         insert = cql.prepare(f"INSERT INTO {table} (pk) VALUES (?)")
         await asyncio.gather(*[cql.run_async(insert, [k]) for k in range(N)])

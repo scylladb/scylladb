@@ -156,6 +156,139 @@ def test_column_family_compaction_strategy(cql, this_dc, rest_api):
             check_strategy("IncrementalCompactionStrategy")
 
 
+# Test that the minimum partition size of a table, which nodetool cfstats
+# shows, is the minimum of the shards that hold partitions of the table.
+# The table has one partition, so only one shard holds a partition of the
+# table, and a shard that holds no partition must not make the minimum 0.
+def test_column_family_min_row_size(cql, this_dc, rest_api, storage_engine):
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as test_keyspace:
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int", storage_engine.table_options) as t:
+            test_table = t.split('.')[1]
+            cql.execute(f"INSERT INTO {t} (pk, v) VALUES (1, 1)")
+            resp = rest_api.send("POST", f"storage_service/keyspace_flush/{test_keyspace}")
+            resp.raise_for_status()
+
+            resp = rest_api.send("GET", f"column_family/metrics/min_row_size/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            assert resp.json() > 0
+
+            resp = rest_api.send("GET", "column_family/metrics/min_row_size")
+            resp.raise_for_status()
+            assert resp.json() > 0
+
+
+# Test that the column_family API reports the partition count and the
+# partition sizes of a table. nodetool cfstats and nodetool tablehistograms
+# read this API.
+def test_column_family_partition_estimates(cql, this_dc, rest_api, storage_engine):
+    key_count = 100
+    value_size = 1000
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as test_keyspace:
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v text", storage_engine.table_options) as t:
+            test_table = t.split('.')[1]
+
+            # Returns the value of a metric of the table, which the server
+            # computes over all shards.
+            def get_metric(name):
+                resp = rest_api.send("GET", f"column_family/metrics/{name}/{test_keyspace}:{test_table}")
+                resp.raise_for_status()
+                return resp.json()
+
+            # Returns the partition count of the table and its mean partition
+            # size.
+            # The estimates of a normal table add up the partitions of each
+            # sstable, so the function first compacts the memtable and the
+            # sstables of the table, so that each partition is in one sstable
+            # only. The index of a logstor table counts each key once, with or
+            # without the compaction.
+            def get_estimates():
+                resp = rest_api.send("POST", f"storage_service/keyspace_compaction/{test_keyspace}", params={"cf": test_table})
+                resp.raise_for_status()
+                return (get_metric('estimated_row_count'), get_metric('mean_row_size'))
+
+            # Returns the minimum and the maximum partition size of the table,
+            # and the count of its partition size histogram. The caller must
+            # call get_estimates() first, which compacts the table.
+            def get_size_range():
+                histogram = get_metric('estimated_row_size_histogram')
+                return (get_metric('min_row_size'), get_metric('max_row_size'), sum(histogram['buckets']))
+
+            assert get_estimates() == (0, 0)
+            assert get_size_range() == (0, 0, 0)
+
+            insert = cql.prepare(f"INSERT INTO {t} (pk, v) VALUES (?, ?)")
+            value = 'x' * value_size
+            for pk in range(key_count):
+                cql.execute(insert, [pk, value])
+
+            count, mean_size = get_estimates()
+            assert count == key_count
+            # The size of a partition adds the size of its key and of its
+            # metadata to the size of its value.
+            assert value_size < mean_size < 2 * value_size
+            # The histogram counts the sizes in buckets, so the minimum and the
+            # maximum are the bounds of buckets, and the mean is between them.
+            min_size, max_size, histogram_count = get_size_range()
+            assert 0 < min_size <= mean_size <= max_size
+            assert histogram_count == key_count
+
+            # An overwrite does not add a partition, and a delete leaves a
+            # tombstone that both engines count as a partition. So neither
+            # changes the count.
+            # Compaction of a normal table does not purge a new tombstone, and
+            # logstor never purges a tombstone, so the index keeps an entry
+            # for the deleted key.
+            for pk in range(key_count // 2):
+                cql.execute(insert, [pk, value])
+            for pk in range(key_count // 2, key_count):
+                cql.execute(f"DELETE FROM {t} WHERE pk = {pk}")
+            count, mean_size_after_deletes = get_estimates()
+            assert count == key_count
+            assert mean_size_after_deletes < mean_size
+            # A tombstone is much smaller than a partition with a value, so it
+            # is in a smaller bucket than the partitions that the deletes
+            # replaced.
+            min_size_after_deletes, max_size_after_deletes, histogram_count = get_size_range()
+            assert min_size_after_deletes < min_size
+            assert min_size_after_deletes <= mean_size_after_deletes <= max_size_after_deletes
+            assert histogram_count == key_count
+
+            cql.execute(f"TRUNCATE {t}")
+            assert get_estimates() == (0, 0)
+            assert get_size_range() == (0, 0, 0)
+
+
+# Test that the column_family API counts the writes of a table and times
+# them. nodetool cfstats reads this API.
+def test_column_family_write_stats(cql, this_dc, rest_api, storage_engine):
+    key_count = 10
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as test_keyspace:
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int", storage_engine.table_options) as t:
+            test_table = t.split('.')[1]
+            insert = cql.prepare(f"INSERT INTO {t} (pk, v) VALUES (?, ?)")
+            for pk in range(key_count):
+                cql.execute(insert, [pk, pk])
+
+            resp = rest_api.send("GET", f"column_family/metrics/write/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            assert resp.json() == key_count
+
+            resp = rest_api.send("GET", f"column_family/metrics/write_latency/moving_average_histogram/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            latency = resp.json()
+            assert latency['hist']['count'] == key_count
+            # A logstor write returns only after its buffer is written to disk,
+            # so its time is much more than the resolution of 1 us, and a time
+            # of 0 shows that the latency counter did not start.
+            # A memtable write can take less than 1 us, so the check is only for
+            # a logstor table.
+            if storage_engine.name == 'logstor':
+                assert latency['hist']['max'] > 0
+
+
 # Test that get_live|total_disk_space_used returns sane values
 def test_sstables_total_disk_space_sanity(cql, this_dc, rest_api):
     ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"

@@ -94,13 +94,17 @@ static dht::partition_range as_ring_position_range(const dht::token_range& r) {
 }
 
 /**
- * Add a new range_estimates for the specified range, considering the sstables associated
- * with the table identified by `cf_id` across all shards.
+ * Add a new range_estimates for the specified range, considering the sstables or the logstor index
+ * of the table identified by `cf_id` across all shards.
  */
 static future<system_keyspace::range_estimates> estimate(replica::database& db, table_id cf_id, schema_ptr schema, const token_range& r) {
     struct shard_estimate {
         int64_t count = 0;
         utils::estimated_histogram hist{0};
+        // The logstor index gives the record sizes of the whole table and not of one token range,
+        // so the mean partition size of a logstor table is the mean of the whole table.
+        uint64_t logstor_live_record_bytes = 0;
+        uint64_t logstor_key_count = 0;
     };
     auto from_bytes = [] (auto& b) {
         return dht::token::from_sstring(utf8_type->to_string(b));
@@ -111,7 +115,7 @@ static future<system_keyspace::range_estimates> estimate(replica::database& db, 
         dht::token_comparator(),
         [&] (auto&& rng) { ranges.push_back(std::move(rng)); });
 
-    // Estimate partition count and size distribution from sstables on a single shard.
+    // Estimate partition count and size distribution from sstables or the logstor index on a single shard.
     auto estimate_on_shard = [cf_id, ranges] (replica::database& local_db) -> future<shard_estimate> {
         auto table_ptr = local_db.get_tables_metadata().get_table_if_exists(cf_id);
         if (!table_ptr) {
@@ -119,6 +123,14 @@ static future<system_keyspace::range_estimates> estimate(replica::database& db, 
         }
         auto& cf = *table_ptr;
         shard_estimate result;
+        if (cf.uses_logstor()) {
+            for (auto&& r : ranges) {
+                result.count += co_await cf.estimated_partitions_in_range(r);
+            }
+            result.logstor_live_record_bytes = cf.logstor_live_record_bytes();
+            result.logstor_key_count = cf.logstor_key_count();
+            co_return result;
+        }
         for (auto&& r : ranges) {
             auto rp_range = as_ring_position_range(r);
             for (auto&& sstable : cf.select_sstables(rp_range)) {
@@ -133,11 +145,18 @@ static future<system_keyspace::range_estimates> estimate(replica::database& db, 
     auto reduce = [] (shard_estimate a, const shard_estimate& b) {
         a.count += b.count;
         a.hist.merge(b.hist);
+        a.logstor_live_record_bytes += b.logstor_live_record_bytes;
+        a.logstor_key_count += b.logstor_key_count;
         return a;
     };
 
     auto aggregate = co_await db.container().map_reduce0(std::move(estimate_on_shard), shard_estimate{}, std::move(reduce));
-    int64_t mean_size = aggregate.count > 0 ? aggregate.hist.mean() : 0;
+    int64_t mean_size = 0;
+    if (aggregate.count > 0) {
+        mean_size = aggregate.logstor_key_count > 0
+                ? aggregate.logstor_live_record_bytes / aggregate.logstor_key_count
+                : aggregate.hist.mean();
+    }
     co_return system_keyspace::range_estimates{std::move(schema), r.start, r.end, aggregate.count, mean_size};
 }
 

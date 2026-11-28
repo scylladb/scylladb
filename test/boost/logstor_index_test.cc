@@ -140,8 +140,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_index_key_hashes_key_representation) {
     BOOST_REQUIRE(key1 != key0);
 }
 
-// Checks that primary_index accounting callbacks track live bytes across
-// inserts, overwrites, relocations, erases, range erases, and clear().
+// Checks that primary_index accounting callbacks track live bytes and the record size histogram
+// across inserts, overwrites, relocations, erases, range erases, and clear().
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     auto schema = make_logstor_schema();
     struct accounting_subscriber : space_accounting_subscriber {
@@ -161,6 +161,20 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
             return std::count_if(added_locations.begin(), added_locations.end(), [&] (record_location loc) {
                 return is_live(loc);
             });
+        }
+
+        // Returns the counts of the live records by size, in the buckets of the record size
+        // histogram.
+        std::vector<int64_t> live_size_buckets() const {
+            auto live = added_locations;
+            for (auto loc : freed_locations) {
+                live.erase(std::ranges::find(live, loc));
+            }
+            utils::estimated_histogram sizes(record_size_bucket_count);
+            for (auto loc : live) {
+                sizes.add(loc.size);
+            }
+            return sizes.get_buckets();
         }
 
         void on_add_record(record_location loc) noexcept override {
@@ -189,9 +203,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
 
     // The index counts the bytes of the records it points at for the table it belongs to, which is
     // the same number the subscriber accumulates, so the two must agree after every operation.
+    // The record size histogram of the index must also count the sizes of the live records that
+    // the subscriber has.
     auto check_live_bytes = [&] (ssize_t expected) {
         BOOST_REQUIRE_EQUAL(accounting.live_bytes, expected);
         BOOST_REQUIRE_EQUAL(index.get_usage().live_record_bytes, uint64_t(expected));
+        BOOST_REQUIRE(std::ranges::equal(index.record_sizes().get_buckets(), accounting.live_size_buckets()));
     };
 
     const auto pk0 = make_primary_index_key(*schema, "pk0");
@@ -784,6 +801,35 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_to
     BOOST_REQUIRE_EQUAL(visited, 1u);
 
     BOOST_REQUIRE(!scan.next_batch(2, count_visit(visited)));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_count_keys_in_token_range) {
+    auto schema = make_logstor_schema();
+    primary_index index(noop_space_accounting, nullptr, false);
+
+    // Each token holds one key, except token 100, which holds three keys.
+    constexpr int64_t token_count = 3000;
+    for (int64_t t = 1; t <= token_count; ++t) {
+        insert_same_token_keys(index, *schema, t, t * 10, t == 100 ? 3 : 1);
+    }
+    const uint64_t total = token_count + 2;
+
+    auto t = [] (int64_t v) { return dht::token::from_int64(v); };
+    auto count = [&] (dht::token_range tr) { return index.count_keys_in_token_range(tr, total).value(); };
+
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make_open_ended_both_sides()), total);
+    // The count stops at the limit, also in the middle of a token run.
+    BOOST_REQUIRE(!index.count_keys_in_token_range(dht::token_range::make_open_ended_both_sides(), total - 1));
+    BOOST_REQUIRE(!index.count_keys_in_token_range(dht::token_range::make({t(99), true}, {t(101), true}), 3));
+    BOOST_REQUIRE(index.count_keys_in_token_range(dht::token_range::make({t(99), true}, {t(101), true}), 5) == 5u);
+    BOOST_REQUIRE(index.count_keys_in_token_range(dht::token_range::make({t(token_count + 1), true}, {t(token_count + 10), true}), 0) == 0u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(100), true}, {t(100), true})), 3u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(99), true}, {t(101), true})), 5u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(99), false}, {t(101), false})), 3u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(100), false}, {t(102), true})), 2u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make_starting_with({t(2001), true})), 1000u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make_ending_with({t(1000), false})), 999u + 2);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(token_count + 1), true}, {t(token_count + 10), true})), 0u);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_exchange) {

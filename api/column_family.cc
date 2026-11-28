@@ -238,16 +238,27 @@ future<json::json_return_type> get_cf_unleveled_sstables(sharded<replica::databa
     }, std::plus<int64_t>());
 }
 
+// Returns the minimum partition size of the table on this shard, or INT64_MAX when the shard holds
+// no partition of the table, so that the shard does not change the minimum of the reduce.
 int64_t min_partition_size(replica::column_family& cf) {
     int64_t res = INT64_MAX;
+    if (auto logstor_sizes = cf.logstor_record_size_histogram(); logstor_sizes.count() > 0) {
+        res = logstor_sizes.min();
+    }
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::min(res, i->get_stats_metadata().estimated_partition_size.min());
     }
+    return res;
+}
+
+// Returns the minimum that the reduce of min_partition_size() gives, or 0 when no shard holds a
+// partition.
+json::json_return_type min_partition_size_json(int64_t res) {
     return (res == INT64_MAX) ? 0 : res;
 }
 
 int64_t max_partition_size(replica::column_family& cf) {
-    int64_t res = 0;
+    int64_t res = cf.logstor_record_size_histogram().max();
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::max(i->get_stats_metadata().estimated_partition_size.max(), res);
     }
@@ -256,6 +267,8 @@ int64_t max_partition_size(replica::column_family& cf) {
 
 integral_ratio_holder mean_partition_size(replica::column_family& cf) {
     integral_ratio_holder res;
+    res.sub += cf.logstor_live_record_bytes();
+    res.total += cf.logstor_key_count();
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         auto c = i->get_stats_metadata().estimated_partition_size.count();
         res.sub += i->get_stats_metadata().estimated_partition_size.mean() * c;
@@ -743,7 +756,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     // FIXME: this refers to partitions, not rows.
     cf::get_estimated_row_size_histogram.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(db, req->get_path_param("name"), utils::estimated_histogram(0), [](replica::column_family& cf) {
-            utils::estimated_histogram res(0);
+            // A table keeps its data either in logstor or in sstables, so only one of the two adds
+            // counts to `res`.
+            // The reduce step merges the histograms of the shards into estimated_histogram(0), and
+            // merge() gives the result the standard bucket offsets of utils::estimated_histogram, so
+            // the logstor histogram must use these offsets.
+            auto res = cf.logstor_record_size_histogram();
             for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res.merge(i->get_stats_metadata().estimated_partition_size);
             }
@@ -756,6 +774,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     cf::get_estimated_row_count.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(db, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
             uint64_t res = 0;
+            res += cf.logstor_key_count();
             for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res += i->get_stats_metadata().estimated_partition_size.count();
             }
@@ -887,12 +906,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     // FIXME: this refers to partitions, not rows.
     cf::get_min_row_size.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(db, req->get_path_param("name"), INT64_MAX, min_partition_size, min_int64);
+        return map_reduce_cf_raw(db, req->get_path_param("name"), INT64_MAX, min_partition_size, min_int64).then(min_partition_size_json);
     });
 
     // FIXME: this refers to partitions, not rows.
     cf::get_all_min_row_size.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(db, INT64_MAX, min_partition_size, min_int64);
+        return map_reduce_cf_raw(db, INT64_MAX, min_partition_size, min_int64).then(min_partition_size_json);
     });
 
     // FIXME: this refers to partitions, not rows.
