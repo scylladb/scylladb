@@ -209,8 +209,31 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         co_return;
     },
     [&] (write_mutations& muts) -> future<> {
+<<<<<<< HEAD
         auto modules_to_reload = get_modules_to_reload(muts.mutations);
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
+||||||| parent of 4af947e115 (test: cluster: reproduce a view build resurrecting a deleted index entry)
+        modules_to_reload = get_modules_to_reload(muts.mutations);
+        co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(muts.mutations));
+    }
+    ), cmd.change);
+
+    if (_in_memory_state_machine_enabled) {
+        if (topology_state_change_hint) {
+            co_await _ss.topology_transition(std::move(*topology_state_change_hint));
+        }
+=======
+        modules_to_reload = get_modules_to_reload(muts.mutations);
+        co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(muts.mutations));
+    }
+    ), cmd.change);
+
+    if (_in_memory_state_machine_enabled) {
+        if (topology_state_change_hint) {
+            co_await _ss.topology_transition(std::move(*topology_state_change_hint));
+        }
+        co_await utils::get_local_injector().inject("group0_state_machine_pause_before_reload_modules", utils::wait_for_message(60s));
+>>>>>>> 4af947e115 (test: cluster: reproduce a view build resurrecting a deleted index entry)
         co_await reload_modules(std::move(modules_to_reload));
     }
     ), cmd.change);

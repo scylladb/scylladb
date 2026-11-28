@@ -1004,6 +1004,18 @@ private:
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
+<<<<<<< HEAD
+||||||| parent of 2aedfc7da4 (storage_service: suspend tombstone GC on views until they are built everywhere)
+    // load view building state machine snapshot into memory
+    // raft_group0_client::_read_apply_mutex must be held
+    future<> view_building_state_load();
+=======
+    // load view building state machine snapshot into memory
+    // raft_group0_client::_read_apply_mutex must be held
+    future<> view_building_state_load();
+    // Stores the views whose build is finished on every node in the tombstone GC state of every shard
+    future<> update_built_views(const db::system_keyspace::view_build_status_map& statuses);
+>>>>>>> 2aedfc7da4 (storage_service: suspend tombstone GC on views until they are built everywhere)
 
     std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp, utils::UUID old_request_id = utils::UUID{});
     std::unordered_set<raft::server_id> ignored_nodes_from_join_params(const join_node_request_params& params);
