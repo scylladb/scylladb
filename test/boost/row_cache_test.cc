@@ -944,6 +944,102 @@ SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
     });
 }
 
+static uint64_t eviction_age_samples(const cache_tracker& tracker, uint64_t age_seconds) {
+    auto& h = tracker.eviction_age();
+    return h.get(h.find_bucket_index(age_seconds));
+}
+
+static uint64_t eviction_age_total(const cache_tracker& tracker) {
+    auto& h = tracker.eviction_age();
+    uint64_t total = 0;
+    for (size_t i = 0; i < h.size(); ++i) {
+        total += h.get(i);
+    }
+    return total;
+}
+
+// Ages sit at the low edge of wide buckets, so a long stall can't move them across a boundary.
+SEASTAR_THREAD_TEST_CASE(test_eviction_age_recorded_under_pressure) {
+    auto s = make_schema();
+    auto mt = make_lw_shared<replica::memtable>(s);
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+    auto now = lowres_clock::now();
+    tracker.insert_age_marker(now - 900s);
+    for (int i = 0; i < 10; ++i) {
+        cache.populate(make_new_mutation(s));
+    }
+    tracker.insert_age_marker(now - 130s);
+    for (int i = 0; i < 10; ++i) {
+        cache.populate(make_new_mutation(s));
+    }
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 2);
+
+    while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
+
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 0);
+    // An empty LRU has no old entry, so the front timestamp is reset.
+    BOOST_REQUIRE(tracker.lru_front_timestamp() >= now);
+    auto old_samples = eviction_age_samples(tracker, 900);
+    auto young_samples = eviction_age_samples(tracker, 130);
+    BOOST_REQUIRE_GE(old_samples, 10);
+    BOOST_REQUIRE_GE(young_samples, 10);
+    BOOST_REQUIRE_EQUAL(old_samples + young_samples, eviction_age_total(tracker));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_eviction_age_not_recorded_for_invalidation) {
+    auto s = make_schema();
+    auto mt = make_lw_shared<replica::memtable>(s);
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+    auto populate = [&] {
+        tracker.insert_age_marker(lowres_clock::now() - 900s);
+        for (int i = 0; i < 10; ++i) {
+            cache.populate(make_new_mutation(s));
+        }
+    };
+
+    populate();
+    auto before_invalidate = lowres_clock::now();
+    cache.invalidate(row_cache::external_updater([] {})).get();
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    // The cache is empty, so the old marker must not date what is cached next.
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 0);
+    BOOST_REQUIRE(tracker.lru_front_timestamp() >= before_invalidate);
+
+    populate();
+    tracker.clear();
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 0);
+
+    BOOST_REQUIRE_EQUAL(eviction_age_total(tracker), 0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_eviction_age_markers_bounded) {
+    auto s = make_schema();
+    auto mt = make_lw_shared<replica::memtable>(s);
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+    auto now = lowres_clock::now();
+    tracker.insert_age_marker(now - 900s);
+    cache.populate(make_new_mutation(s));
+    for (int i = 0; i < 1000; ++i) {
+        tracker.insert_age_marker(now - 130s);
+        BOOST_REQUIRE_LE(tracker.linked_age_markers(), 256);
+    }
+    BOOST_REQUIRE_GE(tracker.linked_age_markers(), 128);
+
+    // Coarsening keeps the oldest marker, so the entry behind it still reports its age.
+    while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 0);
+    BOOST_REQUIRE_GE(eviction_age_samples(tracker, 900), 1);
+    BOOST_REQUIRE_EQUAL(eviction_age_samples(tracker, 900), eviction_age_total(tracker));
+}
+
 void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::deque<int> expected)
 {
     auto close_reader = deferred_close(reader);
