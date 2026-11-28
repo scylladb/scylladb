@@ -22,6 +22,10 @@ To build a self-signed certificate chain, see :doc:`generating a self-signed cer
      * ``rack`` - Encrypts the traffic between the racks.
      * ``transitional`` - Encrypts all outgoing traffic, but allows non-encrypted incoming. Used for upgrading cluster(s) without downtime.
 
+     With ``dc`` or ``rack``, a node whose ``listen_address`` differs from its ``broadcast_address`` encrypts all its outgoing traffic,
+     unless ``listen_on_broadcast_address`` is ``true``. Peers place a plaintext connection by its source address,
+     and they may not know the node's ``listen_address``.
+
    * ``certificate`` - A PEM format certificate, either self-signed, or provided by a certificate authority (CA).
    * ``keyfile`` - The corresponding PEM format key for the certificate.
    * ``truststore`` - Optional path to a PEM format certificate store of trusted CAs. If not provided, ScyllaDB will attempt to use the system trust store to authenticate certificates.

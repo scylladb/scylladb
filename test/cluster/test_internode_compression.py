@@ -6,6 +6,9 @@
 import logging
 import asyncio
 
+import psutil
+import pytest
+
 from test.pylib.host_registry import HostRegistry
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import IPAddress
@@ -14,12 +17,25 @@ from cassandra.cluster import ConsistencyLevel
 
 logger = logging.getLogger(__name__)
 
+PLAIN_PORT = 7000
+SSL_PORT = 7001
+# (mode, dcs, extra_config) for dc and rack internode_compression/internode_encryption. The rack
+# case puts both dc1 nodes in one rack, so RF=2 in dc1 is not rf-rack-valid.
+DC_RACK_PARAMS = [
+    ("dc", (('dc1','rack1'), ('dc1', 'rack2'), ('dc2', 'rack3')), {}),
+    ("rack", (('dc1','rack1'), ('dc1', 'rack1'), ('dc2', 'rack2')), {'rf_rack_valid_keyspaces': False}),
+]
+
 # Refs #27429
 # Transposed/adapted from dtest with same name
-async def do_test_internode_compression_between_datacenters(manager: ScyllaClusterManager, compression: str, verifier) -> None:
+async def do_test_internode_traffic_between_datacenters(manager: ScyllaClusterManager, compression: str, verifier,
+                                                        dcs: tuple[tuple[str, str], ...] = (('dc1','rack1'), ('dc1', 'rack2'), ('dc2', 'rack3')),
+                                                        rpc_on_broadcast: bool = False, encryption: str = "none",
+                                                        extra_config: dict | None = None) -> None:
     """
-    Verify that compression between datacenters is compressed if internode_compression is set to dc and
-    not compressed for intra-dc communication.
+    Start one node per entry of dcs, each behind proxies on its broadcast address, write one row
+    at CL=ALL and pass the proxies' traffic stats to verifier. The verifier checks compression or
+    encryption of the traffic.
     """
 
     class Stats:
@@ -33,7 +49,7 @@ async def do_test_internode_compression_between_datacenters(manager: ScyllaClust
 
     # Simple python async io proxy type
     class Proxy:
-        def __init__(self, listen_addr: str, dest_addr: str, port:int = 7000):
+        def __init__(self, listen_addr: str, dest_addr: str, port:int = PLAIN_PORT):
             self.list_addr = listen_addr
             self.dest_addr = dest_addr
             self.port = port
@@ -108,26 +124,32 @@ async def do_test_internode_compression_between_datacenters(manager: ScyllaClust
 
     logger.info("Creating a new cluster of 2 nodes in 1st DC and 1 node in 2nd DC")
 
-    dcs = [('dc1','rack1'), ('dc1', 'rack2'), ('dc2', 'rack3')]
     proxy_addrs = [ (await HostRegistry().lease_host(),dc,rack) for dc,rack in dcs]
     seeds = [IPAddress(addr) for addr,_,_ in proxy_addrs]
     seeds = [proxy_addrs[0][0]]
-    config = {"internode_compression": compression, "ssl_storage_port": 0 }
+    config = {"internode_compression": compression, "ssl_storage_port": SSL_PORT if encryption != "none" else 0 } | (extra_config or {})
 
     # create unstarted servers
     # use our proxy addresses as broadcast so we can insert proxies
-    servers = [(await manager.server_add(config=config | { 'broadcast_address':addr }, start=False,
+    # rpc_on_broadcast moves the CQL address off the listen address, so the listen
+    # address is neither the broadcast nor the CQL address of the node (SCYLLADB-6003).
+    servers = [(await manager.server_add(config=config | { 'broadcast_address':addr }
+                                                | ({ 'rpc_address':addr } if rpc_on_broadcast else {}), start=False,
+                                         server_encryption=encryption,
                                          property_file={"dc": dc, "rack": rack}), addr)
                                          for addr, dc, rack in proxy_addrs]
 
     # now create our proxies and start them
     proxies = [Proxy(addr, s.ip_addr) for s,addr in servers]
+    # With encryption, the TLS connections go to the ssl port and need proxies too.
+    ssl_proxies = [Proxy(addr, s.ip_addr, SSL_PORT) for s,addr in servers] if encryption != "none" else []
+    all_proxies = proxies + ssl_proxies
     proxy_futs = []
     try:
-        for p in proxies:
+        for p in all_proxies:
             await p.start()
 
-        proxy_futs = [p.run() for p in proxies]
+        proxy_futs = [p.run() for p in all_proxies]
 
         # Now we can start servers
         await asyncio.gather(*[manager.server_start(s.server_id, seeds=seeds, connect_driver=True) for s,_ in servers])
@@ -144,7 +166,7 @@ async def do_test_internode_compression_between_datacenters(manager: ScyllaClust
                 insert_stmt.consistency_level = ConsistencyLevel.ALL
 
                 # reset all stats. only want IO metrics for the actual insert
-                for p in proxies:
+                for p in all_proxies:
                     p.reset()
 
                 # insert a compressible row of size ~8 kiB
@@ -159,11 +181,11 @@ async def do_test_internode_compression_between_datacenters(manager: ScyllaClust
                 node2_proxy = proxies[1]
                 node3_proxy = proxies[2]
 
-                verifier(msg_size, node1_proxy, node2_proxy, node3_proxy)
+                verifier(msg_size, node1_proxy, node2_proxy, node3_proxy, *ssl_proxies)
 
         await asyncio.gather(*[manager.server_stop(s.server_id, convict=False) for s,_ in servers])
     finally:
-        await asyncio.gather(*[p.stop() for p in proxies])
+        await asyncio.gather(*[p.stop() for p in all_proxies])
         for coro in proxy_futs:
             try:
                 await coro
@@ -182,7 +204,7 @@ async def test_internode_compression_compress_packets_between_nodes(request, man
         assert max_dc_pkg < expected
         assert max_intra_pkg < expected
 
-    await do_test_internode_compression_between_datacenters(manager, "all", check_expected)
+    await do_test_internode_traffic_between_datacenters(manager, "all", check_expected)
 
 async def test_internode_compression_between_datacenters(request, manager: ScyllaClusterManager) -> None:
     def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):
@@ -194,5 +216,68 @@ async def test_internode_compression_between_datacenters(request, manager: Scyll
         assert max_dc_pkg < expected
         assert max_intra_pkg > msg_size
 
-    await do_test_internode_compression_between_datacenters(manager, "dc", check_expected)
+    await do_test_internode_traffic_between_datacenters(manager, "dc", check_expected)
 
+
+# SCYLLADB-6003: with listen_address != broadcast_address and != CQL address, dc/rack compression
+# failed every intra-DC data connection with "Requested location for node 00000000-... not in topology".
+@pytest.mark.parametrize("compression,dcs,extra_config", DC_RACK_PARAMS)
+async def test_internode_compression_listen_address_not_broadcast(request, manager: ScyllaClusterManager, compression, dcs, extra_config) -> None:
+    def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):
+        max_intra_pkg = max(node1_proxy.stats.max_packet_size, node2_proxy.stats.max_packet_size)
+        max_dc_pkg = node3_proxy.stats.max_packet_size
+
+        assert max_dc_pkg < msg_size / 2
+        assert max_intra_pkg > msg_size
+
+    await do_test_internode_traffic_between_datacenters(manager, compression, check_expected,
+                                                        dcs=dcs, rpc_on_broadcast=True, extra_config=extra_config)
+
+# SCYLLADB-6003: with listen_address != broadcast_address, the peer's plaintext filter cannot place
+# the listen address, so dc/rack encryption must use TLS for every peer. rpc_on_broadcast=False keeps
+# the CQL address equal to the listen address, which the node itself resolves but the peer does not.
+@pytest.mark.parametrize("rpc_on_broadcast", [True, False])
+@pytest.mark.parametrize("encryption,dcs,extra_config", DC_RACK_PARAMS)
+async def test_internode_encryption_listen_address_not_broadcast(request, manager: ScyllaClusterManager, encryption, dcs, extra_config,
+                                                                 rpc_on_broadcast) -> None:
+    def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy, *ssl_proxies):
+        # Every outgoing connection must use TLS, so the plaintext port sees no traffic at all.
+        # dc1_ssl_bytes includes cross-DC bytes when node3 coordinates; plain_bytes covers intra-DC.
+        plain_bytes = sum(p.stats.bytes_written for p in (node1_proxy, node2_proxy, node3_proxy))
+        dc1_ssl_bytes = ssl_proxies[0].stats.bytes_written + ssl_proxies[1].stats.bytes_written
+
+        assert plain_bytes == 0
+        assert dc1_ssl_bytes > msg_size
+
+    await do_test_internode_traffic_between_datacenters(manager, "none", check_expected,
+                                                        dcs=dcs, rpc_on_broadcast=rpc_on_broadcast, encryption=encryption,
+                                                        extra_config=extra_config)
+
+def remote_ports(conns, src: set[str], dst: set[str]) -> list[int]:
+    """Remote ports of the established TCP connections in conns from an address in src to another address in dst."""
+    return [c.raddr.port for c in conns
+            if c.status == psutil.CONN_ESTABLISHED and c.laddr.ip in src and c.raddr.ip in dst and c.laddr.ip != c.raddr.ip]
+
+# SCYLLADB-6003: with listen_address == broadcast_address, dc/rack encryption keeps intra-dc (or
+# intra-rack) traffic in plaintext. The CL=ALL writes need the dc2 replica, whose plaintext filter
+# rejects dc1 sources, so they also show that cross-dc traffic uses TLS.
+@pytest.mark.parametrize("encryption,dcs,extra_config", DC_RACK_PARAMS)
+async def test_internode_encryption_listen_address_is_broadcast(request, manager: ScyllaClusterManager, encryption, dcs, extra_config) -> None:
+    config = {"ssl_storage_port": SSL_PORT} | extra_config
+    servers = [await manager.server_add(config=config, server_encryption=encryption, property_file={"dc": dc, "rack": rack})
+               for dc, rack in dcs]
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }") as ks:
+        async with new_test_table(manager, ks, "key int PRIMARY KEY, val TEXT") as table:
+            insert_stmt = cql.prepare(f"insert into {table} (key, val) values (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            for key in range(10):
+                await cql.run_async(insert_stmt, [key, "1" * 1024])
+
+            dc1 = {s.ip_addr for s in servers[:2]}
+            dc2 = {servers[2].ip_addr}
+            conns = psutil.net_connections(kind="tcp")
+            cross_dc = remote_ports(conns, dc1, dc2) + remote_ports(conns, dc2, dc1)
+            assert PLAIN_PORT in remote_ports(conns, dc1, dc1)
+            assert SSL_PORT in cross_dc
+            assert PLAIN_PORT not in cross_dc
