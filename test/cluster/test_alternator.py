@@ -2254,3 +2254,23 @@ async def test_alternator_ttl_expiration_during_drain(manager: ScyllaClusterMana
     async def item_expired():
         return True if 'Item' not in table.get_item(Key={'p': 1}, ConsistentRead=True) else None
     assert await wait_for(item_expired, time.time() + 60)
+
+# Test that a graceful shutdown ends the sleep of the expiration service
+# between two scans at once (SCYLLADB-2820). The other tests set the period
+# to 0.5 seconds, so they never stop a node during a long sleep. With
+# change_period, the test changes the period live before the stop, so the
+# stop ends a sleep that started again with the new period.
+@pytest.mark.parametrize('change_period', [False, True], ids=['first_sleep', 'rescheduled_sleep'])
+async def test_ttl_sleep_ends_on_shutdown(manager: ScyllaClusterManager, change_period):
+    config = alternator_config | {'alternator_ttl_period_in_seconds': '3600'}
+    server = await manager.server_add(config=config)
+    log = await manager.server_open_log(server.server_id)
+    await log.wait_for('sleeping .* seconds until next period', timeout=60)
+    if change_period:
+        mark = await log.mark()
+        await manager.get_cql().run_async(
+            "UPDATE system.config SET value = '7200' WHERE name = 'alternator_ttl_period_in_seconds'")
+        await log.wait_for('rescheduling sleep until next period', from_mark=mark, timeout=60)
+    # If shutdown does not end the sleep, the stop takes one hour or more,
+    # and the timeout below fails the test.
+    await manager.server_stop_gracefully(server.server_id, timeout=120)

@@ -187,6 +187,9 @@ expiration_service::expiration_service(data_dictionary::database db, service::st
         : _db(db)
         , _proxy(proxy)
         , _gossiper(g)
+        , _ttl_period_observer(_db.get_config().alternator_ttl_period_in_seconds.observe([this] (const double&) {
+            _ttl_period_sleep_abort_source.request_abort();
+        }))
 {
 }
 
@@ -929,15 +932,37 @@ future<> expiration_service::run() {
         // in the next iteration by reducing the scanner's scheduling-group
         // share (if using a separate scheduling group), or introduce
         // finer-grain sleeps into the scanning code.
-        std::chrono::milliseconds scan_duration(std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - start));
-        std::chrono::milliseconds period(long(_db.get_config().alternator_ttl_period_in_seconds() * 1000));
-        if (scan_duration < period) {
+        bool rescheduling_sleep = false;
+        for (;;) {
+            // An abort_source cannot be reset after it fires, so each sleep
+            // gets a new one.
+            _ttl_period_sleep_abort_source = abort_source();
+            // Shutdown also ends the sleep below. subscribe() returns an
+            // empty subscription if shutdown has already started.
+            auto shutdown_sub = _abort_source.subscribe([this] () noexcept {
+                _ttl_period_sleep_abort_source.request_abort();
+            });
+            if (!shutdown_sub) {
+                co_return;
+            }
+            if (rescheduling_sleep) {
+                tlogger.info("alternator_ttl_period_in_seconds changed, rescheduling sleep until next period");
+            }
+            std::chrono::milliseconds period(long(_db.get_config().alternator_ttl_period_in_seconds() * 1000));
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - start);
+            if (elapsed >= period) {
+                if (!rescheduling_sleep) {
+                    tlogger.warn("scan took {} seconds, longer than period - not sleeping", elapsed.count()/1000.0);
+                }
+                break;
+            }
             try {
-                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count()/1000.0);
-                co_await seastar::sleep_abortable(period - scan_duration, _abort_source);
-            } catch(seastar::sleep_aborted&) {}
-        } else {
-                tlogger.warn("scan took {} seconds, longer than period - not sleeping", scan_duration.count()/1000.0);
+                tlogger.info("sleeping {} seconds until next period", (period - elapsed).count()/1000.0);
+                co_await seastar::sleep_abortable(period - elapsed, _ttl_period_sleep_abort_source);
+                break;
+            } catch(seastar::sleep_aborted&) {
+                rescheduling_sleep = true;
+            }
         }
     }
 }
