@@ -119,6 +119,8 @@ namespace kms_errors {
     [[maybe_unused]] static const char* KMSInternalException = "KMSInternalException";
     [[maybe_unused]] static const char* NotFoundException = "NotFoundException";
     [[maybe_unused]] static const char* AlreadyExistsException = "AlreadyExistsException";
+    [[maybe_unused]] static const char* KMSInvalidStateException = "KMSInvalidStateException";
+    [[maybe_unused]] static const char* DisabledException = "DisabledException";
 }
 
 static std::string to_lower(std::string_view s) {
@@ -143,17 +145,15 @@ public:
     static_assert(2 * default_refresh < default_expiry);
 
     impl(encryption_context& ctxt, const std::string& name, const host_options& options)
+        : impl(ctxt, name, options, make_key_cache_config(options.key_cache_expiry.value_or(default_expiry), options.key_cache_refresh.value_or(default_refresh)))
+    {}
+
+    impl(encryption_context& ctxt, const std::string& name, const host_options& options, utils::loading_cache_config lccfg)
         : _ctxt(ctxt)
         , _name(name)
         , _options(options)
-        , _attr_cache(utils::loading_cache_config{
-            .max_size = std::numeric_limits<size_t>::max(),
-            .expiry = options.key_cache_expiry.value_or(default_expiry),
-            .refresh = options.key_cache_refresh.value_or(default_refresh)}, kms_log, std::bind(&impl::create_key, this, std::placeholders::_1))
-        , _id_cache(utils::loading_cache_config{
-            .max_size = std::numeric_limits<size_t>::max(),
-            .expiry = options.key_cache_expiry.value_or(default_expiry),
-            .refresh = options.key_cache_refresh.value_or(default_refresh)}, kms_log, std::bind(&impl::find_key, this, std::placeholders::_1))
+        , _attr_cache(ctxt, lccfg, kms_log, std::bind(&impl::create_key, this, std::placeholders::_1))
+        , _id_cache(ctxt, lccfg, kms_log, std::bind(&impl::find_key, this, std::placeholders::_1))
     {
         // check if we have an explicit endpoint set.
         if (!_options.endpoint.empty()) {
@@ -268,10 +268,10 @@ static void translate_kms_error(const kms_error& e) {
     if (e.type() == AccessDeniedException || e.type() == MissingAuthenticationToken || e.type() == NotAuthorized) {
         std::throw_with_nested(permission_error(e.what()));
     }
-    if (e.type() == OptInRequired || e.type() == InvalidClientTokenId || e.type() == InvalidAction) {
+    if (e.type() == OptInRequired || e.type() == InvalidClientTokenId || e.type() == InvalidAction || e.type() == KMSInvalidStateException) {
         std::throw_with_nested(configuration_error(e.what()));
     }
-    if (e.type() == NotFoundException || e.type() == DependencyTimeoutException) {
+    if (e.type() == NotFoundException || e.type() == DisabledException) {
         std::throw_with_nested(missing_resource_error(e.what()));
     }
     std::throw_with_nested(service_error(e.what()));
@@ -287,19 +287,7 @@ future<std::tuple<shared_ptr<encryption::symmetric_key>, encryption::kms_host::i
     if (key.master_key.empty() && _options.master_key.empty()) {
         throw configuration_error("No master key set in kms host config or encryption attributes");
     }
-    try {
-        co_return co_await _attr_cache.get(key);
-    } catch (kms_error& e) {
-        translate_kms_error(e);
-    } catch (base_error&) {
-        throw;
-    } catch (std::system_error& e) {
-        std::throw_with_nested(network_error(e.what()));
-    } catch (rjson::malformed_value& e) {
-        std::throw_with_nested(malformed_response_error(e.what()));
-    } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {:t}", std::current_exception())));
-    }
+    co_return co_await _attr_cache.get(key);
 }
 
 future<shared_ptr<encryption::symmetric_key>> encryption::kms_host::impl::get_key_by_id(const id_type& id, const key_info& info, const option_override* oov) {
@@ -310,22 +298,8 @@ future<shared_ptr<encryption::symmetric_key>> encryption::kms_host::impl::get_ke
         .id = id,
         .aws_assume_role_arn = get_option(oov, &option_override::aws_assume_role_arn, _options.aws_assume_role_arn),
     };
-    try {
-        auto data = co_await _id_cache.get(key);
-        co_return make_shared<symmetric_key>(info, data);
-    } catch (kms_error& e) {
-        translate_kms_error(e);
-    } catch (base_error&) {
-        throw;
-    } catch (std::system_error& e) {
-        std::throw_with_nested(network_error(e.what()));
-    } catch (std::invalid_argument& e) {
-        std::throw_with_nested(configuration_error(fmt::format("get_key_by_id: {}", e.what())));
-    } catch (rjson::malformed_value& e) {
-        std::throw_with_nested(malformed_response_error(e.what()));
-    } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {:t}", std::current_exception())));
-    }
+    auto data = co_await _id_cache.get(key);
+    co_return make_shared<symmetric_key>(info, data);
 }
 
 std::string make_aws_host(std::string_view aws_region, std::string_view service) {
@@ -370,7 +344,7 @@ struct encryption::kms_host::impl::aws_query {
 };
 
 future<rjson::value> encryption::kms_host::impl::post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query) {
-    static constexpr auto max_retries = 10;
+    auto max_retries = adjust_service_call_retries(_ctxt, 10);
 
     exponential_backoff_retry exr(10ms, 10000ms);
 
@@ -960,12 +934,12 @@ future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::
     rjson::add(query, "KeyId", std::string(master_key.begin(), master_key.end()));
     rjson::add(query, "NumberOfBytes", info.len/8);
 
-    auto response = co_await post("GenerateDataKey", aws_assume_role_arn, query);
-    auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
-    auto enc = rjson::get<std::string>(response, "CiphertextBlob");
-    auto kid = rjson::get<std::string>(response, "KeyId");
-
     try {
+        auto response = co_await post("GenerateDataKey", aws_assume_role_arn, query);
+        auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
+        auto enc = rjson::get<std::string>(response, "CiphertextBlob");
+        auto kid = rjson::get<std::string>(response, "KeyId");
+
         auto key = make_shared<symmetric_key>(info, data);
         bytes id(kid.size() + 1 + enc.size(), 0);
         auto i = std::copy(kid.begin(), kid.end(), id.begin());
@@ -983,8 +957,18 @@ future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::
         });
 
         co_return key_and_id_type{ key, id };
+    } catch (kms_error& e) {
+        translate_kms_error(e);
     } catch (std::invalid_argument& e) {
         std::throw_with_nested(configuration_error(e.what()));
+    } catch (base_error&) {
+        throw;
+    } catch (std::system_error& e) {
+        std::throw_with_nested(network_error(e.what()));
+    } catch (rjson::malformed_value& e) {
+        std::throw_with_nested(malformed_response_error(e.what()));
+    } catch (...) {
+        std::throw_with_nested(service_error(fmt::format("create_key: {:t}", std::current_exception())));
     }
 }
 
@@ -1004,7 +988,7 @@ future<bytes> encryption::kms_host::impl::find_key(const id_cache_key& k) {
     auto& id = k.id;
     auto pos = id.find_last_of(':');
     if (pos == id_type::npos) {
-        throw std::invalid_argument(format("Not a valid key id: {}", id));
+        throw configuration_error(format("Not a valid key id: {}", id));
     }
 
     kms_log.debug("Finding key: {}", id);
@@ -1017,26 +1001,37 @@ future<bytes> encryption::kms_host::impl::find_key(const id_cache_key& k) {
     // don't send keyid, in case we shift region or whatnot. 
     // Decrypt call will resolve symmetric key from just data.
 
-    auto response = co_await post("Decrypt", k.aws_assume_role_arn, query);
-    auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
-    auto used_id = rjson::get<std::string>(response, "KeyId");
+    try {
+        auto response = co_await post("Decrypt", k.aws_assume_role_arn, query);
+        auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
+        auto used_id = rjson::get<std::string>(response, "KeyId");
 
-    // KeyID is returned as a Key ARN (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#key-id-key-ARN)
-    // arn:<partition>:kms:<region>:<account-id>:key/<key-id>
-    auto pos2 = used_id.find_last_of('/');
-    if (pos2 == id_type::npos) {
-        throw std::invalid_argument(format("Not a valid key id: {}", used_id));
+        // KeyID is returned as a Key ARN (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#key-id-key-ARN)
+        // arn:<partition>:kms:<region>:<account-id>:key/<key-id>
+        auto pos2 = used_id.find_last_of('/');
+        if (pos2 == id_type::npos) {
+            throw malformed_response_error(format("Not a valid key id: {}", used_id));
+        }
+        // Ensure we got the same UUID back from the decrypt as we recorded on encrypt
+        // just to be paranoid.
+        auto v1 = kid.substr(kid.size() - 36);
+        auto v2 = used_id.substr(pos2+1);
+        if (v1 != v2) {
+            throw malformed_response_error(fmt::format("Decrypt call return mismatched key: {} vs used {}", v2, v1));
+        }
+        // we know nothing about key type etc, so just return data.
+        co_return data;
+    } catch (kms_error& e) {
+        translate_kms_error(e);
+    } catch (base_error&) {
+        throw;
+    } catch (std::system_error& e) {
+        std::throw_with_nested(network_error(e.what()));
+    } catch (rjson::malformed_value& e) {
+        std::throw_with_nested(malformed_response_error(e.what()));
+    } catch (...) {
+        std::throw_with_nested(service_error(fmt::format("find_key: {:t}", std::current_exception())));
     }
-    // Ensure we got the same UUID back from the decrypt as we recorded on encrypt
-    // just to be paranoid.
-    auto v1 = kid.substr(kid.size() - 36);
-    auto v2 = used_id.substr(pos2+1);
-    if (v1 != v2) {
-        throw std::invalid_argument(fmt::format("Decrypt call return mismatched key: {} vs used {}", v2, v1));
-    }
-
-    // we know nothing about key type etc, so just return data.
-    co_return data;
 }
 
 encryption::kms_host::kms_host(encryption_context& ctxt, const std::string& name, const host_options& options)

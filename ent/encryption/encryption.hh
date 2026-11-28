@@ -184,6 +184,8 @@ public:
 
     sstring maybe_decrypt_config_value(const sstring&) const;
 
+    virtual seastar::scheduling_group cache_maintainance_group() const = 0;
+
     virtual future<> start() = 0;
     virtual future<> stop() = 0;
 };

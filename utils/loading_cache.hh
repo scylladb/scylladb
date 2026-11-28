@@ -217,10 +217,10 @@ public:
     class entry_is_too_big : public std::exception {};
 
 private:
-    loading_cache(config cfg, logging::logger& logger)
+    loading_cache(config cfg, logging::logger& logger, seastar::scheduling_group g)
         : _cfg(std::move(cfg))
         , _logger(logger)
-        , _timer([this] { on_timer(); })
+        , _timer(g, [this] { on_timer(); })
         , _timer_reads_gate("loading_cache::timer_reads")
     {
         static_assert(noexcept(LoadingCacheStats::inc_unprivileged_on_cache_size_eviction()), "LoadingCacheStats::inc_unprivileged_on_cache_size_eviction must be non-throwing");
@@ -245,14 +245,16 @@ private:
     }
 
 public:
-    template<typename Func>
-    requires std::is_invocable_r_v<future<value_type>, Func, const key_type&>
-    loading_cache(config cfg, logging::logger& logger, Func&& load)
-        : loading_cache(std::move(cfg), logger)
+    template<typename Func, typename RFunc>
+    requires (std::is_invocable_r_v<future<value_type>, Func, const key_type&> 
+        && std::is_invocable_r_v<future<value_type>, RFunc, const key_type&>)
+    loading_cache(config cfg, logging::logger& logger, Func&& load, RFunc&& reload, seastar::scheduling_group g)
+        : loading_cache(std::move(cfg), logger, g)
     {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::yes");
 
         _load = std::forward<Func>(load);
+        _reload = std::forward<RFunc>(reload);
 
         // If expiration period is zero - caching is disabled
         if (!caching_enabled()) {
@@ -262,9 +264,16 @@ public:
         _timer_period = std::min(_cfg.expiry, _cfg.refresh);
         _timer.arm(_timer_period);
     }
+    template<typename Func>
+    requires std::is_invocable_r_v<future<value_type>, Func, const key_type&>
+    loading_cache(config cfg, logging::logger& logger, Func&& load)
+        : loading_cache(std::move(cfg), logger, load, [this](const key_type& k) {
+            return _load(k);
+        }, seastar::current_scheduling_group())
+    {}
 
     loading_cache(size_t max_size, duration expiry, logging::logger& logger)
-        : loading_cache({max_size, expiry, time_point::max().time_since_epoch()}, logger)
+        : loading_cache({max_size, expiry, time_point::max().time_since_epoch()}, logger, seastar::current_scheduling_group())
     {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::no, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::no");
 
@@ -555,7 +564,7 @@ private:
             return make_ready_future<>();
         }
 
-        return _load(key).then_wrapped([this, ts_value_ptr = std::move(ts_value_ptr), &key] (auto&& f) mutable {
+        return _reload(key).then_wrapped([this, ts_value_ptr = std::move(ts_value_ptr), &key] (auto&& f) mutable {
             // if the entry has been evicted by now - simply end here
             if (!ts_value_ptr->lru_entry_ptr()) {
                 _logger.trace("{}: entry was dropped during the reload", key);
@@ -571,9 +580,7 @@ private:
             try {
                 *ts_value_ptr = f.get();
             } catch (std::exception& e) {
-                _logger.debug("{}: reload failed: {}", key, e.what());
-            } catch (...) {
-                _logger.debug("{}: reload failed: unknown error", key);
+                _logger.debug("{}: reload failed: {}", key, std::current_exception());
             }
 
             return make_ready_future<>();
@@ -733,7 +740,7 @@ private:
     config _cfg;
     std::optional<config> _updated_cfg;
     logging::logger& _logger;
-    std::function<future<Tp>(const Key&)> _load;
+    std::function<future<Tp>(const Key&)> _load, _reload;
     timer<loading_cache_clock_type> _timer;
     seastar::named_gate _timer_reads_gate;
 };

@@ -69,6 +69,13 @@ class GcpKmsVault:
         self.keys = dict()
         self.impersonators: dict[str, list] = dict()
         self.lock = threading.Lock()
+        self.paused = False
+
+    def enter_error_state(self, pause: bool):
+        self.paused = pause
+
+    def is_in_error_state(self):
+        return self.paused
 
     def add_impersonator(self, user: str, principal: str):
         self.impersonators.setdefault(user, list()).append(principal)
@@ -191,6 +198,10 @@ class GcpKmsRequestHandler(BaseHTTPRequestHandler):
 
         match = self.keyop_expression.match(self.path)
         if match:
+            if self.vault.is_in_error_state():
+                self.make_error_response(500, "server is disabled")
+                return
+
             project, location, key_ring, key_name, op = match.groups()
             keyId = f"{project}/{location}/{key_ring}/{key_name}"
             key = self.vault.get_key(keyId)
@@ -251,6 +262,9 @@ class MockGcpKmsServer:
             loop = asyncio.get_running_loop()
             self.server_thread = loop.run_in_executor(None, self.server.serve_forever)
             self.is_stopped.clear()
+
+    def enter_error_state(self, on: bool):
+        self.vault.enter_error_state(on)
 
     async def stop(self):
         if not self.is_stopped.is_set():

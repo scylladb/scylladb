@@ -61,6 +61,15 @@ class Error:
         self.error_type = error_type
         self.count = count
 
+    def should_generate_error(self):
+        """
+        Make this overridable, so we can also force forever errors
+        """
+        if self.count > 0:
+            self.count -= 1
+            return True
+        return False
+
 
 class AzureVault:
     """
@@ -140,6 +149,12 @@ class AzureVault:
                 "code": "BadRequest",
                 "message": "Property has invalid value\r\n"
             }
+        }),
+        'InternalError': (500, {
+            "error": {
+                "code": "InternalError",
+                "message": "Server is not walking on sunshine\r\n"
+            }
         })
     }
 
@@ -183,8 +198,7 @@ class AzureVault:
             with self.lock:
                 if self.error_config is not None:
                     error = self.error_config
-                    if error.count > 0:
-                        error.count -= 1
+                    if error.should_generate_error():
                         return self._error_response(error.error_type,
                                                     key_name=key_name,
                                                     key_version=key_version)
@@ -218,8 +232,7 @@ class AzureVault:
             with self.lock:
                 if self.error_config is not None:
                     error = self.error_config
-                    if error.count > 0:
-                        error.count -= 1
+                    if error.should_generate_error():
                         return self._error_response(error.error_type,
                                                     key_name=key_name,
                                                     key_version=key_version)
@@ -239,9 +252,12 @@ class AzureVault:
                 }
             })
 
-    def set_error_config(self, error_type, count):
+    def set_error(self, error):
         with self.lock:
-            self.error_config = Error(error_type, count)
+            self.error_config = error
+
+    def set_error_config(self, error_type, count):
+        self.set_error(Error(error_type, count))
 
 
 class AzureIMDS:
@@ -320,8 +336,7 @@ class AzureIMDS:
         with self.lock:
             if self.error_config is not None:
                 error = self.error_config
-                if error.count > 0:
-                    error.count -= 1
+                if error.should_generate_error():
                     return self._error_response(error.error_type)
             if not self.token or self.token_resource != resource or self.expired():
                 self.token, self.expires = self.generate_fake_jwt(resource)
@@ -417,8 +432,7 @@ class AzureEntraSTS:
         with self.lock:
             if self.error_config is not None:
                 error = self.error_config
-                if error.count > 0:
-                    error.count -= 1
+                if error.should_generate_error():
                     return_error = True
         if return_error:
             return self._error_response(error.error_type)
@@ -640,3 +654,15 @@ class MockAzureVaultServer:
         except (Exception, asyncio.CancelledError) as e:
             self.logger.error(f'Server error: {e}')
             await self.stop()
+
+    def enter_error_state(self, on: bool):
+        if on:
+            class MyError(Error):
+                def __init__(self):
+                    super().__init__('InternalError', 1)
+                def should_generate_error(self):
+                    return True
+
+            self.vault.set_error(MyError())
+        else:
+            self.vault.set_error(None)
