@@ -16,6 +16,7 @@
 #include "keys/full_position.hh"
 #include <type_traits>
 #include "utils/log.hh"
+#include "utils/small_vector.hh"
 
 extern logging::logger mclog;
 
@@ -164,6 +165,10 @@ struct compaction_stats {
     }
 };
 
+// Data-query consumers that read only the slice's columns; the compactor may drop the rest.
+template <typename Consumer>
+concept ConsumesOnlySelectedColumns = requires { requires std::remove_cvref_t<Consumer>::only_selected_columns; };
+
 template<compact_for_sstables SSTableCompaction>
 class compact_mutation_state {
     const schema& _schema;
@@ -177,6 +182,9 @@ class compact_mutation_state {
     uint32_t _partition_limit{};
     uint64_t _partition_row_limit{};
     tombstone_gc_state _tombstone_gc_state;
+    // Indexed by column id; empty when every column is selected. Built by the query constructor, used only by ConsumesOnlySelectedColumns consumers.
+    utils::small_vector<bool, 64> _selected_static;
+    utils::small_vector<bool, 64> _selected_regular;
 
     tombstone _partition_tombstone;
 
@@ -359,6 +367,21 @@ private:
         return [this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable).can_purge; };
     }
 
+    static utils::small_vector<bool, 64> selected_columns(const query::column_id_vector& ids, size_t count) {
+        // Slice column ids are unique, so this many means all are selected.
+        if (ids.size() >= count) {
+            return {};
+        }
+        utils::small_vector<bool, 64> selected;
+        selected.resize(count, false);
+        for (auto id : ids) {
+            if (id < count) {
+                selected[id] = true;
+            }
+        }
+        return selected;
+    }
+
 public:
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
@@ -377,6 +400,8 @@ public:
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _tombstone_gc_state(gc_state)
+        , _selected_static(selected_columns(_slice.static_columns, _schema.static_columns_count()))
+        , _selected_regular(selected_columns(_slice.regular_columns, _schema.regular_columns_count()))
         , _last_pos(position_in_partition::for_partition_end())
         , _validator("mutation_compactor for read", _schema, validation_level)
     {
@@ -449,6 +474,19 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(static_row&& sr, Consumer& consumer, GCConsumer& gc_consumer) {
+        if constexpr (ConsumesOnlySelectedColumns<Consumer>) {
+            if (!_selected_static.empty()) {
+                return consume_row<true>(std::move(sr), consumer, gc_consumer);
+            }
+        }
+        return consume_row<false>(std::move(sr), consumer, gc_consumer);
+    }
+
+private:
+    // DropUnselected=false is the unmodified compaction path, so it costs nothing when no column is dropped.
+    template <bool DropUnselected, typename Consumer, typename GCConsumer>
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
+    stop_iteration consume_row(static_row&& sr, Consumer& consumer, GCConsumer& gc_consumer) {
         _validator(mutation_fragment_v2::kind::static_row, sr.position(), {});
         _last_static_row = static_row(_schema, sr);
         _last_pos = position_in_partition(position_in_partition::static_row_tag_t());
@@ -458,10 +496,23 @@ public:
         }
         auto can_gc = make_can_gc_fn();
         auto gc_before = get_gc_before();
+        row::drop_unselected_result d;
+        if constexpr (DropUnselected) {
+            d = sr.cells().drop_unselected(_schema, column_kind::static_column, _selected_static,
+                    true, row_tombstone(current_tombstone), _query_time, row_marker(), can_gc, gc_before);
+        }
         auto res = sr.cells().compact_and_expire(_schema, column_kind::static_column, row_tombstone(current_tombstone),
                 _query_time, can_gc, gc_before, _collector.get());
-        _stats.static_rows.add_row(res);
-        const auto is_live = res.is_live();
+        bool is_live;
+        if constexpr (DropUnselected) {
+            auto stats = res;
+            stats += d.dropped;
+            _stats.static_rows.add_row(stats, d.any_live);
+            is_live = res.is_live() || d.any_live;
+        } else {
+            _stats.static_rows.add_row(res);
+            is_live = res.is_live();
+        }
         if (is_live) {
             partition_is_live();
         }
@@ -477,16 +528,35 @@ public:
             }
         }
         _static_row_live = is_live;
-        if (is_live || !sr.empty()) {
+        bool emit;
+        if constexpr (DropUnselected) {
+            emit = is_live || !sr.empty() || d.any_unpurged;
+        } else {
+            emit = is_live || !sr.empty();
+        }
+        if (emit) {
             partition_is_not_empty(consumer);
             _stop = consumer.consume(std::move(sr), current_tombstone, is_live);
         }
         return _stop;
     }
 
+public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(clustering_row&& cr, Consumer& consumer, GCConsumer& gc_consumer) {
+        if constexpr (ConsumesOnlySelectedColumns<Consumer>) {
+            if (!_selected_regular.empty()) {
+                return consume_row<true>(std::move(cr), consumer, gc_consumer);
+            }
+        }
+        return consume_row<false>(std::move(cr), consumer, gc_consumer);
+    }
+
+private:
+    template <bool DropUnselected, typename Consumer, typename GCConsumer>
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
+    stop_iteration consume_row(clustering_row&& cr, Consumer& consumer, GCConsumer& gc_consumer) {
         _validator(mutation_fragment_v2::kind::clustering_row, cr.position(), {});
         if (!sstable_compaction()) {
             _last_pos = cr.position();
@@ -513,10 +583,23 @@ public:
         auto can_gc = make_can_gc_fn();
         auto gc_before = get_gc_before();
         const bool marker_is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, can_gc, gc_before, _collector.get());
+        row::drop_unselected_result d;
+        if constexpr (DropUnselected) {
+            d = cr.cells().drop_unselected(_schema, column_kind::regular_column, _selected_regular,
+                    !marker_is_live, t, _query_time, cr.marker(), can_gc, gc_before);
+        }
         const auto res = cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, can_gc, gc_before, cr.marker(),
                 _collector.get());
-        _stats.clustering_rows.add_row(res, marker_is_live);
-        const auto is_live = res.is_live() || marker_is_live;
+        bool is_live;
+        if constexpr (DropUnselected) {
+            auto stats = res;
+            stats += d.dropped;
+            _stats.clustering_rows.add_row(stats, marker_is_live || d.any_live);
+            is_live = res.is_live() || marker_is_live || d.any_live;
+        } else {
+            _stats.clustering_rows.add_row(res, marker_is_live);
+            is_live = res.is_live() || marker_is_live;
+        }
 
         if (is_live) {
             partition_is_live();
@@ -534,7 +617,14 @@ public:
             }
         }
 
-        if (!cr.empty()) {
+        // Rows alive only via unselected cells are emitted with nulls; dead ones only if compaction would keep a dropped cell.
+        bool emit;
+        if constexpr (DropUnselected) {
+            emit = is_live || !cr.empty() || d.any_unpurged;
+        } else {
+            emit = !cr.empty();
+        }
+        if (emit) {
             partition_is_not_empty(consumer);
             _stop = consumer.consume(std::move(cr), t, is_live);
         }
@@ -544,6 +634,7 @@ public:
         return _stop;
     }
 
+public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(range_tombstone_change&& rtc, Consumer& consumer, GCConsumer& gc_consumer) {

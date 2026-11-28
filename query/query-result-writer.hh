@@ -214,9 +214,9 @@ public:
     mutation_querier(const schema& s, query::result::partition_writer pw,
                      query::result_memory_accounter& memory_accounter);
     void consume(tombstone) { }
-    // Requires that sr.has_any_live_data()
+    // Requires that the row is live, possibly only through unselected cells, so it may hold no cells.
     stop_iteration consume(static_row&& sr, tombstone current_tombstone);
-    // Requires that cr.has_any_live_data()
+    // Same as above.
     stop_iteration consume(clustering_row&& cr, row_tombstone current_tombstone);
     stop_iteration consume(range_tombstone_change&&) { return stop_iteration::no; }
     uint64_t consume_end_of_stream();
@@ -229,6 +229,8 @@ class query_result_builder {
     // We need to remember that we requested stop, to mark the read as short in the end.
     stop_iteration _stop;
 public:
+    static constexpr bool only_selected_columns = true;
+
     query_result_builder(const schema& s, query::result::builder& rb) noexcept;
 
     void consume_new_partition(const dht::decorated_key& dk);

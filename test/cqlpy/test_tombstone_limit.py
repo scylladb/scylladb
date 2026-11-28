@@ -13,9 +13,11 @@
 #############################################################################
 
 from .util import new_test_table, config_value_context, unique_key_int
+from . import nodetool
 from .conftest import driver_bug_1
 from cassandra.query import SimpleStatement
 import pytest
+import time
 
 # All tests in this file check the Scylla-only query_tombstone_page_limit
 # feature, so let's mark them all scylla_only with an autouse fixture:
@@ -419,3 +421,84 @@ def test_filtering_query_tombstone_suffix_last_position(cql, test_keyspace, lowe
 
         assert found_reuse
         assert not found_drop
+
+
+# Rows whose only data is a deleted (non-purgeable) unselected cell still count as tombstones.
+@pytest.mark.parametrize('order', ['', ' ORDER BY ck DESC'], ids=['forward', 'reversed'])
+def test_deleted_unselected_cell_counts(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, order):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, w int, PRIMARY KEY (pk, ck)',
+                        extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
+        pk = unique_key_int()
+        for ck in range(0, 30):
+            cql.execute(f"UPDATE {table} SET w = 1 WHERE pk = {pk} AND ck = {ck}")
+            cql.execute(f"DELETE w FROM {table} WHERE pk = {pk} AND ck = {ck}")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 31, 0)")
+        expected = [[31], [], [], []] if order else [[], [], [], [31]]
+        for col in ['w', 'v']:
+            statement = SimpleStatement(f"SELECT ck, {col} FROM {table} WHERE pk = {pk}{order}", fetch_size=10)
+            check_pages_single_partition(cql.execute(statement), expected)
+
+
+# Unselected collections covered by a range tombstone are compacted away, so they must not count.
+@pytest.mark.parametrize('order', ['', ' ORDER BY ck DESC'], ids=['forward', 'reversed'])
+def test_covered_unselected_collection_does_not_count(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, order):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s set<int>, PRIMARY KEY (pk, ck)',
+                        extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
+        pk = unique_key_int()
+        for ck in range(0, 30):
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 1 SET s = {{1, 2}} WHERE pk = {pk} AND ck = {ck}")
+        # Flush so the data and the tombstone meet only in the read-path compactor, not in memtable apply.
+        nodetool.flush(cql, table)
+        cql.execute(f"DELETE FROM {table} USING TIMESTAMP 2 WHERE pk = {pk} AND ck >= 0 AND ck < 30")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 31, 0) USING TIMESTAMP 3")
+        statement = SimpleStatement(f"SELECT ck, v FROM {table} WHERE pk = {pk}{order}", fetch_size=10)
+        check_pages_single_partition(cql.execute(statement), [[31]])
+
+
+# Same, with a partition tombstone.
+@pytest.mark.parametrize('order', ['', ' ORDER BY ck DESC'], ids=['forward', 'reversed'])
+def test_partition_covered_unselected_collection_does_not_count(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, order):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s set<int>, PRIMARY KEY (pk, ck)',
+                        extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
+        pk = unique_key_int()
+        for ck in range(0, 30):
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 1 SET s = {{1, 2}} WHERE pk = {pk} AND ck = {ck}")
+        # Flush so the data and the tombstone meet only in the read-path compactor, not in memtable apply.
+        nodetool.flush(cql, table)
+        cql.execute(f"DELETE FROM {table} USING TIMESTAMP 2 WHERE pk = {pk}")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 31, 0) USING TIMESTAMP 3")
+        statement = SimpleStatement(f"SELECT ck, v FROM {table} WHERE pk = {pk}{order}", fetch_size=10)
+        check_pages_single_partition(cql.execute(statement), [[31]])
+
+
+# Purgeable deleted unselected cells are compacted away, so they must not count.
+@pytest.mark.parametrize('order', ['', ' ORDER BY ck DESC'], ids=['forward', 'reversed'])
+def test_purgeable_unselected_cell_does_not_count(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, order):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, w int, s set<int>, PRIMARY KEY (pk, ck)',
+                        extra=" WITH tombstone_gc = {'mode': 'immediate'} AND gc_grace_seconds = 0") as table:
+        pk = unique_key_int()
+        for ck in range(0, 30):
+            cql.execute(f"UPDATE {table} SET w = 1, s = {{1}} WHERE pk = {pk} AND ck = {ck}")
+            cql.execute(f"DELETE w FROM {table} WHERE pk = {pk} AND ck = {ck}")
+            cql.execute(f"DELETE s FROM {table} WHERE pk = {pk} AND ck = {ck}")
+        # Tombstones are purgeable only once flushed and past their deletion second.
+        deleted_at = time.time()
+        nodetool.flush(cql, table)
+        time.sleep(max(0, int(deleted_at) + 1 - time.time()) + 0.1)
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 31, 0)")
+        statement = SimpleStatement(f"SELECT ck, v FROM {table} WHERE pk = {pk}{order}", fetch_size=10)
+        check_pages_single_partition(cql.execute(statement), [[31]])
+
+
+# Rows holding only an unselected collection with all elements deleted are kept by compaction, so they count.
+@pytest.mark.parametrize('order', ['', ' ORDER BY ck DESC'], ids=['forward', 'reversed'])
+def test_deleted_unselected_collection_counts(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, order):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s set<int>, PRIMARY KEY (pk, ck)',
+                        extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
+        pk = unique_key_int()
+        for ck in range(0, 30):
+            cql.execute(f"UPDATE {table} SET s = s + {{1}} WHERE pk = {pk} AND ck = {ck}")
+            cql.execute(f"UPDATE {table} SET s = s - {{1}} WHERE pk = {pk} AND ck = {ck}")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 31, 0)")
+        statement = SimpleStatement(f"SELECT ck, v FROM {table} WHERE pk = {pk}{order}", fetch_size=10)
+        check_pages_single_partition(cql.execute(statement), [[31], [], [], []] if order else [[], [], [], [31]])

@@ -1626,6 +1626,23 @@ static bool dead_marker_shadows_row(const schema& s, column_kind kind, const row
             && kind == column_kind::regular_column; // not applicable to static rows
 }
 
+enum class atomic_cell_fate { covered, expired, dead, live };
+
+static atomic_cell_fate classify_atomic_cell(atomic_cell_view cell, const row_tombstone& tomb, bool is_counter, gc_clock::time_point now) {
+    if (cell.is_covered_by(tomb.regular(), is_counter) || cell.is_covered_by(tomb.shadowable().tomb(), is_counter)) {
+        return atomic_cell_fate::covered;
+    }
+    if (cell.has_expired(now)) {
+        return atomic_cell_fate::expired;
+    }
+    return cell.is_live() ? atomic_cell_fate::live : atomic_cell_fate::dead;
+}
+
+static bool can_erase_atomic_cell(atomic_cell_view cell, can_gc_fn& can_gc, gc_clock::time_point gc_before) {
+    // Only row tombstones can be shadowable, (collection) cell tombstones aren't
+    return cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no);
+}
+
 compact_and_expire_result row::compact_and_expire(
         const schema& s,
         column_kind kind,
@@ -1683,6 +1700,47 @@ compact_and_expire_result row::compact_and_expire(
             }
         }
         return erase;
+    });
+    return res;
+}
+
+row::drop_unselected_result row::drop_unselected(const schema& s, column_kind kind, std::span<const bool> selected,
+        bool need_liveness, row_tombstone tomb, gc_clock::time_point now, const row_marker& marker,
+        can_gc_fn& can_gc, gc_clock::time_point gc_before) {
+    // A shadowing dead marker kills every cell, see compact_and_expire().
+    const bool shadowed = dead_marker_shadows_row(s, kind, marker);
+    if (shadowed) {
+        tomb.apply(shadowable_tombstone(api::max_timestamp, gc_clock::time_point::max()), row_marker());
+    }
+    drop_unselected_result res;
+    remove_if([&] (column_id id, atomic_cell_or_collection& c) {
+        if (id < selected.size() && selected[id]) {
+            return false;
+        }
+        const column_definition& def = s.column_at(kind, id);
+        // Liveness is decided already, or not needed: nothing left to classify.
+        const bool settled = !need_liveness || res.any_live;
+        if (def.is_atomic()) {
+            const auto cell = c.as_atomic_cell(def);
+            const auto fate = classify_atomic_cell(cell, tomb, def.is_counter(), now);
+            const bool live = fate == atomic_cell_fate::live;
+            res.dropped.dead_cells += !live;
+            res.dropped.live_cells += live;
+            if (live) {
+                res.any_live = true;
+            } else if (!settled && fate != atomic_cell_fate::covered && !res.any_unpurged) {
+                res.any_unpurged = !can_erase_atomic_cell(cell, can_gc, gc_before);
+            }
+        } else if (!settled) {
+            // Elements are not counted unless liveness depends on them, to avoid decoding them.
+            const auto l = collection_liveness(c.as_collection_mutation(), tomb, now, can_gc, gc_before);
+            res.any_live = l.any_live;
+            if (!l.any_live) {
+                res.dropped += l.stats;
+                res.any_unpurged |= l.any_unpurged;
+            }
+        }
+        return true;
     });
     return res;
 }

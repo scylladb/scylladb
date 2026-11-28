@@ -183,6 +183,20 @@ collection_mutation_compact_and_expire_result compact_and_expire(
         gc_clock::time_point gc_before,
         compaction_garbage_collector* collector);
 
+struct collection_mutation_liveness {
+    bool any_live = false;
+    bool any_unpurged = false;
+    compact_and_expire_result stats;
+};
+
+// What compact_and_expire() would decide, without building the result; stops at the first live element.
+collection_mutation_liveness collection_liveness(
+        collection_mutation_view cmv,
+        row_tombstone base_tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before);
+
 collection_mutation merge(const abstract_type&, collection_mutation_view, collection_mutation_view);
 
 collection_mutation difference(const abstract_type&, collection_mutation_view, collection_mutation_view);
