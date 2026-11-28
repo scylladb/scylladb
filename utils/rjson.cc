@@ -97,10 +97,12 @@ template<typename Handler, bool EnableYield, typename Buffer = string_buffer>
 struct guarded_yieldable_json_handler : public Handler {
     size_t _nested_level = 0;
     size_t _max_nested_level;
+    bool _full_precision = false;
 public:
     using handler_base = Handler;
 
-    explicit guarded_yieldable_json_handler(size_t max_nested_level) : _max_nested_level(max_nested_level) {}
+    explicit guarded_yieldable_json_handler(size_t max_nested_level, bool full_precision = false)
+            : _max_nested_level(max_nested_level), _full_precision(full_precision) {}
     guarded_yieldable_json_handler(Buffer& buf, size_t max_nested_level)
             : handler_base(buf), _max_nested_level(max_nested_level) {}
 
@@ -108,7 +110,13 @@ public:
     template<typename Stream>
     void Parse(Stream& stream) {
         rapidjson::GenericReader<encoding, encoding, allocator> reader(&the_allocator);
-        reader.Parse(stream, *this);
+        // See parse_full_precision() in rjson.hh for when and why to use
+        // kParseFullPrecisionFlag.
+        if (_full_precision) {
+            reader.template Parse<rapidjson::kParseFullPrecisionFlag>(stream, *this);
+        } else {
+            reader.Parse(stream, *this);
+        }
         if (reader.HasParseError()) {
             throw rjson::error(
                 format("Parsing JSON failed: {} at {}",
@@ -329,8 +337,8 @@ rjson::value copy(const rjson::value& value) {
     return rjson::value(value, the_allocator);
 }
 
-rjson::value parse(std::string_view str, size_t max_nested_level) {
-    guarded_yieldable_json_handler<document, false> d(max_nested_level);
+static rjson::value parse(std::string_view str, size_t max_nested_level, bool full_precision) {
+    guarded_yieldable_json_handler<document, false> d(max_nested_level, full_precision);
     d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {} at {}",
@@ -338,6 +346,14 @@ rjson::value parse(std::string_view str, size_t max_nested_level) {
     }
     rjson::value& v = d;
     return std::move(v);
+}
+
+rjson::value parse(std::string_view str, size_t max_nested_level) {
+    return parse(str, max_nested_level, false);
+}
+
+rjson::value parse_full_precision(std::string_view str, size_t max_nested_level) {
+    return parse(str, max_nested_level, true);
 }
 
 rjson::value parse(chunked_content&& content, size_t max_nested_level) {

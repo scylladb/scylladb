@@ -60,7 +60,7 @@ parse(const sstring& json_string, const schema::columns_type& expected_receivers
     std::unordered_map<sstring, bytes_opt> json_map;
     rjson::value parsed;
     try {
-        parsed = rjson::parse(json_string);
+        parsed = rjson::parse_full_precision(json_string);
     } catch (const rjson::error& e) {
         throw exceptions::invalid_request_exception(fmt::format("Could not decode JSON string as a map: {}", e.what()));
     }
