@@ -11,6 +11,7 @@
 #include "api/api-doc/endpoint_snitch_info.json.hh"
 #include "locator/token_metadata.hh"
 #include "gms/gossiper.hh"
+#include "marshal_exception.hh"
 
 using namespace seastar::httpd;
 
@@ -35,12 +36,24 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
     });
 
     ss::get_node_tokens.set(r, [&tm, &g] (std::unique_ptr<http::request> req) {
-        auto addr = require_path_param<gms::inet_address>(*req, "endpoint");
         auto& local_tm = *tm.local().get();
+        const auto endpoint = req->get_path_param("endpoint");
         std::optional<locator::host_id> host_id;
+        // A host ID needs no gossip to resolve, so it also works on a node whose gossip is stopped.
         try {
-            host_id = g.local().get_host_id(addr);
-        } catch (...) {}
+            host_id = locator::host_id(utils::UUID(endpoint));
+        } catch (const marshal_exception&) {
+            gms::inet_address addr;
+            try {
+                addr = gms::inet_address(endpoint);
+            } catch (const std::invalid_argument&) {
+                throw httpd::bad_param_exception(fmt::format("endpoint: '{}' is neither a host ID nor an IP address", endpoint));
+            }
+            // An unknown node has no tokens.
+            try {
+                host_id = g.local().get_host_id(addr);
+            } catch (...) {}
+        }
         return make_ready_future<json::json_return_type>(stream_range_as_array(host_id ? local_tm.get_tokens(*host_id): std::vector<dht::token>{}, [](const dht::token& i) {
             return fmt::to_string(i);
         }));

@@ -28,7 +28,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Returns a list of the tokens for this node",
+               "summary":"Returns the sorted tokens of the whole ring",
                "type":"array",
                "items":{
                   "type":"string"
@@ -59,7 +59,7 @@
                "parameters":[
                   {
                      "name":"endpoint",
-                     "description":"The endpoint",
+                     "description":"The endpoint: an IP address or a host ID",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",

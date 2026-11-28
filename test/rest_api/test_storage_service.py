@@ -1142,3 +1142,39 @@ def test_disable_autocompaction_doesnt_block_user_initiated_compactions(cql, thi
                 resp.raise_for_status()
 
                 wait_for_log(logfile, to_find, timeout=180)
+
+def get_local_host_id_and_ip(rest_api):
+    host_id = rest_api.send("GET", "storage_service/hostid/local").json()
+    ips = [e["key"] for e in rest_api.send("GET", "storage_service/host_id").json() if e["value"] == host_id]
+    assert len(ips) == 1
+    return host_id, ips[0]
+
+def get_node_tokens(rest_api, endpoint):
+    resp = rest_api.send("GET", f"storage_service/tokens/{endpoint}")
+    resp.raise_for_status()
+    return resp.json()
+
+# The endpoint may be given as an IP address or a host ID, and its tokens are part of the ring (SCYLLADB-4724).
+def test_storage_service_node_tokens(rest_api):
+    host_id, ip = get_local_host_id_and_ip(rest_api)
+    tokens = get_node_tokens(rest_api, host_id)
+    assert tokens
+    assert get_node_tokens(rest_api, ip) == tokens
+    assert set(tokens) <= set(rest_api.send("GET", "storage_service/tokens").json())
+
+def test_storage_service_node_tokens_malformed_endpoint(rest_api):
+    resp = rest_api.send("GET", "storage_service/tokens/not-an-endpoint")
+    assert resp.status_code == requests.codes.bad_request
+    assert "neither a host ID nor an IP address" in resp.json()["message"]
+
+# A host ID needs no gossip, so a node with gossip stopped (e.g. drained) still finds its tokens.
+def test_storage_service_node_tokens_gossip_disabled(rest_api):
+    host_id, _ = get_local_host_id_and_ip(rest_api)
+    tokens = get_node_tokens(rest_api, host_id)
+    rest_api.send("DELETE", "storage_service/gossiping").raise_for_status()
+    try:
+        assert get_node_tokens(rest_api, host_id) == tokens
+    finally:
+        rest_api.send("POST", "storage_service/gossiping").raise_for_status()
+        # start_gossiping can fail without an error status; later tests need gossip.
+        assert rest_api.send("GET", "storage_service/gossiping").json()
