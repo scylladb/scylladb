@@ -32,6 +32,7 @@ namespace db::snapshot {
 
 std::string sstables_location(std::string_view prefix);
 std::string snapshot_meta_location(std::string_view prefix, const replica::table&, std::string_view snapshot_name);
+std::string snapshot_meta_location(std::string_view prefix, std::string_view ks_name, std::string_view cf_name, std::string_view snapshot_name);
 std::string snapshot_prefix_from_manifest(std::string_view manifest_path);
 
 future<tasks::task_id> 
