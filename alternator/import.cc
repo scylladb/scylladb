@@ -33,15 +33,9 @@ future<std::optional<executor::request_return_type>> get_in_progress_import_desc
     co_return std::nullopt;
 }
 
-// ClientToken must match the pattern DynamoDB documents for it, ^[^$]+$:
-// at least one character, none of which is '$'. The caller already
-// refuses an empty one.
-static bool is_valid_client_token(std::string_view client_token) {
-    return !client_token.contains('$');
-}
-
-// Like ExportTableToPointInTime, only check that S3Bucket is a non-empty
-// string, and leave validating the bucket name and the prefix to S3.
+// Only check that S3Bucket is a non-empty string, and leave validating the
+// bucket name and the prefix to S3. ExportTableToPointInTime validates them,
+// because it writes to S3 (see is_valid_s3_bucket_name() in export.cc).
 static std::pair<std::string, std::string> get_bucket_and_prefix(const rjson::value& request) {
     const rjson::value* s3_bucket_source = rjson::find(request, "S3BucketSource");
     if (!s3_bucket_source) {
@@ -185,7 +179,7 @@ rjson::value make_import_table_description(const import_table_request& parsed) {
     rjson::value description = rjson::empty_object();
     rjson::add(description, "ImportArn", std::move(import_arn));
     // FIXME: the import itself is not implemented yet, so every accepted
-    // import fails immediately, like ExportTableToPointInTime's placeholder.
+    // import fails immediately.
     rjson::add(description, "ImportStatus", "FAILED");
     rjson::add(description, "FailureCode", "NotImplemented");
     rjson::add(description, "FailureMessage", "Not yet implemented - this is a placeholder response for testing the import API.");
