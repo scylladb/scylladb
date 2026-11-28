@@ -57,15 +57,17 @@ async def test_every_outcome_is_understood(status):
     happened, did not happen, or may have happened.  If the checker calls this
     a violation, it did not recognise the status string — the vocabularies have
     drifted apart and every test using that status now invents bugs.
+    'not_applied' is for a cas only, so it gets a cas that saw the empty register.
     """
-    result = await run_porcupine_checker(_history(
-        _call(0, "write", 1, 5, 1),
-        _ret(0, "write", 1, 5, 2, status),
-    ))
+    if status == Outcome.NOT_APPLIED:
+        events = (_cas(0, 1, 3, 5, 1), _ret(0, "cas", 1, 0, 2, status))
+    else:
+        events = (_call(0, "write", 1, 5, 1), _ret(0, "write", 1, 5, 2, status))
+    result = await run_porcupine_checker(_history(*events))
 
     assert result["valid"], (
         f"The checker does not act on status {status!r} (it is not one of "
-        f"'ok', 'fail', 'unknown'), so it treated a trivially linearizable "
+        f"'ok', 'fail', 'unknown', 'not_applied'), so it treated a trivially linearizable "
         f"history as a violation: {result}"
     )
 
@@ -218,3 +220,97 @@ async def test_a_recorded_history_reaches_the_checker(tmp_path):
 
     with pytest.raises(AssertionError, match="Linearizability violation"):
         await check_linearizable(workload, output_dir=tmp_path / "broken")
+
+
+def _cas(op_id: int, key: int, expected: int, value: int, time_ns: int) -> dict:
+    return {**_call(op_id, "cas", key, value, time_ns), "expected": expected}
+
+
+async def test_cas_replaces_exactly_the_value_it_expected():
+    """A cas is the LWT register operation the LWT tests record.
+
+    Applied, it replaced the value it expected and nothing else: two CAS
+    both applied against the same value is the violation an LWT test exists
+    to find, since plain writes could never show it.  Not applied, it is
+    recorded 'not_applied' together with the value the server reported, and
+    that value must be the one the register held.  Refused before it ran
+    (Unavailable), it is recorded 'fail' with its own value, as a write is,
+    and must have no effect.
+    """
+    double_apply = await run_porcupine_checker(_history(
+        _cas(0, 1, 0, 5, 1),
+        _ret(0, "cas", 1, 5, 2, Outcome.OK),
+        _cas(1, 1, 0, 7, 3),
+        _ret(1, "cas", 1, 7, 4, Outcome.OK),
+    ))
+    assert not double_apply["valid"], (
+        f"two CAS applied against the same value must be rejected: {double_apply}"
+    )
+
+    chain = await run_porcupine_checker(_history(
+        _cas(0, 1, 0, 5, 1),
+        _ret(0, "cas", 1, 5, 2, Outcome.OK),
+        _cas(1, 1, 0, 7, 3),
+        _ret(1, "cas", 1, 5, 4, Outcome.NOT_APPLIED),   # saw 5
+        _cas(2, 1, 5, 7, 5),
+        _ret(2, "cas", 1, 7, 6, Outcome.OK),
+        _call(3, "read", 1, 0, 7),
+        _ret(3, "read", 1, 7, 8, Outcome.OK),
+    ))
+    assert chain["valid"], f"a chain of CAS must be legal: {chain}"
+
+    stale = await run_porcupine_checker(_history(
+        _cas(0, 1, 0, 5, 1),
+        _ret(0, "cas", 1, 5, 2, Outcome.OK),
+        _cas(1, 1, 7, 9, 3),
+        _ret(1, "cas", 1, 0, 4, Outcome.NOT_APPLIED),   # saw 0: but 5 was there
+    ))
+    assert not stale["valid"], (
+        f"a not-applied CAS reporting a value the register did not hold must be rejected: {stale}"
+    )
+
+    refused = await run_porcupine_checker(_history(
+        _cas(0, 1, 0, 7, 1),
+        _ret(0, "cas", 1, 7, 2, Outcome.FAIL),     # what record_failure() writes
+        _call(1, "read", 1, 0, 3),
+        _ret(1, "read", 1, 0, 4, Outcome.OK),
+    ))
+    assert refused["valid"], f"a refused CAS must have no effect: {refused}"
+
+
+async def test_pending_cas_may_apply_while_its_value_is_still_there():
+    """An unpaired cas is open to the end, but only applies against its expected value.
+
+    A CAS that timed out may still be completed by a later paxos round, so
+    it is left unpaired like a timed-out write.  It can only ever replace the
+    value it expected, so once that value is gone it is settled: the checker
+    must not let it land after another CAS took the register away.
+    """
+    ops = (
+        _cas(1, 1, 0, 7, 3),
+        _ret(1, "cas", 1, 7, 4, Outcome.OK),      # replaced 0 with 7
+    )
+    landed_first = await run_porcupine_checker(_history(
+        _cas(0, 1, 0, 5, 1),                      # no return: still in flight
+        _cas(1, 1, 5, 7, 3),
+        _ret(1, "cas", 1, 7, 4, Outcome.OK),      # replaced 5: so cas(0->5) applied
+    ))
+    assert landed_first["valid"], f"a pending CAS may have applied before a later one: {landed_first}"
+
+    never = await run_porcupine_checker(_history(
+        _cas(0, 1, 0, 5, 1),
+        *ops,
+        _call(2, "read", 1, 0, 5),
+        _ret(2, "read", 1, 7, 6, Outcome.OK),
+    ))
+    assert never["valid"], f"a pending CAS may never have applied: {never}"
+
+    too_late = await run_porcupine_checker(_history(
+        _cas(0, 1, 0, 5, 1),
+        *ops,
+        _call(2, "read", 1, 0, 5),
+        _ret(2, "read", 1, 5, 6, Outcome.OK),     # 0 was gone when 5 could only replace 0
+    ))
+    assert not too_late["valid"], (
+        f"a pending CAS must not apply once its expected value is gone: {too_late}"
+    )
