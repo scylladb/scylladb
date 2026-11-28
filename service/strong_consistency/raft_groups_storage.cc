@@ -10,9 +10,13 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
 #include "types/list.hh"
+#include "types/map.hh"
 #include "types/tuple.hh"
 #include "raft/raft.hh"
 #include "replica/database.hh"
+#include "mutation/collection_mutation.hh"
+#include "mutation/mutation.hh"
+#include "mutation_query.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/log.hh"
@@ -23,8 +27,12 @@
 #include "idl/raft_storage.dist.impl.hh"
 
 #include "cql3/query_processor.hh"
+#include "service/storage_proxy.hh"
 
 #include <seastar/core/coroutine.hh>
+
+#include <ranges>
+#include <unordered_set>
 
 namespace service::strong_consistency {
 
@@ -94,6 +102,113 @@ std::vector<truncation_record> deserialize_truncations(const managed_bytes_view&
 
 } // namespace
 
+namespace {
+
+std::vector<raft_seal> read_seals(const cql3::untyped_result_set_row& row, const std::optional<raft_seal>& promoted) {
+    if (!row.has("seals")) {
+        return {};
+    }
+    // The map is ordered by the index, so the seals come oldest first.
+    std::vector<std::pair<int64_t, int64_t>> seals;
+    row.get_map_data<int64_t, int64_t>("seals", std::back_inserter(seals));
+    // After a backwards clock step across a restart, a promotion's tombstones can lose
+    // to the cells of the seals it promoted.
+    return seals | std::views::transform([] (const auto& seal) {
+        return raft_seal{.idx = raft::index_t(seal.first), .ts = api::timestamp_type(seal.second)};
+    }) | std::views::filter([&] (const raft_seal& seal) {
+        return !promoted || seal.idx > promoted->idx;
+    }) | std::ranges::to<std::vector>();
+}
+
+std::optional<raft_seal> read_promoted_seal(const cql3::untyped_result_set_row& row) {
+    if (!row.has("promoted_seal")) {
+        return std::nullopt;
+    }
+    const auto type = db::system_keyspace::raft_groups()->get_column_definition("promoted_seal")->type;
+    const auto fields = value_cast<tuple_type_impl::native_type>(type->deserialize(row.get_view("promoted_seal")));
+    return raft_seal{.idx = raft::index_t(value_cast<int64_t>(fields[0])),
+            .ts = api::timestamp_type(value_cast<int64_t>(fields[1]))};
+}
+
+mutation make_seals_mutation(raft::group_id gid, shard_id shard, collection_mutation seals) {
+    auto s = db::system_keyspace::raft_groups();
+    auto pk = partition_key::from_exploded(*s, {
+        short_type->decompose(int16_t(shard)),
+        timeuuid_type->decompose(gid.id),
+    });
+    mutation m(s, std::move(pk));
+    m.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("seals"), std::move(seals));
+    return m;
+}
+
+// The newest write to the columns written at this node's clock, or the newest erase of
+// the row, so that a write after a restart with the clock stepped back still beats them.
+// Read as a mutation, since CQL cannot tell the write time of the seals' elements.
+future<api::timestamp_type> load_row_timestamp(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    auto s = db::system_keyspace::raft_groups();
+    const auto range = dht::partition_range::make_singular(dht::decorate_key(*s, partition_key::from_exploded(*s, {
+        short_type->decompose(int16_t(shard)),
+        timeuuid_type->decompose(gid.id),
+    })));
+    auto result = co_await db::system_keyspace::query_mutations(qp.proxy().get_db(),
+            db::system_keyspace::NAME, db::system_keyspace::RAFT_GROUPS, range);
+    static const std::unordered_set<std::string_view> columns{
+            "vote_term", "vote", "snapshot_idx", "snapshot_term", "snapshot_config", "truncations",
+            "truncated_at", "last_truncate_request_id", "truncate_index", "seals", "promoted_seal"};
+    auto ret = api::min_timestamp;
+    for (const auto& p : result->partitions()) {
+        const auto m = p.mut().unfreeze(s);
+        ret = std::max(ret, m.partition().partition_tombstone().timestamp);
+        const auto* row = m.partition().find_row(*s, clustering_key::make_empty());
+        if (!row) {
+            continue;
+        }
+        row->for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            const auto& def = s->regular_column_at(id);
+            if (!columns.contains(def.name_as_text())) {
+                return;
+            }
+            ret = std::max(ret, def.is_atomic()
+                    ? cell.as_atomic_cell(def).timestamp()
+                    : cell.as_collection_mutation().last_update(*def.type));
+        });
+    }
+    co_return ret;
+}
+
+} // namespace
+
+mutation make_seal_mutation(raft::group_id gid, shard_id shard, const raft_seal& seal, api::timestamp_type ts) {
+    collection_mutation_writer seals(tombstone{});
+    seals.push_back(managed_bytes_view(long_type->decompose(int64_t(seal.idx.value()))),
+            atomic_cell::make_live(*long_type, ts, long_type->decompose(int64_t(seal.ts)),
+                    atomic_cell::collection_member::yes));
+    return make_seals_mutation(gid, shard, std::move(seals).finish());
+}
+
+mutation make_remove_seals_mutation(raft::group_id gid, shard_id shard, std::span<const raft_seal> seals, api::timestamp_type ts) {
+    collection_mutation_writer writer(tombstone{});
+    const auto deleted_at = gc_clock::now();
+    for (const auto& seal : seals) {
+        writer.push_back(managed_bytes_view(long_type->decompose(int64_t(seal.idx.value()))),
+                atomic_cell::make_dead(ts, deleted_at));
+    }
+    return make_seals_mutation(gid, shard, std::move(writer).finish());
+}
+
+mutation make_promote_seal_mutation(raft::group_id gid, shard_id shard, const raft_seal& seal,
+        std::span<const raft_seal> seals, api::timestamp_type ts) {
+    // The seals are ordered by index.
+    const auto newer = std::ranges::upper_bound(seals, seal.idx, {}, &raft_seal::idx);
+    auto m = make_remove_seals_mutation(gid, shard, std::span(seals.begin(), newer), ts);
+    const auto& def = *m.schema()->get_column_definition("promoted_seal");
+    const auto value = make_tuple_value(def.type, tuple_type_impl::native_type{
+            data_value(int64_t(seal.idx.value())), data_value(int64_t(seal.ts))});
+    m.set_clustered_cell(clustering_key::make_empty(), def,
+            atomic_cell::make_live(*def.type, ts, def.type->decompose(value)));
+    return m;
+}
+
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
         raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
         replayed_data_per_group replayed_data, flush_request_fn request_flush)
@@ -118,11 +233,12 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::dat
 future<> raft_groups_storage::store_term_and_vote(raft::term_t term, raft::server_id vote) {
     rgslog.debug("Raft group {} on shard {} stores term {} and vote {}.", _group_id, _shard, term, vote);
     return execute_with_linearization_point([this, term, vote] {
-        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, vote_term, vote) VALUES (?, ?, ?, ?)",
+        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, vote_term, vote) VALUES (?, ?, ?, ?) USING TIMESTAMP ?",
             db::system_keyspace::RAFT_GROUPS);
         return _qp.execute_internal(
             store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(term.value()), vote.id}, cql3::query_processor::cache_internal::yes).discard_result();
+            {int16_t(_shard), _group_id.id, int64_t(term.value()), vote.id, next_row_timestamp()},
+            cql3::query_processor::cache_internal::yes).discard_result();
     });
 }
 
@@ -181,7 +297,8 @@ future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, r
     // it again.
     static const auto delete_group_cql = format("DELETE FROM system.{} USING TIMESTAMP ? WHERE shard = ? AND group_id = ?",
         db::system_keyspace::RAFT_GROUPS);
-    const auto group_timestamp = std::max(api::new_timestamp(), max_marker_timestamp + 1);
+    const auto row_timestamp = co_await load_row_timestamp(qp, gid, shard);
+    const auto group_timestamp = std::max({api::new_timestamp(), max_marker_timestamp + 1, row_timestamp + 1});
     co_await qp.execute_internal(delete_group_cql, {group_timestamp, int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
 
     rgslog.info("erase_persisted_state: erased the persisted raft state of group {} on shard {}", gid, shard);
@@ -198,7 +315,6 @@ future<> raft_groups_storage::store_truncate_record(replica::database& db, raft:
     mutation m(s, partition_key::from_exploded(*s, {short_type->decompose(int16_t(shard)), timeuuid_type->decompose(gid.id)}));
     // No clustering key: the whole row is one clustered row at the empty key.
     const auto ckey = clustering_key::make_empty();
-    // This node's clock, like the rest of the row, so that erase_persisted_state() beats it.
     const auto ts = std::max(api::new_timestamp(), record.written_at + 1);
     record.written_at = ts;
     m.set_clustered_cell(ckey, "truncated_at", data_value(int64_t(record.truncated_at)), ts);
@@ -215,11 +331,13 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     // The whole descriptor is in the group's own row: one read, and the index,
     // the term and the configuration were always written together.
     static const auto load_cql = format(
-            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations FROM system.{} "
+            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, seals, promoted_seal FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> result = co_await _qp.execute_internal(load_cql,
             {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
+    // Also before a bootstrap, which must beat the erase of an earlier incarnation.
+    _last_row_timestamp = std::max(_last_row_timestamp, co_await load_row_timestamp(_qp, _group_id, _shard));
     if (result->empty() || !result->one().has("snapshot_idx")) {
         // No descriptor yet; groups_manager will bootstrap() the group.
         rgslog.debug("Raft group {} on shard {} has no snapshot.", _group_id, _shard);
@@ -246,6 +364,8 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
         _persisted_truncations = deserialize_truncations(row.get_view("truncations"));
         _raft_commitlog.seed_truncations(_persisted_truncations);
     }
+    _promoted_seal = read_promoted_seal(row);
+    _seals = read_seals(row, _promoted_seal);
     _commit_index = std::max(_commit_index, snap.idx);
     _apply_index = std::max(_apply_index, snap.idx);
     rgslog.debug("loaded descriptor for group_id={}: idx={}, term={}, truncations={}",
@@ -309,9 +429,43 @@ void raft_groups_storage::release_all() {
     }
 }
 
+void raft_groups_storage::note_write(uint64_t bytes) {
+    _unsealed.bytes += bytes;
+    if (!_unsealed.first_applied_at) {
+        _unsealed.first_applied_at = lowres_clock::now();
+    }
+}
+
+void raft_groups_storage::add_seal(raft_seal seal) {
+    _unsealed = {};
+    if (_promoted_seal && seal.idx <= _promoted_seal->idx) {
+        return;
+    }
+    if (_seals.empty() || seal.idx > _seals.back().idx) {
+        _seals.push_back(seal);
+    }
+}
+
+void raft_groups_storage::remove_seals(const raft_seal& seal) {
+    std::erase_if(_seals, [&] (const raft_seal& s) { return s.idx <= seal.idx; });
+}
+
+void raft_groups_storage::promote_seal(const raft_seal& seal) {
+    if (_promoted_seal && seal.idx <= _promoted_seal->idx) {
+        return;
+    }
+    remove_seals(seal);
+    _promoted_seal = seal;
+}
+
 void raft_groups_storage::mark_segment_closed(db::replay_position pos) {
     _raft_commitlog.mark_segment_closed(pos);
     maybe_release();
+}
+
+api::timestamp_type raft_groups_storage::next_row_timestamp() {
+    _last_row_timestamp = std::max(api::new_timestamp(), _last_row_timestamp + 1);
+    return _last_row_timestamp;
 }
 
 void raft_groups_storage::maybe_release() {
@@ -386,13 +540,8 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
     mutation m(schema, std::move(pk));
     // No clustering key: the whole row is one clustered row at the empty key.
     const auto ckey = clustering_key::make_empty();
-    // Strictly increasing per group; see _last_row_timestamp. The CQL writers of this
-    // row use a clock of their own, so under a backwards clock step a CQL write and a
-    // release can order wrongly against each other, including an erase that loses to
-    // surviving descriptor cells. Closing the race needs the tombstone to derive its
-    // timestamp from the row itself (the fence design's rule 2).
-    _last_row_timestamp = std::max(api::new_timestamp(), _last_row_timestamp + 1);
-    const api::timestamp_type ts = _last_row_timestamp;
+    // Strictly increasing per group; see _last_row_timestamp.
+    const api::timestamp_type ts = next_row_timestamp();
     m.set_clustered_cell(ckey, "snapshot_idx", data_value(int64_t(record.max_index.value())), ts);
     m.set_clustered_cell(ckey, "snapshot_term", data_value(int64_t(record.max_term().value())), ts);
     m.set_clustered_cell(ckey, "snapshot_config", data_value(serialize_config(_snapshot_config)), ts);
@@ -438,13 +587,16 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
 future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_descriptor(
         cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
     static const auto load_cql = format(
-            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, "
-            "truncated_at, last_truncate_request_id, truncate_index, WRITETIME(truncate_index) AS written_at FROM system.{} "
+            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, seals, promoted_seal, "
+            "truncated_at, last_truncate_request_id, truncate_index FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
     auto result = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id},
             cql3::query_processor::cache_internal::yes);
     persisted_descriptor ret;
+    ret.row_timestamp = co_await load_row_timestamp(qp, gid, shard);
+    // The next record must also beat an erase of an earlier incarnation of the row.
+    ret.truncate.written_at = ret.row_timestamp;
     if (result->empty()) {
         co_return ret;
     }
@@ -461,7 +613,8 @@ future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_desc
     ret.truncate.truncated_at = row.get_or<int64_t>("truncated_at", ret.truncate.truncated_at);
     ret.truncate.last_truncate_request_id = row.get_or<utils::UUID>("last_truncate_request_id", ret.truncate.last_truncate_request_id);
     ret.truncate.truncate_index = raft::index_t(row.get_or<int64_t>("truncate_index", ret.truncate.truncate_index.value()));
-    ret.truncate.written_at = row.get_or<int64_t>("written_at", ret.truncate.written_at);
+    ret.promoted_seal = read_promoted_seal(row);
+    ret.seals = read_seals(row, ret.promoted_seal);
     co_return ret;
 }
 
@@ -484,11 +637,12 @@ future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::
     }
     static const auto store_cql = format(
             "INSERT INTO system.{} (shard, group_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?) USING TIMESTAMP ?",
             db::system_keyspace::RAFT_GROUPS);
     co_await qp.execute_internal(store_cql,
             {int16_t(shard), gid.id, int64_t(idx.value()), int64_t(term.value()),
-             data_value(serialize_config(config)), serialize_truncations(truncations)},
+             data_value(serialize_config(config)), serialize_truncations(truncations),
+             std::max(api::new_timestamp(), persisted.row_timestamp + 1)},
             cql3::query_processor::cache_internal::yes);
 }
 
@@ -514,13 +668,13 @@ future<> raft_groups_storage::bootstrap(raft::configuration initial_configuation
     _apply_index = std::max(_apply_index, init_index);
     static const auto store_cql = format(
             "INSERT INTO system.{} (shard, group_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?) USING TIMESTAMP ?",
             db::system_keyspace::RAFT_GROUPS);
     // snapshot_idx being present is what marks the group as bootstrapped.
     co_await _qp.execute_internal(store_cql,
             {int16_t(_shard), _group_id.id, int64_t(init_index.value()), int64_t(0),
              data_value(serialize_config(_snapshot_config)),
-             serialize_truncations({})},
+             serialize_truncations({}), next_row_timestamp()},
             cql3::query_processor::cache_internal::yes);
 }
 

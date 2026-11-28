@@ -72,17 +72,34 @@ struct truncate_command {
     utils::UUID request_id;
 };
 
+// Cuts the data of the tablet at the entry's index: every replica switches the tablet to new
+// memtables when it applies the entry, and records the seal in its system.raft_groups row.
+struct seal_command {
+    // The timestamp of the seal's cell, taken from the leader's clock like the one of a
+    // resize_marker.
+    api::timestamp_type timestamp;
+};
+
+// Makes the seal at `seal_idx` the promoted one on every replica, and drops it and every
+// older seal from the pending ones.
+struct promote_command {
+    raft::index_t seal_idx;
+};
+
 struct raft_command {
     // Note: needs to be default-constructible to use with ser::deserialize, which is why the
     // marker, and not the write, comes first.
-    std::variant<resize_marker, write_mutation, truncate_command> change;
+    std::variant<resize_marker, write_mutation, truncate_command, seal_command, promote_command> change;
 };
 
 // Builds the mutation which records `marker` in the system.raft_groups row of the group `gid`
 // hosted on `shard`.
 mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, const resize_marker& marker);
 
+// `range` is the token range the group is responsible for. Unlike the tablet id, it stays
+// valid when a resize replaces the tablet map.
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
+    dht::token_range range,
     raft::group_id gid,
     replica::database& db,
     service::migration_manager& mm,
@@ -90,6 +107,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     raft_groups_storage& storage,
     raft_resize_tracker& resize_tracker,
     lw_shared_ptr<state_machine_stats> stats);
+
+// Records a promoted seal as the repair time of the range of its group: everything up to it is
+// on every replica, which is what tombstone GC in repair mode asks the repair history for.
+void record_promoted_seal(replica::table& table, const dht::token_range& range, api::timestamp_type ts);
 
 // Applies the truncate_command `tc`, committed at `idx` in the log of the group `gid`, which
 // serves `tablet`, on this shard. Returns once the record is durable. A no-op when `record`
