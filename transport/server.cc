@@ -1212,6 +1212,7 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr, bool(server._used_by_maintenance_socket), &server._abort_source)
     , _current_scheduling_group(server.get_scheduling_group_for_new_connection())
 {
+    _client_state.set_connection_abort_source(&_input_closed);
     ++_server._stats.connects;
     ++_server._stats.connections;
     if (clogger.is_enabled(logging::log_level::trace)) {

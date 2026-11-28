@@ -160,6 +160,8 @@ private:
     // It's a way to indicate that we might abort processing the
     // request, e.g. if the corresponding connection has been severed.
     abort_source* _as{nullptr};
+    // Fires when the client connection goes away; not carried to other shards.
+    abort_source* _connection_as{nullptr};
 
 public:
     struct internal_tag {};
@@ -431,6 +433,12 @@ public:
     }
     abort_source* get_abort_source_ptr() noexcept {
         return _as;
+    }
+    void set_connection_abort_source(abort_source* as) noexcept {
+        _connection_as = as;
+    }
+    abort_source* get_connection_abort_source_ptr() noexcept {
+        return _connection_as;
     }
 
     /**

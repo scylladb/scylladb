@@ -62,13 +62,15 @@ private:
         std::optional<sstring> keyspace;
         sstring name;
     };
+    struct describe_commands {};
     using describe_config = std::variant<
         describe_cluster,
         describe_schema,
         describe_keyspace,
         describe_listing,
         describe_element,
-        describe_generic
+        describe_generic,
+        describe_commands
     >;
    
 private:
@@ -98,6 +100,7 @@ public:
     static std::unique_ptr<describe_statement> aggregates();
     static std::unique_ptr<describe_statement> aggregate(const functions::function_name& fn_name);
     static std::unique_ptr<describe_statement> generic(std::optional<sstring> keyspace, const sstring& name);
+    static std::unique_ptr<describe_statement> commands();
 };
 
 }

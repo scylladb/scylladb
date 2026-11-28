@@ -115,7 +115,7 @@ private:
     top_k _top_k_write;
 
 public:
-    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
+    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters, size_t capacity);
     ~toppartitions_data_listener();
 
     virtual mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
@@ -136,6 +136,9 @@ class toppartitions_query {
     std::unique_ptr<sharded<toppartitions_data_listener>> _query;
 
 public:
+    // Each shard keeps up to this many read and write entries for the whole window.
+    static constexpr size_t max_capacity = 10000;
+
     toppartitions_query(seastar::sharded<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
         std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity);
 

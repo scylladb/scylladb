@@ -23,6 +23,7 @@ CQL Reference
    mv
    describe-schema
    cluster-config
+   commands
    service-levels
    cql-extensions.md
 
@@ -54,6 +55,7 @@ It allows you to create keyspaces and tables, insert and query tables, and more.
   * :doc:`JSON Support </cql/json>`
   * :doc:`Materialized Views </cql/mv>`
   * :doc:`Configuring a Cluster with CQL </cql/cluster-config>`
+  * :doc:`CQL Commands </cql/commands>`
 
 ScyllaDB CQL Extensions - CQL Extensions Provided by ScyllaDB
 --------------------------------------------------------------
