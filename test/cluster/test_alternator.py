@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 import time
+import datetime
 import boto3
 import botocore
 from botocore.exceptions import ClientError, ConnectionClosedError, SSLError
@@ -32,6 +33,8 @@ import random
 import re
 
 from test.cluster.util import get_replication, FeatureConfig
+from test.pylib.internal_types import ServerInfo
+from test.pylib.object_storage import Storage, StorageFactory
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.pylib.rest_client import inject_error
@@ -51,7 +54,7 @@ alternator_config = {
     'alternator_write_isolation': 'only_rmw_uses_lwt',
     'alternator_ttl_period_in_seconds': '0.5',
 }
-def get_alternator(ip, user='alternator', passwd='secret_pass'):
+def get_alternator(ip, user='alternator', passwd='secret_pass', connect_timeout=60, read_timeout=300):
     url = f"http://{ip}:{alternator_config['alternator_port']}"
     return boto3.resource('dynamodb', endpoint_url=url,
         region_name='us-east-1',
@@ -59,7 +62,8 @@ def get_alternator(ip, user='alternator', passwd='secret_pass'):
         aws_secret_access_key=passwd,
         config=botocore.client.Config(
             retries={"max_attempts": 0},
-            read_timeout=300)
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout)
     )
 
 # Alternator convenience function for fetching the entire result set of a
@@ -2254,3 +2258,257 @@ async def test_alternator_ttl_expiration_during_drain(manager: ScyllaClusterMana
     async def item_expired():
         return True if 'Item' not in table.get_item(Key={'p': 1}, ConsistentRead=True) else None
     assert await wait_for(item_expired, time.time() + 60)
+
+
+# Stops the export fiber during the table scan, so that the export stays
+# IN_PROGRESS while a test interrupts it.
+export_pause_injection = 'alternator_export_to_s3_pause_in_item_handler'
+
+# start_paused_export() pauses the export after `export_pause_after_items` items. The sink of the
+# data file starts the multipart upload with the first full part of 5 MiB of compressed data. The
+# items hold random bytes, which do not compress, so the items before the pause are more than
+# 5 MiB also in the data file. test_export_fails_when_the_node_stops needs that open upload: a
+# kill keeps it, and a clean shutdown aborts it.
+export_item_count = 30
+export_item_size = 350 * 1024
+export_pause_after_items = 20
+
+
+def export_object_keys(object_storage: Storage) -> list[str]:
+    """The keys of the objects that the exports wrote to the bucket.
+
+    The bucket of the fixture also holds an `sstables/` object, which is not from
+    an export. Thus take only the objects below an `AWSDynamoDB/` directory.
+    """
+    s3 = object_storage.get_resource().meta.client
+    contents = s3.list_objects_v2(Bucket=object_storage.bucket_name).get('Contents', [])
+    return [obj['Key'] for obj in contents if 'AWSDynamoDB/' in obj['Key']]
+
+
+def export_multipart_uploads(object_storage: Storage) -> list[dict]:
+    """The multipart uploads of the bucket, which a listing of the objects does not show."""
+    s3 = object_storage.get_resource().meta.client
+    return s3.list_multipart_uploads(Bucket=object_storage.bucket_name).get('Uploads', [])
+
+
+async def start_paused_export(manager: ScyllaClusterManager,
+                              object_storage_factory: StorageFactory,
+                              server_count: int = 1) -> tuple[list[ServerInfo], str, Storage]:
+    """Start a cluster of `server_count` nodes and an export that does not finish.
+
+    The first node runs the export. Its fiber waits in `export_pause_injection`
+    with the export row IN_PROGRESS and with an open multipart upload of the data
+    file. Returns the nodes, the export ARN and the object storage.
+    """
+    object_storage = await object_storage_factory('s3')
+    servers = await manager.servers_add(server_count, auto_rack_dc='dc1', config=alternator_config | {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+    })
+    server = servers[0]
+
+    alternator = get_alternator(server.ip_addr)
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    for p in range(export_item_count):
+        table.put_item(Item={'p': p, 'v': os.urandom(export_item_size)})
+
+    client = table.meta.client
+    table_arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+    await manager.api.enable_injection(server.ip_addr, export_pause_injection, one_shot=False,
+                                       parameters={'pause_after_items': export_pause_after_items})
+    export_arn = client.export_table_to_point_in_time(
+        TableArn=table_arn,
+        S3Bucket=object_storage.bucket_name,
+    )['ExportDescription']['ExportArn']
+    # The injection enters for each item, and it stops the fiber at the item after
+    # the first `export_pause_after_items` items.
+    await manager.api.wait_for_injection_enter(server.ip_addr, export_pause_injection,
+                                               threshold=export_pause_after_items + 1)
+    uploads = export_multipart_uploads(object_storage)
+    assert len(uploads) == 1, uploads
+    return servers, export_arn, object_storage
+
+
+async def describe_finished_export(server: ServerInfo, export_arn: str, timeout: float = 120) -> dict:
+    """Call DescribeExport until the export is finished, and return its description.
+
+    An export that the garbage collector takes is IN_PROGRESS until the collector
+    writes the final row.
+    """
+    # A request that times out is retried by wait_for(). The short timeouts also end the thread of
+    # a request that the wait below gives up, so that it does not delay the teardown of the test.
+    client = get_alternator(server.ip_addr, connect_timeout=10, read_timeout=10).meta.client
+    deadline = time.time() + timeout
+    async def export_finished():
+        # The request runs in a thread, with the time left, so that a node which does not answer
+        # neither blocks the event loop nor makes the wait longer than `timeout`.
+        response = await asyncio.wait_for(asyncio.to_thread(client.describe_export, ExportArn=export_arn),
+                                          max(deadline - time.time(), 1))
+        desc = response['ExportDescription']
+        return desc if desc['ExportStatus'] != 'IN_PROGRESS' else None
+    return await wait_for(export_finished, deadline)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize('graceful, failure_code, upload_count', [
+    # A killed node leaves its export IN_PROGRESS with the old incarnation. The first
+    # garbage collection round after the restart writes FAILED with NodeFailure. The
+    # dead node neither completed nor aborted the multipart upload of the data file,
+    # thus the upload stays in the bucket.
+    (False, 'NodeFailure', 1),
+    # A graceful shutdown aborts the running exports, and each export writes its own
+    # FAILED row with the failure code NodeShutdown. (The garbage collector writes
+    # NodeFailure, so this is not the garbage collector.) The shutdown also aborts the
+    # multipart upload of the data file.
+    (True, 'NodeShutdown', 0),
+], ids=['killed', 'shut_down'])
+async def test_export_fails_when_the_node_stops(manager: ScyllaClusterManager, object_storage_factory,
+                                                graceful, failure_code, upload_count):
+    """A node that stops during an export makes the export FAILED."""
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory)
+    server = servers[0]
+    if graceful:
+        await manager.server_stop_gracefully(server.server_id)
+    else:
+        await manager.server_stop(server.server_id, convict=False)
+    # Start the node again for DescribeExport.
+    await manager.server_start(server.server_id)
+    desc = await describe_finished_export(server, export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == failure_code, desc
+    # The export did not write a data file. Thus the bucket holds only the _started
+    # object, and the data file is at most an incomplete multipart upload.
+    keys = export_object_keys(object_storage)
+    export_id = export_arn.rsplit('/export/', 1)[1]
+    assert len(keys) == 1 and keys[0].endswith(f'AWSDynamoDB/{export_id}/_started'), keys
+    uploads = export_multipart_uploads(object_storage)
+    assert len(uploads) == upload_count, uploads
+
+
+# The garbage collector takes the export of a node which stays down only after that node was
+# unreachable for an hour. This injection makes the hour short, so that the test is fast. The
+# `value` parameter is the time in seconds.
+export_unreachable_timeout_injection = 'alternator_export_to_s3_node_unreachable_timeout_s'
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_of_a_node_which_stays_down_fails(manager: ScyllaClusterManager, object_storage_factory):
+    """Another node marks FAILED the export of a node which stays down.
+
+    The cluster has three nodes, because the export tables are in
+    system_distributed, which the readers and the writers access at QUORUM.
+    """
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory, server_count=3)
+    for server in servers[1:]:
+        await manager.api.enable_injection(server.ip_addr, export_unreachable_timeout_injection,
+                                           one_shot=False, parameters={'value': '1'})
+    # The node stays down. Conviction makes the other nodes see the death at once, and the
+    # garbage collector of each of them starts a round after the timeout above.
+    await manager.server_stop(servers[0].server_id, convict=True)
+    desc = await describe_finished_export(servers[1], export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'NodeFailure', desc
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_of_a_node_which_dies_soon_after_another_node_fails(manager: ScyllaClusterManager, object_storage_factory):
+    """A node-down event soon after an earlier one gets its own garbage collection round.
+
+    Each node-down event asks for a round after the unreachable timeout. The round of the
+    first event comes before the timeout of the second one, so it does not take the export
+    of the second node. If the second event did not get its own round, the export would
+    stay IN_PROGRESS until the periodic round, 4 hours later.
+    """
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory, server_count=3)
+    # The timeout leaves a margin on both sides of the second event: the round of the first
+    # event must come after the second event, and must see the node of the export down for
+    # less than this timeout.
+    unreachable_timeout = 30
+    for server in servers[1:]:
+        await manager.api.enable_injection(server.ip_addr, export_unreachable_timeout_injection,
+                                           one_shot=False, parameters={'value': str(unreachable_timeout)})
+    # The first event: each of the two other nodes sees the other one die once. The nodes
+    # do not stop, so gossip marks them up again soon. Each node asks for a round after
+    # `unreachable_timeout` + 1 seconds.
+    a, b, c = servers
+    a_host_id, b_host_id, c_host_id = await asyncio.gather(*(manager.get_host_id(s.server_id) for s in servers))
+    # The collectors log their rounds and the exports they mark FAILED at debug level.
+    await asyncio.gather(*(manager.api.set_logger_level(s.ip_addr, 'alternator-export', 'debug') for s in (b, c)))
+    logs = await asyncio.gather(*(manager.server_open_log(s.server_id) for s in (b, c)))
+    marks = await asyncio.gather(*(log.mark() for log in logs))
+    first_event_time = time.monotonic()
+    await asyncio.gather(manager.api.convict(b.ip_addr, c_host_id), manager.api.convict(c.ip_addr, b_host_id))
+    # The second event comes before the round of the first one. That round sees the node of
+    # the export down for only about `unreachable_timeout` - 9 seconds, so it does not take
+    # the export. The round of the second event comes `unreachable_timeout` + 1 seconds after
+    # the kill. The round of the first event logs its start after its scans (see below). Its
+    # time is rounded up by up to `unreachable_timeout` / 10 (see request_gc_round()), so the
+    # scans have at least about 6 seconds before the round sees the node down for the timeout.
+    await asyncio.sleep(10)
+    # server_stop(convict=True) ignores the errors of the conviction, which would leave the
+    # second event to the failure detector, at an unknown time. Thus convict here: a
+    # conviction returns after the node ran its node-down notifications, or it fails.
+    await manager.server_stop(a.server_id, convict=False)
+    await asyncio.gather(manager.api.convict(b.ip_addr, a_host_id), manager.api.convict(c.ip_addr, a_host_id))
+    # The round of the first event starts at least `unreachable_timeout` + 1 seconds after
+    # the first event, and the convictions return after the second event. If the second
+    # event came after that round (a slow test), it would get its own round anyway, and the
+    # test would pass without checking anything.
+    assert time.monotonic() - first_event_time < unreachable_timeout, \
+        'the second node-down event came after the garbage collection round of the first one'
+    # The round of the first event must not take the export. If it came late, it would see the
+    # node of the export down for longer than the timeout and take it, and the test would pass
+    # without the round of the second event. On each collecting node, that round starts
+    # `unreachable_timeout` + 1 seconds after the node logged the first event, or a little
+    # later (the time is rounded up). The times are those of the node's own log. Another round
+    # which starts then (e.g. the retry of a failed round) sees the same downtime of the node of
+    # the export, so it serves as well.
+    def log_time(line):
+        stamp = re.search(r'\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}', line).group(0)
+        return datetime.datetime.strptime(stamp, '%Y-%m-%d %H:%M:%S,%f').timestamp()
+    marked_failed = f'Marking export row {re.escape(export_arn)} as FAILED'
+    second_down_times = []
+    for log, mark, other_host_id in zip(logs, marks, (c_host_id, b_host_id)):
+        pos, [(first_down, _)] = await log.wait_for(rf'InetAddress {other_host_id}\S* is now DOWN', from_mark=mark, timeout=60)
+        _, [(second_down, _)] = await log.wait_for(rf'InetAddress {a_host_id}\S* is now DOWN', from_mark=pos, timeout=60)
+        second_down_times.append(log_time(second_down))
+        # The log time has milliseconds, the scheduled time is a little later.
+        first_round_at = log_time(first_down) + unreachable_timeout + 1 - 0.1
+        while True:
+            pos, [(round_start, _)] = await log.wait_for(r'Garbage collection: \d+ client tokens', from_mark=pos, timeout=60)
+            if log_time(round_start) >= first_round_at:
+                break
+        # The round logs this line after its scans, right after it reads the downtimes, and it
+        # reads them again just before it marks an export. Thus a round which logs this line
+        # before this bound practically never sees the node of the export down for the timeout.
+        # A later line would let the round take the export, and the test would not check the
+        # round of the second event.
+        assert log_time(round_start) < log_time(second_down) + unreachable_timeout, \
+            'no garbage collection round for the first node-down event before the node of the export was down for the timeout'
+        # No round may mark the export FAILED before its node is down for the timeout. The round
+        # of the first event checks the downtime again just before it marks the export, so under
+        # load, it can validly mark it a little after the timeout.
+        await log.wait_for('Garbage collection: finished|Garbage collection of S3 exports failed', from_mark=pos, timeout=60)
+        for line, _ in await log.grep(marked_failed, from_mark=mark):
+            # The downtime starts a little before the node logs the event.
+            assert log_time(line) >= log_time(second_down) + unreachable_timeout - 0.5, \
+                'the export was marked FAILED before its node was down for the timeout'
+    desc = await describe_finished_export(b, export_arn, timeout=60)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'NodeFailure', desc
+    # The second event got its own round on each collecting node: a round starts
+    # `unreachable_timeout` + 1 seconds after the node logged the event, or a little later (the
+    # time is rounded up, and the line comes after the scans). Whichever round marked the export
+    # FAILED, this is what the test is about. A round which failed is retried only a minute
+    # later, so its retry does not count.
+    for log, mark, second_down_time in zip(logs, marks, second_down_times):
+        second_round_at = second_down_time + unreachable_timeout + 1 - 0.1
+        pos = mark
+        while True:
+            pos, [(round_start, _)] = await log.wait_for(r'Garbage collection: \d+ client tokens', from_mark=pos, timeout=60)
+            if log_time(round_start) >= second_round_at:
+                break
+        assert log_time(round_start) < second_round_at + 20, \
+            'no garbage collection round for the second node-down event'
