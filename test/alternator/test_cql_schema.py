@@ -51,6 +51,18 @@ def scylla_get_schema(dynamodb, ks_name_and_isview):
     assert len(res) == 1
     return res[0]
 
+# Utility function for getting (using Alternator's system-table access) the
+# set of column names of the CQL table or view given by the same keyspace,
+# name and is_view triplet as scylla_get_schema() takes. Both tables and
+# views list their columns in the same system table.
+def scylla_get_column_names(dynamodb, ks_name_and_isview):
+    ks, name, _ = ks_name_and_isview
+    sys = dynamodb.Table('.scylla.alternator.system_schema.columns')
+    res = full_query(sys,
+        KeyConditionExpression='keyspace_name=:ks and table_name=:name',
+        ExpressionAttributeValues={':ks': ks, ':name' : name})
+    return {r['column_name'] for r in res}
+
 # Utility functions for getting the keyspace and table name used to store
 # an Alternator base-table, GSI, LSI and Streams respectively. Tests below
 # will use those functions, so will ensure that this table naming doesn't
@@ -210,3 +222,74 @@ def test_alternator_tables_respect_speculative_retry_config(dynamodb, cql):
             assert scylla_get_schema(dynamodb, cql_table_for_cdclog(table))['speculative_retry'] == '200.00ms'
     finally:
         cql.execute(f"UPDATE system.config SET value = '{original}' WHERE name = '{option}'")
+
+# Test the schema of the view of a GSI or LSI, created by CreateTable or
+# UpdateTable: With ProjectionType=ALL, the view has the ":attrs" column,
+# which holds all the non-key attributes, and include_all_columns=True in its
+# schema. With ProjectionType=KEYS_ONLY, it has neither. The missing ":attrs"
+# column is what Alternator uses to know that an index is KEYS_ONLY, e.g., in
+# DescribeTable and when reading from the index. The include_all_columns flag
+# doesn't have any real effect on Alternator or its use of materialized views
+# - rather, it is mainly used by CQL's DESCRIBE MATERIALIZED VIEW and ALTER
+# TABLE ... ADD COLUMN. But let's check it is correct just in case somebody
+# tries to use them on an Alternator table.
+def test_index_view_projection_schema(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+        ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi_all',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_keys_only',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            },
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi_all',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'lsi_keys_only',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            },
+        ],
+    ) as table:
+        # Add more GSIs via UpdateTable, to check them too:
+        for index_name, projection_type in [('gsi_all_2', 'ALL'), ('gsi_keys_only_2', 'KEYS_ONLY')]:
+            table.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{'AttributeName': 'y', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexUpdates=[{'Create': {
+                    'IndexName': index_name,
+                    'KeySchema': [{'AttributeName': 'y', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': projection_type},
+                }}])
+        for index_name, cql_table_for_index, keys_only in [
+                ('gsi_all', cql_table_for_gsi, False),
+                ('gsi_keys_only', cql_table_for_gsi, True),
+                ('lsi_all', cql_table_for_lsi, False),
+                ('lsi_keys_only', cql_table_for_lsi, True),
+                ('gsi_all_2', cql_table_for_gsi, False),
+                ('gsi_keys_only_2', cql_table_for_gsi, True)]:
+            cql_table = cql_table_for_index(table, index_name)
+            # Check that only the view of an ALL index has the ":attrs" column.
+            assert (':attrs' in scylla_get_column_names(dynamodb, cql_table)) == (not keys_only), index_name
+            # Check that only the view of an ALL index has include_all_columns.
+            expected = 'false' if keys_only else 'true'
+            assert scylla_get_schema(dynamodb, cql_table)['include_all_columns'] == expected, index_name

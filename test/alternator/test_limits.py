@@ -356,8 +356,8 @@ def test_limit_attribute_length_gsi_lsi_bad_incoherent_names(dynamodb):
 # This limitation is only true to attributes *explicitly* projected by name -
 # attributes projected as part as ALL can be bigger (up to the usual 64KB
 # limit).
-# Reproduces issue #9169.
-@pytest.mark.xfail(reason="issue #5036: projection in GSI and LSI not supported")
+# Reproduces issues #9169, #5036.
+@pytest.mark.xfail(reason="issue #5036: ProjectionType=INCLUDE not yet supported")
 def test_limit_attribute_length_gsi_lsi_projection_bad(dynamodb):
     too_long_name = random_string(256)
     with pytest.raises(ClientError, match='ValidationException.*25[56]'):

@@ -421,11 +421,27 @@ behave the same in Alternator. However, there are a few features which we have
 not implemented yet. Unimplemented features return an error when used, so
 they should be easy to detect. Here is a list of these unimplemented features:
 
-* GSI (Global Secondary Index) and LSI (Local Secondary Index) may be
-  configured to project only a subset of the base-table attributes to the
-  index. This option is not yet respected by Alternator - all attributes
-  are projected. This wastes some disk space when it is not needed.
+* GSI (Global Secondary Index) and LSI (Local Secondary Index) have a
+  ProjectionType option to include only a subset of the base-table attributes
+  in the index. The settings ProjectionType=ALL and ProjectionType=KEYS_ONLY
+  are supported, but ProjectionType=INCLUDE is not. Unlike other unimplemented
+  features, INCLUDE does not return an error: an index requested with
+  ProjectionType=INCLUDE is created with ProjectionType=ALL instead (and
+  DescribeTable reports it as such). This wastes some space, and reads from
+  the index may return attributes not listed in NonKeyAttributes, but gives
+  access to all the attributes the application needs.
   <https://github.com/scylladb/scylla/issues/5036>
+
+  As in DynamoDB, a Query or Scan of an LSI with ProjectionType=KEYS_ONLY
+  may also ask for attributes which the LSI does not project, with
+  Select=ALL_ATTRIBUTES or by listing them in ProjectionExpression or
+  AttributesToGet. But Alternator currently does this inefficiently: it
+  reads each matching item separately from the base table, one after
+  another, instead of reading many items at once as it does from an LSI
+  with ProjectionType=ALL. The metric
+  `scylla_alternator_lsi_reads_from_base_table` counts these reads.
+  If an application often reads non-projected attributes from an LSI, it
+  should use ProjectionType=ALL for this LSI.
 
 * The deprecated `KeyConditions` parameter of `Query` works only on
   single-attribute keys. Using it to query a composite GSI fails with a
