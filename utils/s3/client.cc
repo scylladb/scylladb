@@ -891,6 +891,12 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
             verify_reply_range(object_name, download_range, rep);
         }
         auto in = std::move(in_);
+        // Don't allocate off an untrusted Content-Length; full_range's length is
+        // s3::maximum_object_size, so this also caps a full-object read.
+        if (rep.content_length > download_range.length()) {
+            throw std::overflow_error(fmt::format("Content-Length {} for '{}' exceeds requested range length {}",
+                                                   rep.content_length, object_name, download_range.length()));
+        }
         ret = temporary_buffer<char>(rep.content_length);
         off = 0;
         s3l.trace("Consume {} bytes for {}", ret->size(), object_name);
