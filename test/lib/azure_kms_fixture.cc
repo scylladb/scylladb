@@ -138,7 +138,10 @@ azure_kms_fixture::impl::impl(azure_mode m)
 }
 
 seastar::future<> azure_kms_fixture::impl::setup() {
-    if ((key_name.empty() || mode == azure_mode::local) && mode != azure_mode::real) {
+    // Only tests that explicitly ask for real Azure get it, and they are run
+    // only when ENABLE_AZURE_TEST_REAL is set. Everything else uses the mock,
+    // even if the environment has real Azure parameters.
+    if (mode != azure_mode::real) {
         // Isolate the default-credentials chain from the developer's real Azure
         // credentials, so tests that expect the chain to find *no* credentials
         // (e.g. test_azure_provider_with_incomplete_creds) don't spuriously
@@ -156,13 +159,6 @@ seastar::future<> azure_kms_fixture::impl::setup() {
             v.unset(var);
             env_overrides.push_back(std::move(v));
         }
-        // The Azure CLI source spawns `az`, which reads the logged-in account
-        // from AZURE_CONFIG_DIR (defaulting to ~/.azure). Point it at an empty
-        // directory so `az` finds no account.
-        auto empty_azure_dir = tmp.path() / "empty-azure-config";
-        fs::create_directories(empty_azure_dir);
-        env_overrides.emplace_back("AZURE_CONFIG_DIR", empty_azure_dir.string());
-
         auto host = getenv_or_default("MOCK_AZURE_VAULT_SERVER_HOST", "127.0.0.1");
         auto [proc, port] = co_await start_fake_azure_server(tmp, host);
         local_azure.emplace(std::move(proc));

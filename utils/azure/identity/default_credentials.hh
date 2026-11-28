@@ -18,12 +18,10 @@ class default_credentials : public credentials {
 public:
     enum class source : uint8_t {
         Env,
-        AzureCli,
         Imds,
     };
     using source_set = enum_set<super_enum<source,
         source::Env,
-        source::AzureCli,
         source::Imds>>;
     static constexpr source_set all_sources = source_set::full();
 
@@ -48,7 +46,6 @@ private:
 
     using credentials_opt = std::optional<std::unique_ptr<credentials>>;
     future<credentials_opt> get_credentials_from_env(const resource_type& resource_uri);
-    future<credentials_opt> get_credentials_from_azure_cli(const resource_type& resource_uri);
     future<credentials_opt> get_credentials_from_imds(const resource_type& resource_uri);
 };
 

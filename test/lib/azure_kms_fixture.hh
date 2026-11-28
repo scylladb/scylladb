@@ -22,7 +22,7 @@
 
     This test is parameterized with env vars:
 
-    * AZURE_KEY_NAME - set to <vault_name>/<keyname> - if set, assume real Azure env
+    * AZURE_KEY_NAME - set to <vault_name>/<keyname> - used only by tests that ask for real Azure
     * AZURE_TENANT_ID - the tenant where the principals live
     * AZURE_USER_1_CLIENT_ID - the client ID of user1
     * AZURE_USER_1_CLIENT_SECRET - the secret of user1

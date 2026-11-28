@@ -1882,8 +1882,8 @@ SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_no_host, local_azure_kms_wrap
 /**
  * Verify that the Azure key provider throws if the provided Service Principal
  * credentials are incomplete. The provider will first fall back to the default
- * credentials source to detect credentials from the system (env vars, Azure CLI,
- * IMDS), and only after all these attempts fail will it throw.
+ * credentials source to detect credentials from the system (env vars, IMDS),
+ * and only after all these attempts fail will it throw.
  *
  * Note: Just in case we ever run these tests on Azure VMs, use a non-routable
  * IP address for the IMDS endpoint to ensure the connection will fail.
