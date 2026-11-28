@@ -1460,8 +1460,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
     co_await create_reference(sid, gen, node_owner);
-    auto refs = co_await num_references(sid);
-    sstlog.debug("Cloned {} sstable_id={} num_references={}", sst.get_filename(), sid, refs);
+    sstlog.debug("Cloned {} sstable_id={}", sst.get_filename(), sid);
 
     if (!may_use_reference_sharing) {
         co_await copy_components(sst, sid, {component_type::Scylla});
