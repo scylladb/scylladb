@@ -14,3 +14,4 @@ Do NOT load all files at once — read only what applies to your current task.
 - **Always read** `.github/copilot-instructions.md` for build/test commands and project values
 - **If editing C++ files** (`*.cc`, `*.hh`): also read `.github/instructions/cpp.instructions.md`
 - **If editing Python files** (`*.py`): also read `.github/instructions/python.instructions.md`
+- **If designing a change or reviewing a pull request**: also read `docs/dev/review-checklist.md`, and the `docs/dev/` files for the area of the change

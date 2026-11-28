@@ -95,6 +95,11 @@ ninja build/<mode>/scylla
 - Add `--repeat <num>` to repeat a test multiple times
 - After modifying C++ source files, only rebuild the Scylla binary for Python tests
 
+### Investigating Test Failures
+- Before running `./test.py` again, even for a quick rerun, copy `testlog/<mode>/failed_test/`
+  elsewhere or pass `--save-log-on-success`: every run first deletes the logs of the previous one,
+  including the server logs and stack traces of the failed tests.
+
 ## Code Philosophy
 - Performance matters in hot paths (data read/write, inner loops)
 - Self-documenting code through clear naming
@@ -104,6 +109,26 @@ ninja build/<mode>/scylla
 - Question requests: don't blindly implement requests - evaluate trade-offs, identify issues, and suggest better alternatives when appropriate
 - Consider different approaches, weigh pros and cons, and recommend the best fit for the specific context
 
+### Readable Code
+Write code that a human reads correctly on the first pass. The points below give the usual
+direction, not fixed rules: where another form is clearly easier to read, use it. None of them
+justifies slower code on a hot path: keep the optimization and make it readable.
+- Prefer plain code over compact code. A dense one-liner, a nested comprehension or a chain of
+  algorithms is short but slow to read. For two or three items, plain repeated lines are often
+  clearer than a loop.
+- Prefer clear code over long comments. A comment usually gives the overview and the reason in a
+  few lines. A complex function or class can need a longer one, even with a list, but first check
+  whether simpler code would need less explanation. A comment states only facts checked in the
+  code.
+- When a problem shows up in one place, whether you or a reviewer found it, fix every place in the
+  change with the same pattern.
+- In tests, give different quantities different values: with 3 replicas, write 2 rows, not 3, so
+  that a count of 6 has only one meaning.
+- Split a long test into phases (set up, act, check) with a blank line and a one-line comment
+  each. The comments alone should give the outline.
+- Before presenting a change, reread the diff as someone who did not write it (file by file for a
+  large one), go through these points one by one, and rewrite whatever needs a second look.
+
 ## Making Changes
 - Make only the functional changes the task needs, and motivate each one in the patch
   description.
@@ -112,6 +137,8 @@ ninja build/<mode>/scylla
 - Do not reformat or restyle code you are not otherwise changing. Cosmetic changes are made only
   when asked for, and then as separate patches (see "Patch organization" in
   `docs/dev/review-checklist.md`).
+- Split a larger change into a series of small patches that leads up to it, as "Patch
+  organization" in `docs/dev/review-checklist.md` describes.
 - Adding or updating comments that explain the change is welcome.
 
 ## Test Philosophy
@@ -123,6 +150,11 @@ ninja build/<mode>/scylla
 - Tests in debug are always slower, so if needed, reduce number of iterations, rows, data used, cycles, etc. in debug mode.
 - Tests should strive to be repeatable, and not use random input that will make their results unpredictable.
 - Tests should consume as little resources as possible. Prefer running tests on a single node if it is sufficient, for example.
+- Test CQL behaviour in `test/cqlpy`, Scylla-only behaviour included (the `scylla_only` fixture). Use boost tests only for what cqlpy cannot reach, such as internal APIs or exact node-wide counters, and `test/cluster` only when the test needs more than one node.
+- Base the verdict of a test on observable state: query results, metrics, system tables, REST responses. Check log lines only when nothing else shows the event, such as the end of a configuration reload: logs are output and can change at any time.
+- Check a signal the test owns, such as a per-table metric or the test's own table, not a node-wide counter that other tests and background work also move. A cqlpy test may share its node with other tests, so compare values before and after the operation instead of with absolute numbers.
+- If an existing error injection reaches a case, test the case with it. Add a new injection point to production code only when nothing else reaches the case: each one is a hook in production code that tests then depend on.
+- Write expected values and error messages as literals in the test, in full. Do not compute them from the code under test or assemble them from fragments.
 
 ## Git and GitHub Workflow
 - Never push a branch, open a pull request or force-push without being asked to.

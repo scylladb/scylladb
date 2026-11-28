@@ -36,12 +36,34 @@ seastar::future<T> func() {
 }
 ```
 
+## Lifetimes
+- In a function that returns the future of a `.then()` chain, capture locals by value or move, and
+  capture `this` only when the object outlives the continuation: a captured reference to a local
+  dangles once the function returns. A coroutine that awaits the chain can capture its own locals by
+  reference, since they live in the coroutine frame
+- A coroutine parameter taken by value lives in the coroutine frame and stays valid across
+  `co_await`. An lvalue reference parameter stays valid only while the caller keeps the object alive
+  and at the same address. Use an rvalue reference parameter only before the first `co_await`, or
+  move it into a local first. Take parameters by value when in doubt
+- The captures of a lambda coroutine live in the lambda object, not in the coroutine frame: they
+  dangle after the first suspension unless the lambda object stays alive until the coroutine
+  completes
+- After a `co_await`, look up iterators, pointers and references into shared state (a container, the
+  schema) again: another fiber can invalidate them during the suspension
+
 ## Error Handling
 - Throw exceptions for errors (futures propagate them automatically)
 - In coroutines, use `co_await coroutine::return_exception_ptr()` or `co_return coroutine::exception()` to avoid the overhead of throwing
+- To pass on or handle the failure of an awaited future without rethrowing it, use
+  `co_await coroutine::try_future(f)`, which returns the exception to the caller, or
+  `co_await coroutine::as_future(f)`, which gives the future to check with `failed()`.
+  A plain `co_await f` rethrows the exception inside the coroutine
 - In data path: avoid exceptions, use `std::expected` (or `boost::outcome`) instead
 - Use standard exceptions (`std::runtime_error`, `std::invalid_argument`)
 - Database-specific: throw appropriate schema/query exceptions
+- Report errors meant for a CQL client with a subclass of `exceptions::cassandra_exception`: any
+  other exception reaches the client as SERVER_ERROR. For a user mistake, use the type the code
+  already uses for similar mistakes, e.g. `exceptions::invalid_request_exception`
 
 ## Invariant Checking
 - Prefer `throwing_assert()` (`utils/assert.hh`), it logs and throws instead of aborting
