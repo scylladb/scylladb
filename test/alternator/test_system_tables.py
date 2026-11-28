@@ -16,13 +16,21 @@ from .util import full_scan, scylla_config_read, scylla_config_temporary
 
 internal_prefix = '.scylla.alternator.'
 
+# Deletes the system.scylla_table_schema_history partition which
+# test_page_break_over_range_tombstone_asan writes, when the test ends, so
+# that its rows don't stay in the system table for later tests.
+@pytest.fixture
+def schema_history_cleanup(cql):
+    yield
+    cql.execute('DELETE FROM system.scylla_table_schema_history WHERE cf_id = eee7eb26-a372-4eb4-aeaa-72f224cf0000')
+
 # reproduces scylladb/scylladb#26960
 # page break over range tombstone was causing use-after-free, because `encode_paging_state`
 # assumed position had always data for each column in clustering key
 # which is not true for range tombstones - if clustering key has two columns,
 # use can range delete by specify only first column, which produces key prefix with only first column filled.
 # we use scylla_table_schema_history here, because it has a composite clustering key (schema_version, column_name)
-def test_page_break_over_range_tombstone_asan(scylla_only, dynamodb, rest_api, cql):
+def test_page_break_over_range_tombstone_asan(scylla_only, dynamodb, rest_api, cql, schema_history_cleanup):
     client = dynamodb.meta.client
 
     # scylla_table_schema_history has a primary key of (cf_id, schema_version, column_name)
