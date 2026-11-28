@@ -8,20 +8,26 @@
 
 
 #include <algorithm>
+#include <list>
 #include <unordered_set>
 #include <regex>
 #include <boost/test/unit_test.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/http/exception.hh>
+#include <seastar/net/api.hh>
+#include <seastar/net/dns.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
+#include <seastar/core/with_timeout.hh>
 #include <seastar/core/metrics_api.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
@@ -1089,6 +1095,159 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_s3) {
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_proxy) {
     test_download_data_source(make_proxy_client, true, 3 * 1024);
+}
+
+// A proxy between an S3 client and the S3 server, which cuts the reply on its
+// first connection short: it passes on only the first cut_after bytes which
+// the server sends on that connection, and then closes it, as a connection
+// which broke in the middle of a reply would end. It passes everything else
+// on as it is.
+class reply_cutting_proxy {
+    server_socket _listener;
+    socket_address _server;
+    size_t _cut_after;
+    unsigned _connections = 0;
+    bool _cut = false;
+    std::list<connected_socket> _sockets;
+    future<> _accepting;
+
+    future<> pipe(connected_socket& from, connected_socket& to, std::optional<size_t> limit) {
+        auto in = from.input();
+        auto out = to.output();
+        try {
+            size_t forwarded = 0;
+            while (true) {
+                auto buf = co_await in.read();
+                if (buf.empty()) {
+                    break;
+                }
+                if (limit && forwarded + buf.size() >= *limit) {
+                    buf.trim(*limit - forwarded);
+                    co_await out.write(std::move(buf));
+                    _cut = true;
+                    break;
+                }
+                forwarded += buf.size();
+                co_await out.write(std::move(buf));
+                co_await out.flush();
+            }
+        } catch (...) {
+            testlog.debug("Proxy connection failed: {}", std::current_exception());
+        }
+        // Closing the output stream flushes it, and shuts down the socket's
+        // sending side, so the other side reads the end of the stream.
+        try {
+            co_await out.close();
+        } catch (...) {
+        }
+        co_await in.close();
+    }
+
+    future<> accept() {
+        std::vector<future<>> pipes;
+        while (true) {
+            accept_result client;
+            try {
+                client = co_await _listener.accept();
+            } catch (...) {
+                // stop() aborted accept().
+                break;
+            }
+            auto& c = _sockets.emplace_back(std::move(client.connection));
+            auto& s = _sockets.emplace_back(co_await seastar::connect(_server));
+            auto limit = _connections++ == 0 ? std::optional<size_t>(_cut_after) : std::nullopt;
+            pipes.push_back(pipe(c, s, std::nullopt));
+            pipes.push_back(pipe(s, c, limit));
+        }
+        co_await when_all(pipes.begin(), pipes.end());
+    }
+
+public:
+    reply_cutting_proxy(net::inet_address address, socket_address server, size_t cut_after)
+        // By default, the connections would be distributed between the shards,
+        // but the proxy accepts them only on this one.
+        : _listener(seastar::listen(socket_address(address, 0), listen_options{
+                .lba = server_socket::load_balancing_algorithm::fixed,
+                .fixed_cpu = this_shard_id()}))
+        , _server(server)
+        , _cut_after(cut_after)
+        , _accepting(accept())
+    {}
+
+    uint16_t port() const {
+        return _listener.local_address().port();
+    }
+    unsigned connections() const {
+        return _connections;
+    }
+    bool cut() const {
+        return _cut;
+    }
+
+    future<> stop() noexcept {
+        _listener.abort_accept();
+        for (auto& s : _sockets) {
+            s.shutdown_input();
+            s.shutdown_output();
+        }
+        return std::move(_accepting);
+    }
+};
+
+// When the body of a GET ends in the middle, download_source sends a new GET
+// for the rest of the range, by itself. Reproduces #33363: the failure also
+// made the transport retry the first GET, and call its reply handler again,
+// after the handler had already handed the body out - so the handler waited
+// forever, and closing the source hung.
+SEASTAR_THREAD_TEST_CASE(test_download_source_reply_cut_short_s3) {
+    if (::getenv("AWS_DEFAULT_REGION")) {
+        // The proxy doesn't speak HTTPS, which AWS needs.
+        testlog.info("Skipping the test, which runs only with a local S3 server");
+        return;
+    }
+    s3_test_fixture guard(make_s3_client);
+    const auto name = guard.object_path("testdownloadsourcecutshort");
+    auto content = tests::random::get_bytes(1_MiB);
+    guard.client()->put_object(name, temporary_buffer<char>(reinterpret_cast<const char*>(content.data()), content.size())).get();
+
+    auto server_address = net::dns::resolve_name(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), net::inet_address::family::INET).get();
+    // A client registers metrics labeled with its server's address, so the
+    // proxy's must differ from the S3 server's, whose client the fixture has.
+    auto proxy_address = net::inet_address(server_address == net::inet_address("127.0.0.1") ? "127.0.0.2" : "127.0.0.1");
+    // The first reply is cut in the middle of the object.
+    reply_cutting_proxy proxy(proxy_address, socket_address(server_address, std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST"))),
+            content.size() / 2);
+    auto stop_proxy = deferred_stop(proxy);
+    s3::endpoint_config cfg = {
+        .port = proxy.port(),
+        .use_https = false,
+        .region = "local",
+    };
+    auto cln = s3::client::make(fmt::to_string(proxy_address), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
+    auto close_client = deferred_close(*cln);
+
+    auto in = input_stream<char>(cln->make_download_source(name, s3::full_range));
+    bytes downloaded;
+    while (auto buf = in.read().get()) {
+        downloaded.append(reinterpret_cast<const int8_t*>(buf.get()), buf.size());
+    }
+    // Check that the first reply was cut short, and that the source read the
+    // whole object anyway.
+    BOOST_REQUIRE(proxy.cut());
+    BOOST_REQUIRE(downloaded == content);
+    // Check that closing the source doesn't wait forever for the first GET.
+    // with_timeout() doesn't stop the close, and the stuck GET would keep
+    // using the source and the client - so if the close hangs, the test can't
+    // destroy them, nor close the client, to fail normally: it aborts.
+    try {
+        with_timeout(lowres_clock::now() + 60s, in.close()).get();
+    } catch (const timed_out_error&) {
+        testlog.error("Closing the download source didn't finish in 60 seconds");
+        abort();
+    }
+    // Check that the first GET wasn't sent again: only the source's own
+    // request for the rest of the object followed it.
+    BOOST_REQUIRE_EQUAL(proxy.connections(), 2);
 }
 
 void test_chunked_download_data_source(const client_maker_function& client_maker, size_t object_size) {
