@@ -977,6 +977,7 @@ untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::da
                     cql3_type::kind::SMALLINT,
                     cql3_type::kind::TIMESTAMP,
                     cql3_type::kind::DATE,
+                    cql3_type::kind::TIME,
                     cql3_type::kind::TINYINT,
                     cql3_type::kind::VARINT>::contains(kind);
             break;
