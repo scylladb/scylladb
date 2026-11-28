@@ -296,3 +296,46 @@ async def test_drop_keyspace_during_shutdown(manager: ScyllaClusterManager):
     for table in tables:
         assert await log.grep(f"database - Truncated {ks}.{table}", from_mark=mark)
     assert not await log.grep("applier fiber stopped because of the error", from_mark=mark)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_keyspace_cleanup_failure(manager: ScyllaClusterManager):
+    """Fail the cleanup of a table dropped by DROP KEYSPACE.
+
+    The schema merge drops the keyspace's tables, then cleans them up one
+    after the other, and the cleanup is what stops them. Make the cleanup of
+    the first table fail, and verify that the node does not abort when the
+    failed table and the tables after it, which were not cleaned up, are
+    destroyed.
+
+    Reproducer for SCYLLADB-6648.
+    """
+    # A single shard, so that the one-shot injection fails the cleanup of the first table on all shards.
+    server = await manager.server_add(cmdline=['--smp', '1'])
+    cql = manager.get_cql()
+
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    tables = ("t1", "t2", "t3")
+    for table in tables:
+        await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY)")
+
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+
+    await manager.api.enable_injection(server.ip_addr, "cleanup_drop_table_fail", one_shot=True)
+    drop = asyncio.ensure_future(cql.run_async(f"DROP KEYSPACE {ks}"))
+
+    # None of the tables was cleaned up: the first one failed, and the schema merge stopped there.
+    for table in tables:
+        await log.wait_for(f"Stopping dropped table {ks}.{table} \\(id: .*\\) without cleanup, because the schema merge failed", from_mark=mark, timeout=60)
+
+    # The failed schema merge stops the raft applier, so the drop never completes. Fails if the node aborted.
+    await manager.server_stop_gracefully(server.server_id)
+    await asyncio.gather(drop, return_exceptions=True)
+    assert not await log.grep("was not disabled", from_mark=mark)
+
+    # The drop was persisted before the cleanup failed.
+    await manager.server_start(server.server_id)
+    cql, _ = await manager.get_ready_cql([server])
+    rows = await cql.run_async(f"SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+    assert not rows, f"Keyspace {ks} exists after restart"

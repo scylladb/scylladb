@@ -15,6 +15,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -1121,6 +1122,7 @@ future<> schema_applier::commit() {
     co_await sharded_db.invoke_on_others([this, commit_gen] (replica::database& db) {
         commit_on_shard(db, commit_gen);
     });
+    _committed = true;
     // unlock as some functions in post_commit() may read data under those locks
     _metadata_locks = nullptr;
 }
@@ -1129,23 +1131,25 @@ future<> schema_applier::finalize_tables_and_views() {
     auto& sharded_db = _proxy.local().get_db();
     auto& diff = _affected_tables_and_views;
 
+    // A table which was cleaned up is removed from table_shards, the ones left
+    // there if this fails are stopped by destroy().
+    auto cleanup_dropped_table = [&] (const schema& s) -> future<> {
+        co_await _ss.local().on_cleanup_for_drop_table(s.id());
+        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s.id()]);
+        diff.table_shards.erase(s.id());
+    };
+
     // first drop views and *only then* the tables, if interleaved it can lead
     // to a mv not finding its schema when snapshotting since the main table
     // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
     for (auto& dropped_view : diff.tables_and_views.local().views.dropped) {
-        auto s = dropped_view.get();
-        co_await _ss.local().on_cleanup_for_drop_table(s->id());
-        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+        co_await cleanup_dropped_table(*dropped_view);
     }
     for (auto& dropped_table : diff.tables_and_views.local().tables.dropped) {
-        auto s = dropped_table.get();
-        co_await _ss.local().on_cleanup_for_drop_table(s->id());
-        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+        co_await cleanup_dropped_table(*dropped_table);
     }
     for (auto& dropped_cdc : diff.tables_and_views.local().cdc.dropped) {
-        auto s = dropped_cdc.get();
-        co_await _ss.local().on_cleanup_for_drop_table(s->id());
-        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+        co_await cleanup_dropped_table(*dropped_cdc);
     }
 
     if (_tablet_hint) {
@@ -1245,6 +1249,27 @@ future<> schema_applier::post_commit() {
 }
 
 future<> schema_applier::destroy() {
+    // The tables dropped by commit() are stopped when finalize_tables_and_views()
+    // cleans them up. If the schema merge failed before all of them were cleaned
+    // up, stop the rest here: destroying a table which was not stopped aborts the
+    // node. Before commit() the tables in table_shards are not dropped yet, they
+    // are still in use.
+    if (_committed) {
+        for (auto& entry : _affected_tables_and_views.table_shards) {
+            auto& table = entry.second;
+            slogger.error("Stopping dropped table {}.{} (id: {}) without cleanup, because the schema merge failed."
+                    " Its data and directory are left on disk, and a restart doesn't clean them up either: remove the directory manually.",
+                    table->schema()->ks_name(), table->schema()->cf_name(), entry.first);
+            // Keep going if stopping a table fails, to stop the others still.
+            auto f = co_await coroutine::as_future(smp::invoke_on_all([&table] {
+                return table->stop();
+            }));
+            if (f.failed()) {
+                slogger.error("Failed to stop dropped table {}.{} (id: {}): {}",
+                        table->schema()->ks_name(), table->schema()->cf_name(), entry.first, f.get_exception());
+            }
+        }
+    }
     co_await _affected_user_types.stop();
     co_await _affected_tables_and_views.tables_and_views.stop();
     co_await _pending_token_metadata.destroy();
