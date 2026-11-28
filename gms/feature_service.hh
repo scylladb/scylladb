@@ -188,6 +188,8 @@ public:
     gms::feature vnodes_to_tablets_migrations { *this, "VNODES_TO_TABLETS_MIGRATIONS"sv };
     // Gates the `current_storage_mode` column of system.topology.
     gms::feature topology_current_storage_mode { *this, "TOPOLOGY_CURRENT_STORAGE_MODE"sv };
+    // Gates the `tablet_resize_enabled` column of system.topology.
+    gms::feature tablet_resize_disabling { *this, "TABLET_RESIZE_DISABLING"sv };
     gms::feature prepare_migration_as_topology_operation { *this, "PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION"sv };
     gms::feature writetime_ttl_individual_element { *this, "WRITETIME_TTL_INDIVIDUAL_ELEMENT"sv };
     gms::feature arbitrary_tablet_boundaries { *this, "ARBITRARY_TABLET_BOUNDARIES"sv };

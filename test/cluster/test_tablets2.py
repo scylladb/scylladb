@@ -2934,3 +2934,54 @@ async def test_split_ack_waits_for_write_waiting_for_memory(manager: ScyllaClust
         assert await get_tablet_count(manager, server, ks, 'test') == 2
         rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test")
         assert [(r.pk, r.c) for r in rows] == [(0, 0)]
+
+
+# Disabling tablet resize revokes the pending split decision and keeps the tablet count fixed
+# until resize is enabled again.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_resize_disabling(manager: ScyllaClusterManager):
+    server = await manager.server_add(config={'tablet_load_stats_refresh_interval_in_seconds': 1})
+    cql = manager.get_cql()
+
+    ks = await create_new_test_keyspace(cql,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+            " AND tablets = {'initial': 1}")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    table_id = await manager.get_table_or_view_id(ks, 'test')
+
+    async def resize_type():
+        await read_barrier(manager.api, server.ip_addr)
+        rows = await cql.run_async(f"SELECT resize_type FROM system.tablets WHERE table_id = {table_id} LIMIT 1")
+        return rows[0].resize_type
+
+    async def split_pending():
+        return True if await resize_type() == 'split' else None
+
+    # Quiescing completes every resize which the load balancer wants, so the tablet count
+    # after it tells whether a split was wanted.
+    async def quiesced_tablet_count():
+        await manager.api.quiesce_topology(server.ip_addr)
+        assert await resize_type() == 'none'
+        return await get_tablet_count(manager, server, ks, 'test')
+
+    assert await manager.api.get_tablet_resize_enabled(server.ip_addr)
+
+    # Holds the finalization, so that the split decision stays pending.
+    await manager.api.enable_injection(server.ip_addr, "tablet_resize_finalization_postpone", one_shot=False)
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}}")
+    await wait_for(split_pending, time.time() + 60)
+
+    # The pending split is revoked by the time the call returns.
+    await manager.api.disable_tablet_resize(server.ip_addr)
+    assert not await manager.api.get_tablet_resize_enabled(server.ip_addr)
+    assert await resize_type() == 'none'
+    await manager.api.disable_injection(server.ip_addr, "tablet_resize_finalization_postpone")
+    assert await quiesced_tablet_count() == 1
+
+    # No new split is started.
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 4}}")
+    assert await quiesced_tablet_count() == 1
+
+    await manager.api.enable_tablet_resize(server.ip_addr)
+    assert await manager.api.get_tablet_resize_enabled(server.ip_addr)
+    assert await quiesced_tablet_count() == 4

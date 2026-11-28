@@ -1051,6 +1051,13 @@ public:
     // tablet_transition_abort_grace_period_in_seconds option applies.
     future<> set_tablet_balancing_enabled(bool enabled, std::optional<std::chrono::seconds> grace_period = std::nullopt);
 
+    // Disabling also revokes the pending split and merge decisions, so the tablet count of every
+    // table stays fixed from the moment this returns.
+    future<> set_tablet_resize_enabled(bool enabled);
+
+    // Reflects every set_tablet_resize_enabled() which completed before the call, on any node.
+    future<bool> get_tablet_resize_enabled();
+
     // Cancels every tablet transition which can be cancelled, except those of a node drain.
     future<> cancel_tablet_transitions();
 

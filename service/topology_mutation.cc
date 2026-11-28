@@ -212,6 +212,11 @@ topology_mutation_builder& topology_mutation_builder::set_tablet_balancing_enabl
     return *this;
 }
 
+topology_mutation_builder& topology_mutation_builder::set_tablet_resize_enabled(bool value) {
+    _m.set_static_cell("tablet_resize_enabled", value, _ts);
+    return *this;
+}
+
 topology_mutation_builder& topology_mutation_builder::del_transition_state() {
     return del("transition_state");
 }
