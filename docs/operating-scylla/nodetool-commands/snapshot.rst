@@ -48,8 +48,21 @@ Parameter                                                             Descriptio
 
 ``[<keyspaces...>]`` List of keyspaces. By default, all keyspaces.
 
+<<<<<<< HEAD
 The 'cluster snapshot' version of this command will issue the snapshot on all nodes in the cluster, whereas 
 the non-cluster version only operates on the destination node. 
+||||||| parent of 261f5063dd (docs, tools: add nodetool cluster snapshot and cluster backup pages)
+The 'cluster snapshot' version of this command will issue the snapshot on all nodes in the cluster, whereas 
+the non-cluster version only operates on the destination node. The 'cluster snapshot' version supports only the
+``--table`` and ``-t``/``--tag`` options and the list of keyspaces:
+
+.. code-block:: shell
+
+   nodetool cluster snapshot [--table <table>] [(-t <tag> | --tag <tag>)] [<keyspaces...>]
+=======
+This command takes the snapshot on the destination node only. To take a snapshot on all nodes in the cluster, see
+:doc:`nodetool cluster snapshot </operating-scylla/nodetool-commands/cluster/snapshot>`.
+>>>>>>> 261f5063dd (docs, tools: add nodetool cluster snapshot and cluster backup pages)
 
 Examples
 ........
@@ -118,6 +131,7 @@ Additional Resources
 ^^^^^^^^^^^^^^^^^^^^
 
 * :doc:`Backup your data </operating-scylla/procedures/backup-restore/backup>`
+* :doc:`nodetool cluster snapshot </operating-scylla/nodetool-commands/cluster/snapshot>`
 * :doc:`ScyllaDB Snapshots </kb/snapshots>`
 
 .. include:: /rst_include/apache-copyrights.rst
