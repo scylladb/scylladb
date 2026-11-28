@@ -148,7 +148,10 @@ private:
 
     std::unordered_map<compaction::compaction_group_view*, compaction_state> _compaction_state;
 
-    // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
+    // Purpose is to serialize maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
+    // Cleanup is the exception: it is bounded in space on its own and must not be queued behind user
+    // maintenance operations, as a topology change waits for it. Cleanups of different keyspaces
+    // may therefore run concurrently on a shard.
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
     seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{"maintenance operation"}};
 
