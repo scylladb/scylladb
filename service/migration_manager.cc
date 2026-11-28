@@ -531,14 +531,30 @@ void migration_notifier::before_allocate_tablet_map_in_notification(const locato
 // Throws if the keyspace is undergoing vnodes-to-tablets migration.
 //
 // While a keyspace is migrating, its tables have a tablet map even though the
-// keyspace still uses vnode replication. Schema changes in that state would
-// either create tables without a tablet map or invalidate the maps already
-// built, so they are rejected until the migration is finalized or rolled back.
+// keyspace still uses vnode replication. A table created in that state would
+// have none, and dropping the keyspace would leave the nodes' migration state
+// behind, so both are rejected until the migration is finalized or rolled back.
 static void validate_no_tablets_migration(storage_proxy& sp, const keyspace_metadata& ksm, std::string_view operation) {
     if (locator::is_keyspace_undergoing_tablets_migration(sp.get_token_metadata_ptr()->tablets(), ksm)) {
         throw exceptions::invalid_request_exception(fmt::format(
                 "Cannot {}: keyspace {} is undergoing vnodes-to-tablets migration", operation, ksm.name()));
     }
+}
+
+// Throws if dropping the tables `dropped` would leave a keyspace undergoing
+// vnodes-to-tablets migration with no table.
+static void validate_not_last_table(storage_proxy& sp, const keyspace_metadata& ksm, const std::vector<table_id>& dropped, const schema& table) {
+    if (!locator::is_keyspace_undergoing_tablets_migration(sp.get_token_metadata_ptr()->tablets(), ksm)) {
+        return;
+    }
+    for (const auto& s : ksm.cf_meta_data() | std::views::values) {
+        if (!std::ranges::contains(dropped, s->id())) {
+            return;
+        }
+    }
+    throw exceptions::invalid_request_exception(fmt::format(
+            "Cannot drop table {}.{}: it is the last table of keyspace {}, which is being migrated from vnodes to tablets."
+            " Finish the migration and drop the table afterwards", table.ks_name(), table.cf_name(), ksm.name()));
 }
 
 utils::chunked_vector<mutation> prepare_keyspace_update_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts) {
@@ -647,14 +663,14 @@ future<utils::chunked_vector<mutation>> prepare_column_family_update_announcemen
         auto& db = sp.local_db();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
         auto&& keyspace = db.find_keyspace(cfm->ks_name()).metadata();
-        // Creating or dropping an index adds or removes its backing view.
-        // Other table updates don't change the set of tables in the keyspace
-        // and so they are ignored.
+        // Creating an index adds its backing view. Dropping one removes a view, which
+        // takes its tablet map along. Other table updates don't change the set of
+        // tables in the keyspace and so they are ignored.
         auto index_names = [] (const schema& s) {
             return s.all_indices() | std::views::keys | std::ranges::to<std::set<sstring>>();
         };
-        if (index_names(*old_schema) != index_names(*cfm)) {
-            validate_no_tablets_migration(sp, *keyspace, "create or drop an index");
+        if (!std::ranges::includes(index_names(*old_schema), index_names(*cfm))) {
+            validate_no_tablets_migration(sp, *keyspace, "create an index");
         }
         mlogger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
 
@@ -781,7 +797,6 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
             co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View. (Did you mean DROP MATERIALIZED VIEW)?"));
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
-        validate_no_tablets_migration(sp, *keyspace, "drop table");
 
         // If drop_views is false (the default), we don't allow to delete a
         // table which has views which aren't part of an index. If drop_views
@@ -794,6 +809,9 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
             co_await coroutine::return_exception(exceptions::invalid_request_exception(seastar::format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
                         schema->ks_name(), fmt::join(explicit_view_names, ", "))));
         }
+        auto dropped = views | std::views::transform([] (const view_ptr& v) { return v->id(); }) | std::ranges::to<std::vector<table_id>>();
+        dropped.push_back(schema->id());
+        validate_not_last_table(sp, *keyspace, dropped, *schema);
         mlogger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
 
         utils::chunked_vector<mutation> drop_si_mutations;
@@ -970,7 +988,6 @@ future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_p
             throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Index. (Did you mean DROP INDEX)?");
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
-        validate_no_tablets_migration(sp, *keyspace, "drop materialized view");
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
         auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
         if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {

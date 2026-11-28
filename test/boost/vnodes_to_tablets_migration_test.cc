@@ -913,9 +913,10 @@ static sstring start_migration_with_views(cql_test_env& e, const sstring& ks_nam
     return ks_name;
 }
 
-// Schema changes in a keyspace undergoing migration would break the
-// correspondence between its tables and their tablet maps, so they must be
-// rejected until the migration is finalized or rolled back.
+// A table, view or index created in a keyspace undergoing migration would have
+// no tablet map, and dropping the keyspace would leave the nodes' migration
+// state behind, so both are rejected until the migration is finalized or
+// rolled back.
 static void require_rejected_during_migration(cql_test_env& e, const sstring& cql) {
     BOOST_TEST_CONTEXT(cql) {
         BOOST_REQUIRE_EXCEPTION(e.execute_cql(cql).get(),
@@ -928,7 +929,6 @@ SEASTAR_TEST_CASE(test_block_table_schema_changes_during_migration) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
         require_rejected_during_migration(e, format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks));
-        require_rejected_during_migration(e, format("DROP TABLE {}.t", ks));
         require_rejected_during_migration(e, format("DROP KEYSPACE {}", ks));
         // Other table updates don't change the set of tables.
         e.execute_cql(format("ALTER TABLE {}.t ADD w int", ks)).get();
@@ -942,7 +942,6 @@ SEASTAR_TEST_CASE(test_block_view_schema_changes_during_migration) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
         require_rejected_during_migration(e, format("CREATE MATERIALIZED VIEW {}.mv2 AS SELECT * FROM {}.t "
                 "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks, ks));
-        require_rejected_during_migration(e, format("DROP MATERIALIZED VIEW {}.mv", ks));
         // Altering a view doesn't change the set of tables.
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.mv WITH gc_grace_seconds = 3600", ks)).get();
         // Creating a view that already exists doesn't change the set of tables.
@@ -955,7 +954,6 @@ SEASTAR_TEST_CASE(test_block_index_schema_changes_during_migration) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
         require_rejected_during_migration(e, format("CREATE INDEX ON {}.t (v)", ks));
-        require_rejected_during_migration(e, format("DROP INDEX {}.local_idx", ks));
         // Altering the backing view of an index doesn't change the set of tables.
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();
         // Creating an index that already exists doesn't change the set of tables.
@@ -1201,6 +1199,74 @@ SEASTAR_TEST_CASE(test_preparation_covers_colocated_views) {
         for (size_t i = 0; i < tables.size(); ++i) {
             BOOST_REQUIRE_EQUAL(tmptr->tablets().get_base_table(id_of(views[i])), id_of(tables[i]));
         }
+    });
+}
+
+// SCYLLADB-1098: dropping a table of a keyspace being migrated to tablets drops its
+// tablet map with it, whichever DDL statement drops it; the last table cannot be
+// dropped.
+SEASTAR_TEST_CASE(test_drop_in_migrating_keyspace_drops_tablet_maps) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto has_map = [&] (table_id id) {
+            return e.local_db().get_shared_token_metadata().get()->tablets().has_tablet_map(id);
+        };
+        auto id_of = [&] (const sstring& ks_name, const sstring& cf_name) {
+            return e.local_db().find_schema(ks_name, cf_name)->id();
+        };
+        // Two base tables, a view keyed differently from its base table, a global index
+        // and a view co-located with its base table, all built before the migration
+        // starts, as prepare requires.
+        auto create_migrating_keyspace = [&] (const sstring& ks_name) {
+            e.execute_cql(format("CREATE KEYSPACE {} "
+                    "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                    "AND tablets = {{'enabled': false}}", ks_name)).get();
+            e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int, w int)", ks_name)).get();
+            e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks_name)).get();
+            // Subscribe before creating the views: wait_until_built() only reports
+            // builds that finish after the call.
+            auto views_built = when_all_succeed(
+                    e.local_view_builder().wait_until_built(ks_name, "mv"),
+                    e.local_view_builder().wait_until_built(ks_name, "t_w_idx_index"),
+                    e.local_view_builder().wait_until_built(ks_name, "mv_by_pk"));
+            e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                    "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, pk)", ks_name, ks_name)).get();
+            e.execute_cql(format("CREATE INDEX ON {}.t (w)", ks_name)).get();
+            e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv_by_pk AS SELECT * FROM {}.t "
+                    "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+            views_built.get();
+            e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+        };
+
+        auto ks_name = sstring("test_drop_ks");
+        create_migrating_keyspace(ks_name);
+        auto t = id_of(ks_name, "t");
+        auto t2 = id_of(ks_name, "t2");
+        auto mv = id_of(ks_name, "mv");
+        auto idx = id_of(ks_name, "t_w_idx_index");
+        auto mv_by_pk = id_of(ks_name, "mv_by_pk");
+        for (auto id : {t, t2, mv, idx, mv_by_pk}) {
+            BOOST_REQUIRE(has_map(id));
+        }
+
+        e.execute_cql(format("DROP INDEX {}.t_w_idx", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(idx), "DROP INDEX left the index's tablet map behind");
+
+        e.execute_cql(format("DROP MATERIALIZED VIEW {}.mv", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(mv), "DROP MATERIALIZED VIEW left the view's tablet map behind");
+
+        e.execute_cql(format("DROP MATERIALIZED VIEW {}.mv_by_pk", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(mv_by_pk), "DROP MATERIALIZED VIEW left the co-located view's tablet map behind");
+        BOOST_REQUIRE_MESSAGE(has_map(t), "DROP MATERIALIZED VIEW of a co-located view took its base table's tablet map");
+
+        e.execute_cql(format("DROP TABLE {}.t", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(t), "DROP TABLE left the table's tablet map behind");
+
+        BOOST_REQUIRE_MESSAGE(has_map(t2), "DROP TABLE dropped the tablet map of another table");
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql(format("DROP TABLE {}.t2", ks_name)).get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_contains("last table"));
+        BOOST_REQUIRE_MESSAGE(has_map(t2), "a rejected DROP TABLE dropped the tablet map");
     });
 }
 
