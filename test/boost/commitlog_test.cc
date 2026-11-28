@@ -597,6 +597,113 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption2){
         });
 }
 
+// Fills about 80 KB of a segment, corrupts the sectors that bad_sectors() picks from the
+// number of written sectors, and reads the segment back. Checks the message of the corruption
+// error, which describes the sectors after the first bad one.
+static future<> test_corruption_describes_following_sectors(
+        noncopyable_function<std::vector<size_t> (size_t written)> bad_sectors,
+        noncopyable_function<sstring (size_t sector_size, size_t written, size_t sectors, segment_id_type id)> expected) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+    std::exception_ptr ex;
+    try {
+        auto uuid = make_table_id();
+        for (int i = 0; i < 80; ++i) {
+            auto h = co_await log.add_mutation(uuid, 1000, db::commitlog::force_sync::no, [] (db::commitlog::output& dst) {
+                dst.fill('1', 1000);
+            });
+            h.release();
+        }
+        co_await log.sync_all_segments();
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE_EQUAL(segments.size(), 1);
+        auto seg = segments[0];
+
+        // Without O_DSYNC the file is truncated to its full size, so the sectors past the
+        // written ones are holes that read as zeros.
+        auto f = co_await open_file_dma(seg, open_flags::ro);
+        auto file_size = co_await f.size();
+        auto buf = co_await f.dma_read_exactly<char>(0, file_size);
+        co_await f.close();
+        // magic, version and id precede the alignment, which is the sector size
+        const size_t sector_size = read_be<uint32_t>(buf.get() + 16);
+        const auto sectors = file_size / sector_size;
+        const auto is_zero = [&] (size_t sector) {
+            return std::all_of(buf.get() + sector * sector_size, buf.get() + (sector + 1) * sector_size, [] (char c) { return c == 0; });
+        };
+        size_t written = 0;
+        while (written < sectors && !is_zero(written)) {
+            ++written;
+        }
+        for (size_t s = written; s < sectors; ++s) {
+            BOOST_REQUIRE(is_zero(s));
+        }
+        BOOST_TEST_MESSAGE(fmt::format("{} of {} sectors of {} bytes written", written, sectors, sector_size));
+        BOOST_REQUIRE_GE(written, 12);
+
+        for (auto s : bad_sectors(written)) {
+            co_await corrupt_segment(seg, s * sector_size + 100, 0x451234ab);
+        }
+        try {
+            co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [] (db::commitlog::buffer_and_replay_position) {
+                return make_ready_future<>();
+            });
+            BOOST_FAIL("Expected exception");
+        } catch (commitlog::segment_data_corruption_error& e) {
+            auto exp = expected(sector_size, written, sectors, commitlog::descriptor(seg).id);
+            BOOST_REQUIRE_MESSAGE(std::string_view(e.what()).ends_with(exp), fmt::format("got '{}', expected it to end with '{}'", e.what(), exp));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await log.shutdown();
+    co_await log.clear();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+}
+
+// A bad sector in the middle of the data, followed by valid sectors of the segment.
+SEASTAR_TEST_CASE(test_commitlog_corruption_describes_following_sectors_middle) {
+    return test_corruption_describes_following_sectors([] (size_t) {
+        return std::vector<size_t>{1};
+    }, [] (size_t sector_size, size_t written, size_t sectors, segment_id_type id) {
+        return fmt::format("Bad sector at {} (id field {}, not verified). Sectors after it: {} x this segment at {}; {} x all-zero at {};",
+                sector_size, id, written - 2, 2 * sector_size, sectors - written, written * sector_size);
+    });
+}
+
+// A bad last sector, as a torn write at the end of the data leaves it.
+SEASTAR_TEST_CASE(test_commitlog_corruption_describes_following_sectors_last) {
+    return test_corruption_describes_following_sectors([] (size_t written) {
+        return std::vector<size_t>{written - 1};
+    }, [] (size_t sector_size, size_t written, size_t sectors, segment_id_type id) {
+        return fmt::format("Bad sector at {} (id field {}, not verified). Sectors after it: {} x all-zero at {};",
+                (written - 1) * sector_size, id, sectors - written, written * sector_size);
+    });
+}
+
+// Every other sector is bad, so the description lists the first 8 runs and counts the others.
+SEASTAR_TEST_CASE(test_commitlog_corruption_describes_following_sectors_many_runs) {
+    return test_corruption_describes_following_sectors([] (size_t written) {
+        std::vector<size_t> res;
+        for (size_t s = 1; s < written; s += 2) {
+            res.push_back(s);
+        }
+        return res;
+    }, [] (size_t sector_size, size_t written, size_t, segment_id_type id) {
+        auto res = fmt::format("Bad sector at {} (id field {}, not verified). Sectors after it:", sector_size, id);
+        for (size_t s = 2; s < 10; ++s) {
+            res += fmt::format(" 1 x {} at {};", s % 2 ? "bad checksum" : "this segment", s * sector_size);
+        }
+        // Sectors 2 to written - 1 are one run each, and the zeros after them one more.
+        return res + fmt::format(" {} more runs.", written - 1 - 8);
+    });
+}
+
 
 SEASTAR_TEST_CASE(test_commitlog_chunk_corruption3){
     commitlog::config cfg;

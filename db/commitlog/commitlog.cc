@@ -3454,6 +3454,9 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
         }
     public:
         file f;
+        // The same file without the I/O error check, so that an I/O error in
+        // describe_sectors_after() does not isolate the node.
+        file unchecked_f;
         descriptor d;
         commit_load_reader_func func;
         input_stream<char> fin;
@@ -3471,8 +3474,8 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
         fragmented_temporary_buffer::reader frag_reader;
         fragmented_temporary_buffer buffer, initial;
 
-        work(file f, descriptor din, commit_load_reader_func fn, replay_state::impl& sn, position_type o = 0)
-                : f(f), d(din), func(std::move(fn)), fin(make_file_input_stream(f, make_file_input_stream_options())), state(sn), start_off(o) {
+        work(file f, file unchecked_f, descriptor din, commit_load_reader_func fn, replay_state::impl& sn, position_type o = 0)
+                : f(f), unchecked_f(std::move(unchecked_f)), d(din), func(std::move(fn)), fin(make_file_input_stream(f, make_file_input_stream_options())), state(sn), start_off(o) {
         }
         work(work&&) = default;
 
@@ -3582,6 +3585,108 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
             this->pos = this->initial.size_bytes();
         }
 
+        struct sector_check {
+            bool all_zero = true;
+            uint64_t id = 0;
+            uint32_t stored_checksum = 0;
+            uint32_t checksum = 0;
+        };
+
+        // The CRC covers the prefix (the file header, in the first sector) and the first
+        // block_size - 4 bytes of tmp. The id and stored checksum are read only if !all_zero.
+        static sector_check check_sector(const fragmented_temporary_buffer& prefix, const fragmented_temporary_buffer& tmp, size_t block_size) {
+            sector_check res;
+            crc32_nbo crc;
+            // crc all but the final crc
+            size_t n = block_size - sizeof(uint32_t);
+
+            for (auto& bv : prefix) {
+                crc.process_bytes(bv.get(), bv.size());
+                res.all_zero = false;
+            }
+
+            for (auto& bv : tmp) {
+                auto np = std::min(bv.size(), n);
+                crc.process_bytes(bv.get(), np);
+                res.all_zero &= std::all_of(bv.get(), bv.get() + bv.size(), [](char c) { return c == 0; });
+                n -= np;
+            }
+
+            if (!res.all_zero) {
+                auto in = tmp.get_istream();
+                in.skip(block_size - detail::sector_overhead_size);
+                res.id = read<uint64_t>(in);
+                res.stored_checksum = read<uint32_t>(in);
+                res.checksum = crc.checksum();
+            }
+            return res;
+        }
+
+        // Reads the sectors after the one at bad_sector, which failed its checksum, and describes them
+        // as runs of one kind. Valid sectors of this segment after it mean real damage, or a torn write
+        // followed by writes that completed but were never acknowledged. Used only for the error message.
+        future<sstring> describe_sectors_after(size_t bad_sector, uint64_t bad_sector_id) {
+            static constexpr size_t max_runs = 8;
+            struct run {
+                sstring kind;
+                size_t start;
+                size_t count;
+            };
+            std::vector<run> runs;
+            size_t more_runs = 0;
+            sstring last_kind;
+            sstring error;
+            auto sector = bad_sector + alignment;
+            auto in = make_file_input_stream(unchecked_f, sector, make_file_input_stream_options());
+            fragmented_temporary_buffer::reader reader;
+
+            try {
+                for (; sector + alignment <= file_size; sector += alignment) {
+                    auto tmp = co_await reader.read_exactly(in, alignment);
+                    if (tmp.empty()) {
+                        break;
+                    }
+                    auto sc = check_sector({}, tmp, alignment);
+                    sstring kind = sc.all_zero ? sstring("all-zero")
+                        : sc.stored_checksum != sc.checksum ? sstring("bad checksum")
+                        : sc.id == id ? sstring("this segment")
+                        : sstring(fmt::format("segment {}", sc.id));
+                    if (kind == last_kind) {
+                        if (more_runs == 0) {
+                            ++runs.back().count;
+                        }
+                    } else if (runs.size() < max_runs) {
+                        runs.push_back({kind, sector, 1});
+                    } else {
+                        ++more_runs;
+                    }
+                    last_kind = std::move(kind);
+                }
+            } catch (...) {
+                error = fmt::format(" Reading stopped at {}: {}", sector, std::current_exception());
+            }
+            try {
+                co_await in.close();
+            } catch (...) {
+                error += fmt::format(" Closing the stream failed: {}", std::current_exception());
+            }
+
+            auto res = fmt::format("Bad sector at {} (id field {}, not verified). Sectors after it:", bad_sector, bad_sector_id);
+            if (runs.empty()) {
+                res += " none.";
+            }
+            for (auto& r : runs) {
+                res += fmt::format(" {} x {} at {};", r.count, r.kind, r.start);
+            }
+            if (more_runs) {
+                res += fmt::format(" {} more run{}.", more_runs, more_runs == 1 ? "" : "s");
+            }
+            if (error.empty() && sector < file_size) {
+                res += fmt::format(" {} bytes at {} not read.", file_size - sector, sector);
+            }
+            co_return res + error;
+        }
+
         future<fragmented_temporary_buffer> read_data(size_t size) {
             auto rem = buffer.size_bytes();
             auto buf_vec = std::move(buffer).release();
@@ -3612,45 +3717,21 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                     throw segment_truncation(std::move(reason), block_boundry);
                 }
 
-                crc32_nbo crc;
-                // crc all but the final crc
-                size_t n = block_size - sizeof(uint32_t);
-
-                bool all_zero = true;
-
-                if (!initial.empty()) {
-                    for (auto& bv : initial) {
-                        crc.process_bytes(bv.get(), bv.size());
-                    }
-                    initial = {};
-                    all_zero = false;
-                }
-
-                for (auto& bv : tmp) {
-                    auto np = std::min(bv.size(), n);
-                    crc.process_bytes(bv.get(), np);
-                    all_zero &= std::all_of(bv.get(), bv.get() + bv.size(), [](char c) { return c == 0; });
-                    n -= np;
-                }
+                auto sc = check_sector(initial, tmp, block_size);
+                initial = {};
 
                 block_boundry += alignment;
 
-                if (!all_zero) {
-                    auto in = tmp.get_istream();
-                    in.skip(block_size - detail::sector_overhead_size);
-
-                    auto id = read<uint64_t>(in);
-                    auto check = read<uint32_t>(in);
-                    auto checksum = crc.checksum();
-
-                    if (check != checksum) {
-                        auto reason = fmt::format("checksums do not match: {:x} vs. {:x}. pos={}, rem={}, size={}, alignment={}, initial_size={}",
-                                check, checksum, pos, rem, size, alignment, initial_size);
+                if (!sc.all_zero) {
+                    if (sc.stored_checksum != sc.checksum) {
+                        auto sectors = co_await describe_sectors_after(block_boundry - alignment, sc.id);
+                        auto reason = fmt::format("checksums do not match: {:x} vs. {:x}. pos={}, rem={}, size={}, alignment={}, initial_size={}. {}",
+                                sc.stored_checksum, sc.checksum, pos, rem, size, alignment, initial_size, sectors);
                         throw segment_data_corruption_error(std::move(reason), alignment);
                     }
-                    if (id != this->id) {
+                    if (sc.id != this->id) {
                         auto reason = fmt::format("IDs do not match: {} vs. {}. pos={}, rem={}, size={}, alignment={}, initial_size={}",
-                                id, this->id, pos, rem, size, alignment, initial_size);
+                                sc.id, this->id, pos, rem, size, alignment, initial_size);
                         throw segment_truncation(std::move(reason), pos + rem);
                     }
                 }
@@ -3973,10 +4054,11 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
         throw;
     }
 
+    auto unchecked_f = f;
     f = make_checked_file(commit_error_handler, std::move(f));
 
     descriptor d(filename, pfx);
-    work w(std::move(f), d, std::move(next), *state._impl, off);
+    work w(std::move(f), std::move(unchecked_f), d, std::move(next), *state._impl, off);
 
     co_await w.read_file();
 }
