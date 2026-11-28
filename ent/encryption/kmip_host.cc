@@ -1188,6 +1188,10 @@ std::ostream& operator<<(std::ostream& os, const kmip_host::key_options& opts) {
     return os << opts.template_name << ":" << opts.key_namespace;
 }
 
+bool kmip_host_enabled() {
+    return true;
+}
+
 }
 
 #else
@@ -1231,6 +1235,10 @@ future<shared_ptr<symmetric_key>> kmip_host::get_key_by_name(const sstring& name
 
 std::ostream& operator<<(std::ostream& os, const kmip_host::key_options& opts) {
     return os << opts.template_name << ":" << opts.key_namespace;
+}
+
+bool kmip_host_enabled() {
+    return false;
 }
 
 }
