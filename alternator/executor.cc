@@ -17,6 +17,8 @@
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
 #include "cdc/cdc_extension.hh"
+#include "tombstone_gc_extension.hh"
+#include "tombstone_gc.hh"
 #include "auth/service.hh"
 #include "cql3/cql3_type.hh"
 #include "db/config.hh"
@@ -28,7 +30,6 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
-#include "exceptions/exceptions.hh"
 #include "service/client_state.hh"
 #include "mutation/timestamp.hh"
 #include "types/map.hh"
@@ -1639,6 +1640,13 @@ static future<> mark_view_schemas_as_built(utils::chunked_vector<mutation>& out,
     }
 }
 
+// Check whether two schemas have the same partition key - the same columns
+// in the same order (cf. database::get_base_table_for_tablet_colocation()).
+static bool same_partition_key(const schema& view, const schema& base) {
+    return std::ranges::equal(view.partition_key_columns(), base.partition_key_columns(),
+            {}, &column_definition::name, &column_definition::name);
+}
+
 // When Alternator Streams are requested on a tablet table, update the
 // already-configured enabled=true CDC options:
 // - tablet_merge_blocked=true: suppress tablet merges that would produce
@@ -2209,7 +2217,7 @@ static void validate_and_store_gsi_provisioned_throughput(std::map<sstring, sstr
     tags[WCU_TAG_KEY] = std::to_string(*wcu);
 }
 
-create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode, const char* caller) {
+create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const char* caller) {
     // We begin by parsing and validating the content of the CreateTable
     // command. We can't inspect the current database schema at this point
     // (e.g., verify that this table doesn't already exist) - we can only
@@ -2508,18 +2516,6 @@ create_table_params validate_create_table_request(const rjson::value& request, c
     set_table_creation_time(tags_map, db_clock::now());
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
-    if (stream_enabled) {
-        const bool uses_tablets = get_initial_tablet_count(tags_map, feat, tablets_mode).has_value();
-        if (uses_tablets) {
-            if (!feat.cdc_block_tablet_merges_for_alternator_streams) {
-                throw api_error::validation(
-                        "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
-                        "support blocking tablet merges for Alternator Streams");
-            }
-            block_tablet_merges_for_alternator_streams(builder, /*defer_enablement=*/false);
-        }
-    }
-
     return create_table_params {
         std::move(builder),
         std::move(view_builders),
@@ -2527,6 +2523,7 @@ create_table_params validate_create_table_request(const rjson::value& request, c
         std::move(table_name),
         std::move(tags_map),
         vector_indexes && vector_indexes->Size() > 0,
+        stream_enabled,
     };
 }
 
@@ -2563,10 +2560,28 @@ future<executor::request_return_type> executor::commit_table_creation(
         auto group0_guard = co_await _mm.start_group0_operation(std::nullopt, &_stop_as);
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
-        auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
+        auto existing_ks = _proxy.data_dictionary().try_find_keyspace(keyspace_name);
+        auto ksm = existing_ks ? existing_ks->metadata() : create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
         locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
         const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
+
+        // Derived from the pre-built schema on every attempt, so that a retry
+        // resolving another keyspace sets the Streams flag and the
+        // tombstone_gc mode afresh.
+        schema_builder table_builder(schema);
+        if (validated.stream_enabled && rs->uses_tablets()) {
+            if (!_proxy.features().cdc_block_tablet_merges_for_alternator_streams) {
+                co_return api_error::validation(
+                        "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
+                        "support blocking tablet merges for Alternator Streams");
+            }
+            block_tablet_merges_for_alternator_streams(table_builder, /*defer_enablement=*/false);
+        }
+        // Set the default tombstone_gc mode, like CQL CREATE TABLE does via
+        // cf_prop_defs::apply_to_builder().
+        table_builder.add_extension(tombstone_gc_extension::NAME, ::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, true)));
+        schema_ptr table_schema = table_builder.build();
 
         // Vector indexes is a new feature that we decided to only support
         // on tablets.
@@ -2581,6 +2596,13 @@ future<executor::request_return_type> executor::commit_table_creation(
             try {
                 locator::assert_rf_rack_valid_keyspace(keyspace_name, _proxy.local_db().get_token_metadata_ptr(), *rs);
             } catch (const std::invalid_argument& ex) {
+                // The rack counts below hold only for the replication factor Alternator picks itself.
+                if (existing_ks) {
+                    co_return api_error::validation(fmt::format("{}: {}", view_builders.empty()
+                            ? "Tables using tablets require an RF-rack-valid keyspace when 'rf_rack_valid_keyspaces' is enabled"
+                            : "GlobalSecondaryIndexes and LocalSecondaryIndexes on a table using tablets require an RF-rack-valid keyspace",
+                            ex.what()));
+                }
                 if (!view_builders.empty()) {
                     co_return api_error::validation(fmt::format("GlobalSecondaryIndexes and LocalSecondaryIndexes on a table "
                         "using tablets require the number of racks in the cluster to be either 1 or 3"));
@@ -2637,12 +2659,10 @@ future<executor::request_return_type> executor::commit_table_creation(
             }
         }
         bool table_already_exists = false;
-        try {
+        if (existing_ks) {
+            table_already_exists = _proxy.data_dictionary().has_schema(keyspace_name, table_name);
+        } else {
             schema_mutations = service::prepare_new_keyspace_announcement(_proxy.local_db(), ksm, ts);
-        } catch (exceptions::already_exists_exception&) {
-            if (_proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
-                table_already_exists = true;
-            }
         }
         if (table_already_exists) {
             // The user may have retried a CreateTable operation after it timed
@@ -2661,8 +2681,12 @@ future<executor::request_return_type> executor::commit_table_creation(
             co_return api_error::internal(format("Table with ID {} already exists", schema->id()));
         }
         std::vector<schema_ptr> schemas;
-        schemas.push_back(schema);
+        schemas.push_back(table_schema);
         for (schema_builder& view_builder : view_builders) {
+            // Co-located views don't support repair (see
+            // create_index_statement.cc), so they keep 'timeout'.
+            const bool colocated = rs->uses_tablets() && same_partition_key(*view_builder.build(), *schema);
+            view_builder.add_extension(tombstone_gc_extension::NAME, ::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, !colocated)));
             schemas.push_back(view_builder.build());
         }
         co_await service::prepare_new_column_families_announcement(schema_mutations, _proxy, *ksm, schemas, ts);
@@ -2723,7 +2747,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
 
-    create_table_params validated = validate_create_table_request(request, _proxy.features(), tablets_mode, "CreateTable");
+    create_table_params validated = validate_create_table_request(request, _proxy.features(), "CreateTable");
 
     co_return co_await commit_table_creation(std::move(request), std::move(validated), std::move(client_state), tablets_mode);
 }
@@ -3280,7 +3304,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                                     p.local().local_db().find_keyspace(keyspace_name).get_replication_strategy());
                         } catch (const std::invalid_argument& ex) {
                             co_return api_error::validation(fmt::format("GlobalSecondaryIndexes on a table "
-                                "using tablets require the number of racks in the cluster to be either 1 or 3"));
+                                "using tablets require an RF-rack-valid keyspace: {}", ex.what()));
                         }
 
                         elogger.trace("Adding GSI {}", index_name);
@@ -3337,6 +3361,12 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         check_gsi_warm_throughput_units(it->value, index_name);
                         add_warm_throughput_tags(tags, it->value);
                         view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
+                        // Set the default tombstone_gc mode, like CQL CREATE
+                        // INDEX does (see create_index_statement.cc).
+                        const auto& ks_rs = p.local().local_db().find_keyspace(keyspace_name).get_replication_strategy();
+                        const bool colocated = ks_rs.uses_tablets() && same_partition_key(*view_builder.build(), *schema);
+                        view_builder.add_extension(tombstone_gc_extension::NAME,
+                                ::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(ks_rs, !colocated)));
                         // Note below we don't need to add virtual columns, as all
                         // base columns were copied to view. TODO: reconsider the need
                         // for virtual columns when we support Projection.
