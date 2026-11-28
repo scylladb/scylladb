@@ -750,3 +750,26 @@ def test_query_many_small_rows(test_table_sn):
         assert item == {'p': p, 'c': i}
         i += 1
     assert N == i
+
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". Here we check this
+# for a Query of the base table. test_gsi_query_table_name_arn in test_gsi.py
+# and test_lsi_query_table_name_arn in test_lsi.py check it for a Query of a
+# GSI and of an LSI.
+# Reproduces SCYLLADB-4683.
+def test_query_table_name_arn(test_table_sn):
+    client = test_table_sn.meta.client
+    p = random_string()
+    items = [{'p': p, 'c': i, 'x': random_string()} for i in range(5)]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    arn = client.describe_table(TableName=test_table_sn.name)['Table']['TableArn']
+    # These few small items are returned by a single Query, so there is no
+    # need for the full_query() pagination helper here - and using the client
+    # directly keeps it obvious that what we're passing an ARN to is TableName.
+    got_items = client.query(TableName=arn, ConsistentRead=True,
+        KeyConditionExpression='p=:p',
+        ExpressionAttributeValues={':p': p})['Items']
+    assert multiset(items) == multiset(got_items)
