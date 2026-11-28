@@ -414,7 +414,7 @@ sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_st
         }
     };
 
-    for (const auto& column : s.v3().all_columns()) {
+    for (const auto& column : s.v3_all_columns()) {
         add_column(column);
     }
 
