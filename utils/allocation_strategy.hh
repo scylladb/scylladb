@@ -8,12 +8,15 @@
 
 #pragma once
 
+#include <algorithm>
 #include <any>
 #include <memory>
+#include <cstddef>
 #include <cstdlib>
 #include <string>
-#include <seastar/util/alloc_failure_injector.hh>
 #include <malloc.h>
+#include <seastar/core/align.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 
 // A function used by compacting collectors to migrate objects during
 // compaction. The function should reconstruct the object located at src
@@ -238,14 +241,24 @@ public:
     }
     virtual void* alloc(migrate_fn, size_t size, size_t alignment) override {
         seastar::memory::on_alloc_point();
+        // malloc() avoids the power-of-two size class that seastar picks for posix_memalign().
+        if (alignment <= alignof(std::max_align_t)) [[likely]] {
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+            // Seastar's classes below 16 bytes are not aligned. The default allocator's are,
+            // and rounding there would hide small overflows from ASAN.
+            if (size < alignof(std::max_align_t)) {
+                size = seastar::align_up(std::max(size, size_t(1)), std::max(alignment, sizeof(void*)));
+            }
+#endif
+            void* ret = ::malloc(size);
+            if (!ret) [[unlikely]] {
+                throw std::bad_alloc();
+            }
+            return ret;
+        }
         // ASAN doesn't intercept aligned_alloc() and complains on free().
         void* ret;
-        // The system posix_memalign will return EINVAL if alignment is not
-        // a multiple of pointer size.
-        if (alignment < sizeof(void*)) {
-            alignment = sizeof(void*);
-        }
-        if (posix_memalign(&ret, alignment, size) != 0) {
+        if (posix_memalign(&ret, alignment, size) != 0) [[unlikely]] {
             throw std::bad_alloc();
         }
         return ret;
