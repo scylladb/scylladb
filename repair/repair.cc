@@ -554,9 +554,17 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
                 auto it = std::min_element(times.begin(), times.end());
                 flush_time = *it;
             }
-            hints_batchlog_flushed = true;
+            // An ignored node may hold hints or batchlog entries for the repaired
+            // ranges, as a coordinator, even if it is not a replica of them. They
+            // were not flushed, like those of a down node, so the flush is not
+            // complete: recording the repair time would let tombstone GC purge
+            // tombstones which may still shadow those writes, resurrecting them
+            // when they are replayed. The live nodes are still flushed, as the
+            // flush also sends (or discards) the hints they hold.
+            hints_batchlog_flushed = ignore_nodes.empty();
             auto duration = std::chrono::duration<float>(gc_clock::now() - start_time);
-            rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
+            rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={} hints_batchlog_flushed={}",
+                    uuid, times, flush_time, duration, hints_batchlog_flushed);
         } catch (...) {
             as.check();
             rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog failed, continue to run repair", uuid);
