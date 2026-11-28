@@ -109,6 +109,19 @@ public:
     // of the periodic timer.
     bool automatic_scrub_blocked = false;
 
+    // Set by compaction_manager::perform_cleanup() for the whole duration of
+    // a cleanup, including the waits between its compaction tasks, during
+    // which no cleanup task is registered with the compaction manager.
+    // A concurrent cleanup request on the same table is rejected while set,
+    // so it cannot rewrite the cleanup state the ongoing cleanup is using.
+    bool cleanup_in_progress = false;
+
+    // Set, to the reason given, when the cleanup in progress is asked to stop
+    // by a request to stop Cleanup compactions.  It lets such a request reach
+    // a cleanup that waits between its compaction tasks, when there is no
+    // cleanup task to stop, or is about to create one.  Reset when the cleanup returns.
+    std::optional<sstring> cleanup_stop_requested;
+
     // Signaled whenever a compaction task completes.
     condition_variable compaction_done;
 
