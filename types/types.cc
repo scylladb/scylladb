@@ -3724,13 +3724,14 @@ static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_muta
     auto len_slot = out.write_place_holder(collection_size_len());
     auto tomb = v.tomb();
     int elements = 0;
-    for (auto&& [key, cell] : v) {
+    v.for_each_element([&] (managed_bytes_view key, atomic_cell_view cell) {
         if (cell.is_live(tomb, false)) {
             write_collection_value(out, atomic_cell_value_view(key));
             write_collection_value(out, cell.value());
             elements += 1;
         }
-    }
+        return true;
+    });
     write_collection_size(len_slot, elements);
     return out;
 }
@@ -3740,12 +3741,13 @@ static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_muta
     auto len_slot = out.write_place_holder(collection_size_len());
     auto tomb = v.tomb();
     int elements = 0;
-    for (auto&& [key, cell] : v) {
+    v.for_each_element([&] (managed_bytes_view key, atomic_cell_view cell) {
         if (cell.is_live(tomb, false)) {
             write_collection_value(out, atomic_cell_value_view(key));
             elements += 1;
         }
-    }
+        return true;
+    });
     write_collection_size(len_slot, elements);
     return out;
 }
@@ -3755,12 +3757,13 @@ static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mut
     auto len_slot = out.write_place_holder(collection_size_len());
     auto tomb = v.tomb();
     int elements = 0;
-    for (auto&& [key, cell] : v) {
+    v.for_each_element([&] (managed_bytes_view key, atomic_cell_view cell) {
         if (cell.is_live(tomb, false)) {
             write_collection_value(out, cell.value());
             elements += 1;
         }
-    }
+        return true;
+    });
     write_collection_size(len_slot, elements);
     return out;
 }
