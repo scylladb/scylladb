@@ -20,6 +20,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
 #include <seastar/core/metrics_api.hh>
@@ -444,7 +445,7 @@ void do_test_client_multipart_upload_abort(const client_maker_function& client_m
     auto out = output_stream<char>(
         // One part per piece, so that every completed part makes the jumbo sink
         // hand a piece over to the parent upload -- and thus start it.
-        with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 1, &as)
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 1, std::nullopt, &as)
                          : cln->make_upload_sink(name, s3::object_metadata{}, &as)
     );
 
@@ -624,6 +625,109 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_etag_s3) {
 // 0 bytes make the sink create the object with a single PUT.
 SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_etag_empty_object_s3) {
     do_test_client_upload_jumbo_sink_etag(make_s3_client, 0);
+}
+
+// The jumbo sink copies each piece into the target object with UploadPartCopy, which
+// S3 refuses for a source larger than maximum_part_size, so a larger piece is copied
+// in ranges, each into a part of its own. With the number of parts in a piece left at
+// its default of 10,000, as for sstable components, a piece holds about 50 GiB
+// (SCYLLADB-6250). Uploading 5 GiB is out of the question here, so the limit is
+// lowered with the max_copy_part_size parameter of the sink. The parts the object
+// was made of are counted from its ETag, which for a multipart upload ends with
+// their number.
+static constexpr size_t jumbo_test_copy_part_size = 12_MiB;
+
+void do_test_client_upload_jumbo_sink_ranged_copy(const client_maker_function& client_maker, size_t object_size,
+        std::optional<unsigned> max_parts_per_piece, unsigned expected_parts) {
+    // A multiple of 128 KiB, so that every part of a piece is exactly minimum_part_size.
+    static constexpr size_t chunk_size = 512_KiB;
+
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path(fmt::format("testjumborangedcopy{}object", object_size));
+
+    // Each byte depends on its offset in the object, modulo the prime 251, which divides
+    // neither the chunk nor a part size, so a range copied out of place or twice would
+    // not go unnoticed.
+    auto make_buffer = [] (size_t offset, size_t size) {
+        temporary_buffer<char> buf(size);
+        for (size_t i = 0; i < size; ++i) {
+            buf.get_write()[i] = char((offset + i) % 251);
+        }
+        return buf;
+    };
+
+    testlog.info("Upload object of {} bytes, with copy parts of at most {} bytes\n", object_size, jumbo_test_copy_part_size);
+    auto [sink, etag_f] = cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, max_parts_per_piece, jumbo_test_copy_part_size);
+    auto close = seastar::deferred_close(sink);
+    for (size_t offset = 0; offset < object_size; offset += chunk_size) {
+        sink.put(make_buffer(offset, std::min(chunk_size, object_size - offset))).get();
+    }
+    sink.flush().get();
+    close.close_now();
+
+    const auto etag = etag_f.get();
+    testlog.info("Reported etag {}\n", etag);
+    BOOST_REQUIRE(etag.ends_with(format("-{}\"", expected_parts)));
+
+    BOOST_REQUIRE_EQUAL(cln->get_object_size(name).get(), object_size);
+    auto in = input_stream<char>(cln->make_download_source(name));
+    auto close_in = seastar::deferred_close(in);
+    for (size_t pos = 0; pos < object_size; pos += chunk_size) {
+        const size_t size = std::min(chunk_size, object_size - pos);
+        auto buf = in.read_exactly(size).get();
+        BOOST_REQUIRE(buf == make_buffer(pos, size));
+    }
+}
+
+// A single piece of 40 MiB, copied in 4 ranges of 10 MiB.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_s3) {
+    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 40_MiB, std::nullopt, 4);
+}
+
+// A piece of exactly the limit is copied whole, one just above it in 2 ranges.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_at_limit_s3) {
+    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, jumbo_test_copy_part_size, std::nullopt, 1);
+    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, jumbo_test_copy_part_size + 512_KiB, std::nullopt, 2);
+}
+
+// Pieces of 3 parts of 5 MiB, 15, 15 and 10 MiB: each of the first two is copied in
+// 2 ranges while the next piece is being written, and the last one whole.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_pieces_s3) {
+    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 40_MiB, 3, 5);
+}
+
+// A single piece copied in 4 ranges, the copy of the second one fails: its part has no
+// ETag, so the flush fails, no object is produced, and the piece object is still removed.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_failure_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to fail a copy");
+#else
+    utils::get_local_injector().enable("s3_copy_part_fail", false, {{"value", "1"}});
+    auto disable_injection = defer([] () noexcept { utils::get_local_injector().disable("s3_copy_part_fail"); });
+
+    s3_test_fixture guard(make_s3_client);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testjumborangedcopyfailureobject");
+    const auto piece_name = name + "_0";
+
+    auto [sink, etag_f] = cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, std::nullopt, jumbo_test_copy_part_size);
+    auto close = seastar::deferred_close(sink);
+    for (size_t offset = 0; offset < 40_MiB; offset += 512_KiB) {
+        temporary_buffer<char> buf(512_KiB);
+        std::fill_n(buf.get_write(), buf.size(), 'x');
+        sink.put(std::move(buf)).get();
+    }
+    auto is_etag_list_failure = [] (const std::runtime_error& e) {
+        return std::string_view(e.what()).contains("Failed to parse ETag list");
+    };
+    BOOST_REQUIRE_EXCEPTION(sink.flush().get(), std::runtime_error, is_etag_list_failure);
+    close.close_now();
+    BOOST_REQUIRE_EXCEPTION(etag_f.get(), std::runtime_error, is_etag_list_failure);
+
+    BOOST_REQUIRE(!cln->object_exists(name).get());
+    BOOST_REQUIRE(!cln->object_exists(piece_name).get());
+#endif
 }
 
 // Uploads object_size bytes through a plain sink and requires the entity tag the
@@ -1611,7 +1715,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_jumbo_upload_abort_before_first_piece_s3) {
     seastar::abort_source as;
     // Two parts per piece, so that the part written below starts the piece's
     // multipart upload but does not fill the piece.
-    auto out = output_stream<char>(cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 2, &as));
+    auto out = output_stream<char>(cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 2, std::nullopt, &as));
 
     static constexpr size_t chunk_size = 1_MiB;
     auto rnd = tests::random::get_bytes(chunk_size);

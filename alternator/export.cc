@@ -584,7 +584,7 @@ public:
     // for as long as the upload needs it.
     s3_storage_sink(shared_ptr<s3::client> client, sstring object_name, abort_source *as)
         : s3_storage_sink(std::move(object_name),
-                          client->make_upload_jumbo_sink_and_get_etag(object_name, s3::object_metadata{}, std::nullopt, as))
+                          client->make_upload_jumbo_sink_and_get_etag(object_name, s3::object_metadata{}, std::nullopt, std::nullopt, as))
     {
     }
     ~s3_storage_sink() {
