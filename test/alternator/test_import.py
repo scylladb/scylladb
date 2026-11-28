@@ -50,12 +50,13 @@ def unique_bucket_name():
 
 # An S3 client in the "dynamodb" fixture's region. DynamoDB allows a bucket
 # in another region, but keeping it in the table's region saves cost and
-# latency. Local testing does not run an S3 server (such as MinIO) yet.
+# latency. The import tests do not use the local S3 server of
+# `test/alternator/run --s3` yet.
 def make_s3_client(dynamodb):
     if is_aws(dynamodb):
         return boto3.client('s3', region_name=dynamodb.meta.client.meta.region_name)
     raise NotImplementedError(
-        'local testing does not run an S3 server (such as MinIO) yet')
+        'the import tests do not use the local S3 server yet')
 
 # Create an S3 bucket and delete it, with its contents, on exit. An import
 # only reads the bucket, so nothing writes to it behind the cleanup.
