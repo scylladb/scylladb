@@ -110,8 +110,8 @@ struct commitlog_service {
     std::uniform_int_distribution<unsigned> delay_dist;
     std::uniform_int_distribution<size_t> size_dist;
     std::optional<db::commitlog> log;
-    std::optional<db::commitlog::flush_handler_anchor> fa;
-    timer<> flush_timer;
+    std::optional<db::commitlog::commit_externally_handler_anchor> fa;
+    timer<> commit_timer;
 
     commitlog_service(const test_config& c)
         : cfg(c)
@@ -122,7 +122,7 @@ struct commitlog_service {
     future<> init(const db::commitlog::config& cfg) {
         SCYLLA_ASSERT(!log);
         log.emplace(co_await db::commitlog::create_commitlog(cfg));
-        fa.emplace(log->add_flush_handler(std::bind(&commitlog_service::flush_handler, this, std::placeholders::_1, std::placeholders::_2)));
+        fa.emplace(log->add_commit_externally_handler(std::bind(&commitlog_service::commit_externally_handler, this, std::placeholders::_1, std::placeholders::_2)));
     }
     future<> stop() {
         if (log) {
@@ -130,10 +130,10 @@ struct commitlog_service {
             co_await log->clear();
         }
     }
-    void flush_handler(db::cf_id_type id, db::replay_position pos) {
-        if (!flush_timer.armed()) {
-            flush_timer.set_callback([id, this] { log->discard_completed_segments(id); });
-            flush_timer.arm(std::chrono::milliseconds(delay_dist(tests::random::gen())));
+    void commit_externally_handler(db::cf_id_type id, db::replay_position pos) {
+        if (!commit_timer.armed()) {
+            commit_timer.set_callback([id, this] { log->discard_completed_segments(id); });
+            commit_timer.arm(std::chrono::milliseconds(delay_dist(tests::random::gen())));
         }
     }
 };
