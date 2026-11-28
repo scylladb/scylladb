@@ -9,6 +9,7 @@
 
 #include "topology_state_machine.hh"
 #include <algorithm>
+#include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "utils/log.hh"
@@ -17,6 +18,7 @@
 #include "replica/database.hh"
 #include "locator/tablets.hh"
 #include "topology_mutation.hh"
+#include "service/topology_utils.hh"
 #include "raft/raft_group0_client.hh"
 #include "raft/raft_group0.hh"
 
@@ -345,7 +347,15 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
     auto op = locator::rf_rack_topology_operation{
             locator::rf_rack_topology_operation::type::remove, host_id, node->dc(), node->rack()};
     if (!db.check_rf_rack_validity_with_topology_change(tmptr, std::move(op))) {
-        return node_validation_failure{"Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid"};
+        sstring reason = "Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid";
+        if (auto names = auto_rf_keyspaces_using_rack(db, node->dc(), node->rack()); !names.empty()) {
+            reason += fmt::format(". The system keyspaces {} replicate to rack {} of {}. They give a rack up on their own once "
+                    "no other tablets keyspace uses it (retry in a moment), but not while a node is down and not excluded: "
+                    "exclude it first, also when it is the node being removed. While no other tablets keyspace exists, and "
+                    "for their last rack in a data center, remove the rack with ALTER KEYSPACE",
+                    fmt::join(names, ", "), node->rack(), node->dc());
+        }
+        return node_validation_failure{std::move(reason)};
     }
     return node_validation_success {};
 }

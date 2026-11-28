@@ -159,8 +159,15 @@ Add New DC
 #. When all nodes are up and running ``ALTER`` the following Keyspaces in the new nodes:
 
    * Keyspace created by the user (which needed to replicate to the new DC).
-   * System: ``system_distributed``, ``system_traces``, for example, replicate the data to three nodes in the new DC.
-   * ``audit`` - if enabled - replicate the data to three nodes in the new DC.
+   * System: ``system_distributed``, and ``system_traces`` where it uses vnodes, for example, replicate the data to three nodes in the new DC.
+   * ``audit`` - if enabled and where it uses vnodes - replicate the data to three nodes in the new DC.
+
+   .. note::
+         Check how ``system_traces`` and ``audit`` are stored with ``DESCRIBE KEYSPACE``. Where one of them uses
+         tablets (``tablets = {'enabled': true}``), its replication is managed automatically and the ``ALTER``
+         statements below do not apply to it: once one of your tablets keyspaces replicates to the new DC, ScyllaDB
+         extends it to the DC, one rack at a time, up to two (``system_traces``) or three (``audit``) racks.
+         See :ref:`Replication of the Audit Table <audit-table-replication>`.
 
    For example:
 
@@ -178,7 +185,10 @@ Add New DC
 
       ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
       ALTER KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
+      -- where the keyspace uses vnodes:
       ALTER KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
+      -- if auditing is enabled and the keyspace uses vnodes:
+      ALTER KEYSPACE audit WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
 
    After
 

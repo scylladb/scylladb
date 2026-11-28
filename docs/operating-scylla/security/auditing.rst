@@ -333,7 +333,8 @@ For example:
 
 .. note:: The schema of ``audit.audit_log`` has been migrated in the 2024.2 version from ``SimpleStrategy RF=1`` to ``NetworkTopologyStrategy RF=3``:
 
-   * By default every DC will contain 3 audit replicas. If a new DC is added, in order for it to also contain audit replicas, audit's schema has to be manually altered.
+   * On vnodes, by default every DC will contain 3 audit replicas. If a new DC is added, in order for it to also contain audit replicas, audit's schema has to be manually altered.
+     Where the ``audit`` keyspace uses tablets, the replication is managed automatically, see :ref:`audit-table-replication`.
    * CL for writes is still equal to ``1``, which implies that reading audit rows with CL=Quorum may fail, which is especially true for clusters with less than 3 nodes.
 
 **Procedure**
@@ -392,6 +393,99 @@ Storing Audit Messages in a Table and Syslog Simultaneously
 
       audit: "syslog,table"
 
+
+.. _audit-table-replication:
+
+Replication of the Audit Table
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``audit`` keyspace is created by ScyllaDB when a node starts with table auditing enabled
+(``audit: table``, the default), if it does not exist yet. How it is replicated depends on whether
+rack lists are enforced for tablet keyspaces when it is created (``enforce_rack_list``, disabled by
+default, see :ref:`Enforcing Rack-List Replication for Tablet Keyspaces <keyspace-rf-rack-valid-to-enforce-rack-list>`).
+
+Without ``enforce_rack_list``
+"""""""""""""""""""""""""""""""""""""""""""""""
+
+The keyspace uses vnodes with ``NetworkTopologyStrategy`` and a replication factor of 3 in every
+data center. Its replication is yours to change.
+
+A keyspace created this way stays on vnodes, also if ``enforce_rack_list`` is enabled later. The
+same applies where new keyspaces use vnodes by default (``tablets_mode_for_new_keyspaces``), and to
+a keyspace created while the cluster was being upgraded.
+
+With ``enforce_rack_list`` and tablets by default
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+The keyspace uses tablets with rack lists, and ScyllaDB manages its replication. It follows the
+other tablets keyspaces of the cluster, which are called the *application keyspaces* below and use
+rack lists as well. The keyspace starts with a single rack in each data center that has
+token-owning nodes. From then on, in each data center:
+
+* A rack becomes *eligible* once an application keyspace lists it. The audit table is extended
+  into eligible racks, one rack at a time, up to three racks, and a rack that is no longer eligible
+  is given up again, one rack at a time.
+* The audit table is extended into eligible data centers it does not replicate to yet. A data
+  center is never given up: once no application keyspace uses it, the audit table keeps a single
+  rack there. Nothing is given up while no application keyspace exists at all.
+
+Use ``DESCRIBE KEYSPACE audit`` to see the current replication. Every step is an ordinary
+replication factor change: its tablets are rebuilt on the new replica (a repair followed by
+streaming), which the tablet load balancer carries out along with its other migrations. The
+steps appear in the task manager's ``global_topology_requests`` module as ``keyspace_rf_change``
+tasks for the ``audit`` keyspace. With a large audit table (for example, with the ``DML`` or
+``QUERY`` categories audited) a step takes correspondingly longer.
+
+The automatic management pauses:
+
+* while tablet load balancing is disabled (the ``storage_service/tablets/balancing`` REST API), and
+* while a node of the cluster is down, unless that node has been excluded.
+
+The node that creates the keyspace decides how it is created, so set ``enforce_rack_list`` on
+every node, before the first node of the cluster starts. The replication is managed only while
+the option stays set.
+
+Changing the replication by hand
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Manual changes are kept as long as they agree with the rules above, and undone where they do not:
+
+* A rack that no application keyspace uses is removed again.
+* While the audit table is below its goal in an eligible data center, it is extended again, not
+  necessarily onto the rack you removed.
+* Racks above the goal, within the eligible racks, are kept.
+* A data center you remove (``'<dc>': []``) stays removed as long as no application keyspace
+  replicates to it; while one does, it is added back.
+
+A manual ``ALTER KEYSPACE audit`` is rejected while one of the automatic steps is in progress
+(``Another RF change for this keyspace ... ongoing``); retry it once the step has finished. As for
+any tablets keyspace, list every data center in the statement and change one rack at a time, for
+example:
+
+.. code-block:: cql
+
+   ALTER KEYSPACE audit WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2'], 'dc2': ['rack4']};
+
+Things to keep in mind
+~~~~~~~~~~~~~~~~~~~~~~
+
+* The audit table is only ever replicated as widely as the application keyspaces. Until they
+  list more than one rack in a data center, it has a single replica there, and an audit record
+  whose replica node is down is dropped; the node reports it, for example: ``audit - Unexpected
+  exception when writing login log ... Cannot achieve consistency level for cl ONE``. Create the
+  application keyspaces before relying on the audit table's durability.
+* While a step that adds a replica runs, reads of ``audit.audit_log`` at ``QUORUM`` or ``ALL`` can
+  fail with ``Unavailable``: the consistency level already counts the new replica, which cannot
+  serve reads yet. Retry such reads, or read at ``ONE``.
+* To remove the nodes of a lost rack, exclude them first, then drop the rack from the application
+  keyspaces, then remove the nodes. The audit table gives the rack up in between.
+* After dropping a rack from the application keyspaces, the audit table needs a moment to give
+  the rack up. Decommissioning the rack's last node before that fails; retry it. With
+  ``rf_rack_valid_keyspaces`` enabled it is rejected at once, with a message that names the
+  system keyspaces still using the rack.
+* Adding or removing a data center: see
+  :doc:`Add a Data Center </operating-scylla/procedures/cluster-management/add-dc-to-existing-dc>`
+  and :doc:`Remove a Data Center </operating-scylla/procedures/cluster-management/decommissioning-data-center>`.
 
 
 Handling Audit Failures

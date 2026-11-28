@@ -232,6 +232,10 @@ rack list. To ensure that, follow a procedure of :ref:`conversion to rack list r
 After that restart all nodes in the cluster, with ``enforce_rack_list`` enabled and ``rf_rack_valid_keyspaces`` disabled. Make
 sure to avoid setting or updating replication factor (with CREATE KEYSPACE or ALTER KEYSPACE) while nodes are being restarted.
 
+With ``enforce_rack_list`` enabled, a new cluster creates the ``audit`` and ``system_traces`` keyspaces on tablets with
+rack lists, and ScyllaDB manages their replication (see :ref:`Replication of the Audit Table <audit-table-replication>`).
+Keyspaces which already exist on vnodes when the option is enabled stay there.
+
 .. _tablets-limitations:
 
 Limitations and Unsupported Features
