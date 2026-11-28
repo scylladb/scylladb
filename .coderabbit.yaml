@@ -119,7 +119,7 @@ reviews:
       mode: "off"
 
   # No vendor/** entry: our third-party code (seastar, abseil, swagger-ui,
-  # tools/python3, tools/cqlsh) lives in submodules, which only ever show up
+  # tools/python3) lives in submodules, which only ever show up
   # in a diff as a pointer bump.
   path_filters:
     - "!**/*.lock"

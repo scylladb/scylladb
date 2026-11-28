@@ -59,7 +59,7 @@ Architecture: any
 Depends: %{product}-server (= ${binary:Version})
  , %{product}-kernel-conf (= ${binary:Version})
  , scylla-node-exporter
- , %{product}-cqlsh (= ${binary:Version})
+ , scylla-cqlsh
 Recommends: %{product}-perf-collector (= ${binary:Version})
 Replaces: scylla-enterprise (<< 2025.1.0~)
 Breaks: scylla-enterprise (<< 2025.1.0~)

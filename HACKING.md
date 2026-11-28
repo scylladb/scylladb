@@ -220,9 +220,9 @@ On a development machine, one might run Scylla as
 $ SCYLLA_HOME=$HOME/scylla build/release/scylla --overprovisioned --developer-mode=yes
 ```
 
-To interact with scylla it is recommended to build our version of
-cqlsh. It is available at
-https://github.com/scylladb/scylla-cqlsh and is available as a submodule.
+To interact with scylla, use our version of cqlsh, which is released on its
+own from https://github.com/scylladb/scylla-cqlsh. `bin/cqlsh` runs the
+version test.py uses (from `test/pyproject.toml`).
 
 ### Branches and tags
 

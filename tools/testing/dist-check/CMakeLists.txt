@@ -12,5 +12,4 @@ add_custom_target(dist-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_dependencies(dist-check
   dist-server-rpm
-  dist-python3-rpm
-  dist-cqlsh-rpm)
+  dist-python3-rpm)

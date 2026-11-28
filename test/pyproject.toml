@@ -7,8 +7,8 @@
 
 # Python dependencies required to run test.py.
 #
-# scylla-driver's pin here is intentionally independent of both
-# tools/cqlsh/requirements.txt and install-dependencies.sh: test.py syncs
+# scylla-driver's pin here is intentionally independent of
+# install-dependencies.sh: test.py syncs
 # this environment itself on startup (see _ensure_running_under_uv() in
 # test.py), so bumping the version here takes effect immediately and does
 # not require rebuilding the frozen toolchain image.
@@ -18,6 +18,8 @@ version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
     "scylla-driver==3.29.13",
+    # bin/cqlsh, cqlsh isn't in this repo any more
+    "scylla-cqlsh==6.0.41",
     "treelib==1.8.0",
     "allure-pytest==2.16.0",
     "pytest==9.0.3",

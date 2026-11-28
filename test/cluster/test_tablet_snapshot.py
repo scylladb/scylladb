@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -43,13 +45,13 @@ def take_manual_snapshot(host: str, workdir: Path, output_dir: str = "manual_sna
         capture_output=True,
         text=True,
     )
+    # cqlsh from test/pyproject.toml, next to the venv's python; with DISABLE_VENV=1
+    # that's whatever python runs the tests, so fall back to the one on PATH.
+    cqlsh = shutil.which("cqlsh", path=str(Path(sys.executable).parent)) or shutil.which("cqlsh")
+    assert cqlsh, "cqlsh not found, install scylla-cqlsh (see test/pyproject.toml)"
     for line in result.stdout.strip().splitlines():
         if line.startswith("cqlsh "):
-            line = line.replace(
-                "cqlsh ",
-                f"{TOP_SRC_DIR / 'bin/cqlsh'} ",
-                1,
-            )
+            line = line.replace("cqlsh ", f"{shlex.quote(cqlsh)} ", 1)
         subprocess.run(line, cwd=workdir, shell=True, check=True, text=True)
     return workdir / output_dir
 
