@@ -276,6 +276,9 @@ public:
                 tasks::task_manager tm;
                 auto cm = make_lw_shared<compaction::compaction_manager>(tm, compaction::compaction_manager::for_testing_tag{});
                 auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), *cm, nullptr, env.manager(), cl_stats, tracker, nullptr);
+                // ~compaction_group() aborts unless compaction is disabled on every view.
+                // table::stop() removes the views from the compaction manager.
+                auto stop_cf = deferred_stop(*cf);
 
                 auto start = perf_sstable_test_env::now();
 
