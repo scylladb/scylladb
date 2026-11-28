@@ -523,11 +523,11 @@ void describe_single_item(const cql3::selection::selection& selection,
             if (!attrs_to_get || attrs_to_get->contains(column_name)) {
                 // item is expected to start empty, and column_name are unique
                 // so add() makes sense
-                rjson::add_with_string_name(item, column_name, rjson::empty_object());
-                rjson::value& field = item[column_name.c_str()];
+                rjson::value field = rjson::empty_object();
                 cell->with_linearized([&] (bytes_view linearized_cell) {
                     rjson::add_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(linearized_cell, **column_it));
                 });
+                rjson::add_with_string_name(item, column_name, std::move(field));
             }
         } else {
             auto deserialized = attrs_type()->deserialize(*cell);

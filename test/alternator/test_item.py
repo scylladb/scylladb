@@ -816,6 +816,74 @@ def test_null_in_string(test_table_s):
     test_table_s.put_item(Item={'p': p, 'val': val})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'val': val}
 
+# Two sort keys that differ only after a null character are two items,
+# and they sort by all their bytes.
+def test_null_in_string_sort_key(test_table_ss):
+    p = random_string()
+    keys = ['a', 'a\x00', 'a\x00b', 'a\x00c']
+    for c in reversed(keys):
+        test_table_ss.put_item(Item={'p': p, 'c': c})
+    got = test_table_ss.query(KeyConditionExpression='p = :p', ExpressionAttributeValues={':p': p},
+        ConsistentRead=True)['Items']
+    assert [item['c'] for item in got] == keys
+
+# Comparisons in a condition use all the bytes of a string, also after a
+# null character.
+def test_null_in_string_condition(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'a\x00b'})
+    def check(cond, v):
+        try:
+            test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b = :one',
+                ConditionExpression=cond, ExpressionAttributeValues={':one': 1, ':v': v})
+            return True
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+            return False
+    assert not check('a = :v', 'a\x00c')
+    assert check('a = :v', 'a\x00b')
+    assert check('a < :v', 'a\x00c')
+    assert not check('a < :v', 'a\x00a')
+    assert check('begins_with(a, :v)', 'a\x00')
+    assert not check('begins_with(a, :v)', 'a\x00c')
+    assert check('contains(a, :v)', '\x00b')
+
+# Set operations compare elements by all their bytes, so two strings that
+# differ only after a null character are two different elements.
+def test_null_in_string_set_add(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='ADD a :v',
+        ExpressionAttributeValues={':v': {ac}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab, ac}
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'ADD', 'Value': {'a\x00d'}}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab, ac, 'a\x00d'}
+
+def test_null_in_string_set_delete(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab, ac, 'z'}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='DELETE a :v',
+        ExpressionAttributeValues={':v': {'z'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab, ac}
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'DELETE', 'Value': {ac}}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab}
+
+def test_null_in_string_set_condition_eq(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab}})
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b = :one',
+            ConditionExpression='a = :v', ExpressionAttributeValues={':one': 1, ':v': {ac}})
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p}, AttributeUpdates={'b': {'Action': 'PUT', 'Value': 1}},
+            Expected={'a': {'ComparisonOperator': 'EQ', 'AttributeValueList': [{ac}]}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b = :one',
+        ConditionExpression='a <> :v', ExpressionAttributeValues={':one': 1, ':v': {ac}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 1
+
 def test_null_in_bytes(test_table_b):
     p = random_bytes() + bytes([0]) + random_bytes()
     val = random_bytes() + bytes([0]) + random_bytes()

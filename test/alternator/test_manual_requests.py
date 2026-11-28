@@ -349,6 +349,15 @@ def test_exception_escape_raw(dynamodb, test_table_s):
     r = json.loads(response.text)
     assert 'ValidationException' in r['__type']
 
+# JSON cannot carry a raw null character inside a string, but the escape
+# \u0000 puts one there. Check it in a key, a value and a string set.
+def test_null_escape_in_string(dynamodb, test_table_s):
+    p = random_string()
+    payload = '{"TableName": "%s", "Item": {"p": {"S": "%s\\u0000x"}, "v": {"S": "a\\u0000b"}, "s": {"SS": ["a\\u0000b", "a\\u0000c"]}}}' % (test_table_s.name, p)
+    manual_request(dynamodb, 'PutItem', payload)
+    item = test_table_s.get_item(Key={'p': p + '\x00x'}, ConsistentRead=True)['Item']
+    assert item == {'p': p + '\x00x', 'v': 'a\x00b', 's': {'a\x00b', 'a\x00c'}}
+
 def put_item_binary_data_in_key(dynamodb, test_table_b, item_data):
     payload = '{"TableName": "%s", "Item": {"p": {"B": "%s"}}}' % (test_table_b.name, item_data)
     req = get_signed_request(dynamodb, 'PutItem', payload)
