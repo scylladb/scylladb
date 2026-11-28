@@ -1,0 +1,150 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "version": "1.0.0",
+    "title": "Scylla API",
+    "description": "The scylla API version 2.0",
+    "termsOfService": "http://www.scylladb.com/tos/",
+    "contact": {
+      "name": "Scylla Team",
+      "email": "info@scylladb.com",
+      "url": "http://scylladb.com"
+    },
+    "license": {
+      "name": "AGPL",
+      "url": "https://github.com/scylladb/scylla/blob/master/LICENSE.AGPL"
+    }
+  },
+  "host": "127.0.0.1:10000",
+  "basePath": "/",
+  "schemes": [
+    "http"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/v2/metrics-config/": {
+      "get": {
+        "description": "Return the metrics layer configuration",
+        "operationId": "get_metrics_config",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "metrics"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/metrics_config",
+                "description": "metrics Config value"
+              }
+            }
+          },
+          "default": {
+            "description": "unexpected error",
+            "schema": {
+              "$ref": "#/definitions/ErrorModel"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "Set the metrics layer relabel configuration",
+        "operationId": "set_metrics_config",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "metrics"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "conf",
+            "description": "An array of relabel_config objects",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/metrics_config",
+                "description": "metrics Config value"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "unexpected error",
+            "schema": {
+              "$ref": "#/definitions/ErrorModel"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "metrics_config": {
+      "id": "metrics_config",
+      "summary": "An entry in the metrics configuration",
+      "properties": {
+        "source_labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The source labels, a match is based on concatenation of the labels"
+        },
+        "action": {
+          "type": "string",
+          "description": "The action to perform on match",
+          "enum": [
+            "skip_when_empty",
+            "report_when_empty",
+            "replace",
+            "keep",
+            "drop",
+            "drop_label"
+          ]
+        },
+        "target_label": {
+          "type": "string",
+          "description": "The application state version"
+        },
+        "replacement": {
+          "type": "string",
+          "description": "The replacement string to use when replacing a value"
+        },
+        "regex": {
+          "type": "string",
+          "description": "The regex string to use when replacing a value"
+        },
+        "separator": {
+          "type": "string",
+          "description": "The separator string to use when concatenating the labels"
+        }
+      }
+    },
+    "ErrorModel": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "code": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}
