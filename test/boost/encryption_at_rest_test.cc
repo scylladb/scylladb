@@ -9,6 +9,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <stdint.h>
+#include <sys/stat.h>
 #include <fstream>
 #include <random>
 #include <regex>
@@ -626,18 +627,18 @@ static void check_rename_unencrypted_commitlog_segment(const tmpdir& tmp, const 
     BOOST_REQUIRE_EQUAL(count_commitlog_entries(destination, &exts), size_t(1));
 }
 
-static void do_test_rename_commitlog_segment(std::function<void(const tmpdir&, const db::extensions&)> check) {
-    tmpdir tmp;
+// Runs `f` with commitlog extensions that encrypt with the local key in `key_file`, generated if missing.
+static void with_encrypted_commitlog_extensions(const tmpdir& tmp, const fs::path& key_file, std::function<void(const db::extensions&)> f) {
     test_provider_args args{ .tmp = tmp };
     auto [cfg, ext] = make_commitlog_config(args, {
         { "key_provider", "LocalFileSystemKeyProviderFactory" },
-        { "secret_key_file", (tmp.path() / "secret_key").string() },
+        { "secret_key_file", key_file.string() },
     });
     auto notify_set = configurable::init_all(*cfg, *ext).get();
 
     std::exception_ptr ex;
     try {
-        check(tmp, *ext);
+        f(*ext);
     } catch (...) {
         ex = std::current_exception();
     }
@@ -645,6 +646,13 @@ static void do_test_rename_commitlog_segment(std::function<void(const tmpdir&, c
     if (ex) {
         std::rethrow_exception(std::move(ex));
     }
+}
+
+static void do_test_rename_commitlog_segment(std::function<void(const tmpdir&, const db::extensions&)> check) {
+    tmpdir tmp;
+    with_encrypted_commitlog_extensions(tmp, tmp.path() / "secret_key", [&] (const db::extensions& exts) {
+        check(tmp, exts);
+    });
 }
 
 // An encrypted commitlog segment moved with commitlog::rename_segment() must stay readable,
@@ -666,6 +674,164 @@ SEASTAR_THREAD_TEST_CASE(test_rename_encrypted_commitlog_segment_replaces_stale_
 // A stale options file in the destination must be removed, or the segment would be decrypted with it.
 SEASTAR_THREAD_TEST_CASE(test_rename_unencrypted_commitlog_segment_removes_stale_options_file) {
     do_test_rename_commitlog_segment(check_rename_unencrypted_commitlog_segment);
+}
+
+// Runs `f` on a new commitlog and shuts the commitlog down even when a check in `f` throws.
+static void with_commitlog(db::commitlog::config cfg, std::function<void(db::commitlog&)> f) {
+    auto cl = db::commitlog::create_commitlog(std::move(cfg)).get();
+    std::exception_ptr ex;
+    try {
+        f(cl);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    cl.shutdown().get();
+    cl.release().get();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+}
+
+static db::commitlog::config encrypted_commitlog_config(const fs::path& dir, const db::extensions& exts, bool use_o_dsync) {
+    db::commitlog::config cfg;
+    cfg.commit_log_location = dir.native();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 64 * this_smp_shard_count();
+    cfg.max_reserve_segments = 0;
+    cfg.use_o_dsync = use_o_dsync;
+    cfg.extensions = &exts;
+    cfg.warn_about_segments_left_on_disk_after_shutdown = false;
+    return cfg;
+}
+
+// Adds `n` entries of 1000 bytes, all in one segment, and returns the segment id. The handles are
+// released without marking the data as flushed, so the segment is kept on disk after shutdown.
+static db::segment_id_type add_entries_to_one_segment(db::commitlog& cl, size_t n) {
+    const auto table = table_id(utils::UUID_gen::get_time_UUID());
+    std::optional<db::segment_id_type> id;
+    for (size_t i = 0; i < n; ++i) {
+        db::rp_handle h = cl.add_mutation(table, 1000, db::commitlog::force_sync::yes, [] (db::commitlog::output& out) {
+            out.fill('1', 1000);
+        }).get();
+        BOOST_REQUIRE_EQUAL(h.rp().id, id.value_or(h.rp().id));
+        id = h.rp().id;
+        h.release();
+    }
+    return *id;
+}
+
+static fs::path segment_path(const fs::path& dir, db::segment_id_type id) {
+    return dir / std::string(db::commitlog::descriptor(id, db::commitlog::descriptor::FILENAME_PREFIX).filename());
+}
+
+struct read_back_result {
+    size_t entries = 0;
+    bool truncated = false; // the read ended on a sector of an older segment
+    std::optional<sstring> error;
+};
+
+// Reads a segment as replay does. segment_truncation means the rest of the file belongs to an
+// older segment, which is the end of the data. Any other segment_error is reported.
+static read_back_result read_back_segment(const fs::path& segment, const db::extensions& exts) {
+    read_back_result r;
+    try {
+        db::commitlog::read_log_file(segment.native(), db::commitlog::descriptor::FILENAME_PREFIX,
+                [&r] (db::commitlog::buffer_and_replay_position) {
+            ++r.entries;
+            return make_ready_future<>();
+        }, 0, &exts).get();
+    } catch (db::commitlog::segment_truncation&) {
+        r.truncated = true;
+    } catch (db::commitlog::segment_error& e) {
+        r.error = e.what();
+    }
+    return r;
+}
+
+// Reads back a newly created encrypted segment while it is still open, so it has no
+// terminating zero sector, as after a crash. Past the last entry the file holds what was
+// there before the segment's writes, and replay must read that as the end of the data.
+static void check_read_back_new_encrypted_segment(bool use_o_dsync) {
+    tmpdir tmp;
+    with_encrypted_commitlog_extensions(tmp, tmp.path() / "secret_key", [&] (const db::extensions& exts) {
+        const auto dir = tmp.path() / "commitlog";
+        fs::create_directories(dir);
+        with_commitlog(encrypted_commitlog_config(dir, exts, use_o_dsync), [&] (db::commitlog& cl) {
+            constexpr size_t entries = 3;
+            const auto r = read_back_segment(segment_path(dir, add_entries_to_one_segment(cl, entries)), exts);
+
+            BOOST_REQUIRE_MESSAGE(!r.error, fmt::format("new segment, use_o_dsync={}: {}", use_o_dsync, r.error.value_or("")));
+            BOOST_REQUIRE_EQUAL(r.entries, entries);
+            BOOST_REQUIRE(!r.truncated);
+        });
+    });
+}
+
+// The pre-write fills a new O_DSYNC segment file before it is encrypted.
+SEASTAR_THREAD_TEST_CASE(test_encrypted_commitlog_read_back_new_segment_odsync) {
+    check_read_back_new_encrypted_segment(true);
+}
+
+// Without O_DSYNC a new segment file is only truncated to its full size.
+SEASTAR_THREAD_TEST_CASE(test_encrypted_commitlog_read_back_new_segment) {
+    check_read_back_new_encrypted_segment(false);
+}
+
+// A segment writes `old_entries` entries, and the commitlog stops without flushing them, so the
+// file stays on disk, truncated to the written size. After a restart the test hands the file to
+// delete_segments(), as startup replay does, the commitlog recycles it, and a new segment writes
+// `new_entries` entries to the start of it. Each entry takes one sector.
+static void check_read_back_recycled_encrypted_segment(size_t old_entries, size_t new_entries) {
+    tmpdir tmp;
+    const auto dir = tmp.path() / "commitlog";
+    fs::create_directories(dir);
+    const auto key = tmp.path() / "secret_key";
+
+    fs::path old_segment;
+    with_encrypted_commitlog_extensions(tmp, key, [&] (const db::extensions& exts) {
+        with_commitlog(encrypted_commitlog_config(dir, exts, true), [&] (db::commitlog& cl) {
+            old_segment = segment_path(dir, add_entries_to_one_segment(cl, old_entries));
+        });
+    });
+    BOOST_REQUIRE(fs::exists(old_segment));
+    struct stat old_stat;
+    BOOST_REQUIRE_EQUAL(::stat(old_segment.c_str(), &old_stat), 0);
+    // shutdown() truncated the old file to its written size, below the 1 MB segment size.
+    BOOST_REQUIRE_LT(size_t(old_stat.st_size), size_t(1) << 20);
+
+    with_encrypted_commitlog_extensions(tmp, key, [&] (const db::extensions& exts) {
+        with_commitlog(encrypted_commitlog_config(dir, exts, true), [&] (db::commitlog& cl) {
+            cl.delete_segments({old_segment.native()}).get();
+            // The reserve segment (one slot, even with max_reserve_segments = 0) was allocated in a new
+            // file at startup, before the old file was recycled. The next segment takes the recycled file.
+            // An empty segment is not replaced, so write to the first one first.
+            add_entries_to_one_segment(cl, 1);
+            cl.force_new_active_segment().get();
+
+            const auto segment = segment_path(dir, add_entries_to_one_segment(cl, new_entries));
+            struct stat new_stat;
+            BOOST_REQUIRE_EQUAL(::stat(segment.c_str(), &new_stat), 0);
+            const auto r = read_back_segment(segment, exts);
+
+            // A recycled file is renamed, so it keeps its inode.
+            BOOST_REQUIRE_EQUAL(new_stat.st_ino, old_stat.st_ino);
+            BOOST_REQUIRE_MESSAGE(!r.error, fmt::format("recycled segment: {}", r.error.value_or("")));
+            BOOST_REQUIRE_EQUAL(r.entries, new_entries);
+            // Below the old file size the next sector is an old one, which ends the read by its id.
+            // Past the old size the pre-write filled the file with raw zeros before it was encrypted.
+            BOOST_REQUIRE_EQUAL(r.truncated, new_entries < old_entries);
+        });
+    });
+}
+
+// The new segment ends inside the sectors of the old segment.
+SEASTAR_THREAD_TEST_CASE(test_encrypted_commitlog_read_back_recycled_segment) {
+    check_read_back_recycled_encrypted_segment(20, 3);
+}
+
+// The new segment grows past the size the old segment was truncated to at shutdown.
+SEASTAR_THREAD_TEST_CASE(test_encrypted_commitlog_read_back_recycled_segment_past_old_size) {
+    check_read_back_recycled_encrypted_segment(10, 30);
 }
 
 static std::string local_key_options(const fs::path& keyfile) {

@@ -19,7 +19,9 @@ namespace encryption {
 
 class symmetric_key;
 
-shared_ptr<file_impl> make_encrypted_file(file, ::shared_ptr<symmetric_key>);
+// With zero_blocks_read_as_zeros, an all-zero block on disk decrypts to zeros, so a region
+// that was never written through the encryption, such as a file hole, reads as zeros.
+shared_ptr<file_impl> make_encrypted_file(file, ::shared_ptr<symmetric_key>, bool zero_blocks_read_as_zeros = false);
 
 using get_key_func = std::function<future<::shared_ptr<symmetric_key>>()>;
 
