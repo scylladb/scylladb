@@ -9,6 +9,7 @@
 #pragma once
 
 #include <list>
+#include <ranges>
 #include <unordered_set>
 
 #include "serializer.hh"
@@ -584,6 +585,32 @@ struct serializer<bytes> {
     }
 };
 
+// Reads a bytes element as a view into the stream, so rebuilding e.g. a key costs no per-component copy.
+// Explicit construction: a contiguous `in` may need its bytes_view wrapped into buffer_view<Iterator>.
+template<typename View, typename Input>
+View deserialize_view(Input& in) {
+    return View(serializer<bytes>::read(in).view());
+}
+template<>
+struct serializer<bytes_view> {
+    template<typename Input>
+    static bytes_view read(Input& in) {
+        return deserialize_view<bytes_view>(in);
+    }
+};
+template<typename Iterator>
+struct serializer<buffer_view<Iterator>> {
+    template<typename Input>
+    static buffer_view<Iterator> read(Input& in) {
+        return deserialize_view<buffer_view<Iterator>>(in);
+    }
+};
+// Named by [[reconstruct_as=...]]; idl-compiler.py instantiates it with read()'s Input type.
+template<typename Input>
+using deserialized_view_t = decltype(serializer<bytes>::read(std::declval<Input&>()).view());
+template<typename Input>
+using deserialized_view_range = utils::small_vector<deserialized_view_t<Input>, 4>;
+
 template<typename Output>
 void serialize(Output& out, const bytes_view& v) {
     serializer<bytes>::write(out, v);
@@ -591,6 +618,10 @@ void serialize(Output& out, const bytes_view& v) {
 template<typename Output>
 void serialize(Output& out, const managed_bytes& v) {
     serializer<bytes>::write(out, v);
+}
+template<typename Output>
+void serialize(Output& out, const managed_bytes_view& v) {
+    serializer<bytes>::write_fragmented(out, fragment_range(v));
 }
 template<typename Output>
 void serialize(Output& out, const bytes_ostream& v) {
@@ -605,6 +636,43 @@ requires FragmentRange<FragmentedBuffer>
 void serialize_fragmented(Output& out, FragmentedBuffer&& v) {
     serializer<bytes>::write_fragmented(out, std::forward<FragmentedBuffer>(v));
 }
+
+// Maps, optionals (a range since C++26) and bytes_ostream (a range of fragments) have their own wire
+// formats; excluded so a missing specialization fails to compile instead of silently writing the vector format.
+template<typename T>
+concept MapLikeRange = requires {
+    typename T::key_type;
+    typename T::mapped_type;
+};
+
+template<typename T>
+concept OptionLikeRange = requires (const T& v) {
+    v.has_value();
+    *v;
+};
+
+// Elements must be the value type the reader decodes (rejects proxies like vector<bool>'s and references to other types).
+template<typename R>
+concept ElementIsValueRange = std::same_as<std::remove_cvref_t<std::ranges::range_reference_t<const R>>, std::ranges::range_value_t<const R>>;
+
+// Vector-of-T wire format for ranges without a dedicated serializer (e.g. IDL range_of<T> members).
+// Must follow the serialize() overloads above: scalar elements get no ADL, only ordinary lookup.
+template<typename R>
+requires std::ranges::forward_range<const R> && (!MapLikeRange<R>) && (!OptionLikeRange<R>)
+    && (!std::same_as<R, bytes_ostream>) && ElementIsValueRange<R>
+struct serializer<R> {
+    // lets tests confirm a given type resolved to this generic specialization, not a dedicated one
+    static constexpr bool is_generic_range_serializer = true;
+
+    template<typename Output>
+    static void write(Output& out, const R& v) {
+        // count first, so an oversized range throws before anything is written
+        safe_serialize_as_uint32(out, std::ranges::distance(v));
+        for (const auto& e : v) {
+            serialize(out, e);
+        }
+    }
+};
 
 template<typename T>
 struct serializer<std::optional<T>> {
