@@ -157,6 +157,79 @@ def test_infinite_loop(cql, test_keyspace, table1, scylla_with_wasm_only):
         elapsed_s = time.monotonic() - start
         print(f"Breaking the loop took {elapsed_s*1000:.2f}ms")
 
+# A module whose function takes and returns an int, and sleeps for one
+# millisecond by calling WASI's poll_oneoff - in the function itself, or
+# (with in_start=True) in the module's start function, which runs when the
+# module is instantiated. Sleeping isn't supported in a UDF, and makes the
+# Rust code running the UDF panic.
+def wasi_sleep_module(name, in_start=False):
+    sleep = '''
+    i32.const 0
+    i32.const 64
+    i32.const 1
+    i32.const 128
+    call $poll_oneoff
+    drop'''
+    return f'''
+(module
+  (import "wasi_snapshot_preview1" "poll_oneoff" (func $poll_oneoff (param i32 i32 i32 i32) (result i32)))
+  (func ${name} (param i32) (result i32)
+{'' if in_start else sleep}
+    local.get 0)
+  (func $start
+{sleep if in_start else ''})
+  (start $start)
+  (memory (;0;) 1)
+  (global (;0;) i32 (i32.const 0))
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_abi" (global 0))
+  ;; A poll_oneoff subscription, at offset 0: a relative timeout of
+  ;; 1000000 ns on clock 1 (monotonic)
+  (data (i32.const 16) "\\01\\00\\00\\00\\00\\00\\00\\00\\40\\42\\0f\\00\\00\\00\\00\\00"))
+'''
+
+# Test that a panic in the Rust code while calling a function fails the call
+# with an error, instead of crashing Scylla.
+# Reproduces SCYLLADB-6377.
+def test_panic_in_call(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'sleep_' + unique_name()
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{wasi_sleep_module(name)}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (5000, 1)')
+        # Check that the call fails, also when trying again
+        for _ in range(2):
+            with pytest.raises(InvalidRequest, match='Rust panic'):
+                cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 5000')
+        # Check that Scylla is still alive
+        cql.execute(f'SELECT p FROM {table1} WHERE p = 5000')
+
+# Test that a panic in the Rust code while instantiating a module - when
+# creating the function - fails with an error, instead of crashing Scylla.
+# Reproduces SCYLLADB-6377.
+def test_panic_in_create(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'sleep_' + unique_name()
+    with pytest.raises(InvalidRequest, match='Rust panic'):
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{name} (input int) RETURNS NULL ON NULL INPUT "
+                f"RETURNS int LANGUAGE wasm AS '{wasi_sleep_module(name, in_start=True)}'")
+    # Check that Scylla is still alive
+    cql.execute(f'SELECT p FROM {table1} WHERE p = 5000')
+
+# Test that calling a function whose module doesn't export a memory fails
+# with an error - every time it is called, not just the first time. Creating
+# the function doesn't need the memory, but the instance used for calling it
+# does, so creating that instance fails on every call.
+# Reproduces SCYLLADB-6378.
+def test_call_without_memory(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'no_memory_' + unique_name()
+    source = f'(module (func ${name} (param i32) (result i32) local.get 0) (export "{name}" (func ${name})))'
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (5001, 1)')
+        for _ in range(2):
+            with pytest.raises(InvalidRequest, match='Memory export not found'):
+                cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 5001', timeout=30)
+
 # Test a wasm function which decreases given double by 1
 def test_f64_param(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
