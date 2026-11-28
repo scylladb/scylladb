@@ -175,6 +175,8 @@ public:
 };
 
 frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf);
+// Size of freeze(s, mf), without building it.
+size_t frozen_size(const schema& s, const mutation_fragment& mf);
 
 class frozen_mutation_fragment_v2 {
     bytes_ostream _bytes;

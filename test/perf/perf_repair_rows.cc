@@ -78,7 +78,7 @@ pass_result run_pass(linux_perf_event& instructions, cql_test_env& env, replica:
         if (st == stage::hash) {
             r.sink = std::rotl(r.sink, 1) ^ hasher.do_hash_for_mf(*rd.get_current_dk(), *mfo).hash;
         } else if (st == stage::row) {
-            auto row = make_repair_row_from_disk(rd.get_current_dk(), hasher, *s, *mfo);
+            auto row = make_repair_row_from_disk(rd.get_current_dk(), hasher, *s, std::move(*mfo));
             r.sink = std::rotl(r.sink, 1) ^ row.hash().hash;
             r.bytes += row.size();
         }
