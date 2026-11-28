@@ -199,6 +199,7 @@ class client : public enable_shared_from_this<client> {
     timer<seastar::lowres_clock> _creds_update_timer;
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
+    lowres_clock::duration _creds_retry_period = std::chrono::minutes(1);
     seastar::gate _config_update_gate;
     seastar::gate _requests_gate;
 
@@ -285,6 +286,9 @@ public:
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs,
                                   std::unique_ptr<throttling_controller> tc, global_factory gf = {});
+    // For tests
+    static shared_ptr<client> make(
+            std::string endpoint, endpoint_config_ptr cfg, aws::aws_credentials_provider_chain creds_provider_chain, lowres_clock::duration creds_retry_period);
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf, group_connections connections);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
