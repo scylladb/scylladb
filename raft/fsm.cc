@@ -477,7 +477,7 @@ void fsm::send_ping_messages() {
         for (auto s : cfg.current) {
             if (s.can_vote && s.addr.id != _my_id && _failure_detector.is_alive(s.addr.id)) {
                 logger.trace("[{}]: searching for a leader. Pinging {}", _tag, s.addr.id);
-                send_to(s.addr.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}, _clock_ok});
+                send_to(s.addr.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}, accepts_leadership()});
             }
         }
     }
@@ -828,9 +828,7 @@ size_t fsm::priority_of(server_id id) const {
 
 template <typename Pred>
 const follower_progress* fsm::best_leader(Pred pred) const {
-    // A working clock comes first, since without one a leader holds no lease; then
-    // the priority list. With leases off nobody reports a working clock, so only the
-    // list counts.
+    // A server which accepts the leadership comes first, then the priority list.
     const auto rank = [&] (const follower_progress& p) {
         return std::pair(!p.clock_ok, priority_of(p.id));
     };
@@ -850,7 +848,7 @@ std::optional<fsm::handover> fsm::handover_target() const {
         return std::nullopt;
     }
     const auto can_lead = [&] (const follower_progress& p) {
-        return (!leaseguard_enabled() || p.clock_ok) && _failure_detector.is_alive(p.id);
+        return p.clock_ok && _failure_detector.is_alive(p.id);
     };
     const auto keeps_up = [&] (const follower_progress& p) {
         return p.match_idx >= state.last_idx_at_prev_tick;
@@ -1177,7 +1175,7 @@ void fsm::append_entries(server_id from, append_request&& request) {
         // matters: we report full only while our applier is behind, which is
         // when a divergence is beyond snapshotting too.
         send_to(from, append_reply{_current_term, _commit_idx,
-                append_reply::rejected{request.prev_log_idx, _log.last_idx()}, _clock_ok,
+                append_reply::rejected{request.prev_log_idx, _log.last_idx()}, accepts_leadership(),
                 /* log_full = */ false});
         return;
     }
@@ -1227,7 +1225,7 @@ void fsm::append_entries(server_id from, append_request&& request) {
     // be looking at when it decides whether to keep replicating to us.
     const bool log_full = report_log_full();
     send_to(from, append_reply{_current_term, _commit_idx,
-            append_reply::accepted{last_new_idx}, _clock_ok, log_full});
+            append_reply::accepted{last_new_idx}, accepts_leadership(), log_full});
 }
 
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {
@@ -1711,7 +1709,7 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
         // permitting.
         const bool log_full = report_log_full();
         send_to(current_leader(), append_reply{_current_term, _commit_idx,
-                append_reply::rejected{index_t{0}, index_t{0}}, _clock_ok, log_full});
+                append_reply::rejected{index_t{0}, index_t{0}}, accepts_leadership(), log_full});
     }
     _sm_events.signal();
     return true;

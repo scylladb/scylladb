@@ -271,7 +271,7 @@ public:
     bool is_leader() override;
     raft::server_id current_leader() const override;
     void set_priority_members(std::vector<server_id> members) override;
-    void decline_leadership() override;
+    future<> retire(logical_clock::duration timeout) override;
     void tick() override;
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout, server_id target) override;
@@ -2473,8 +2473,9 @@ void server_impl::set_priority_members(std::vector<server_id> members) {
     _fsm->set_priority_members(std::move(members));
 }
 
-void server_impl::decline_leadership() {
+future<> server_impl::retire(logical_clock::duration timeout) {
     _fsm->decline_leadership();
+    return _fsm->is_leader() ? stepdown(timeout, server_id{}) : make_ready_future<>();
 }
 
 void server_impl::elapse_election() {

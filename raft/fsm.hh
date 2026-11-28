@@ -499,6 +499,10 @@ private:
     bool leaseguard_enabled() const noexcept {
         return _config.leaseguard.has_value();
     }
+    // What we report in append_reply::clock_ok.
+    bool accepts_leadership() const noexcept {
+        return !_declines_leadership && (!leaseguard_enabled() || _clock_ok);
+    }
     // The bounded-uncertainty time interval to stamp on a new log entry, or
     // nullopt when leases are disabled or the clock is unsynchronized.
     std::optional<time_bounds> lease_time_now() const {

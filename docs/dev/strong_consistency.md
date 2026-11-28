@@ -653,7 +653,8 @@ whether to hand over and to whom. A server can take over if it:
 
 - can vote,
 - is alive according to the failure detector,
-- has a working clock (`clock_ok` in its progress), when leases are on.
+- reports `clock_ok` in its `append_reply`: it has not declined the leadership, which
+  a node does when it shuts down, and, when leases are on, its clock works.
 
 With a working clock, the leader considers only the best such server ahead of it on the
 list. If the first preferred server is down, the leadership goes to the next one on the
@@ -683,7 +684,7 @@ keeps up it starts no transfer and asks again on the next tick.
 
 A stepdown without a target, on shutdown or when the leader is no longer a voter, waits
 for nobody: `timeout_now` goes to the first voter that has acked the whole log. Among the
-voters that have acked it when the stepdown starts, one with a working clock comes
+voters that have acked it when the stepdown starts, one which reports `clock_ok` comes
 first, then the one the list ranks best.
 
 If `stepdown()` is called while a handover is in progress, for example on shutdown, the
