@@ -193,7 +193,7 @@ private:
     future<> log_with_sinks(audit_sink_set sinks, const audit_info& audit_info, socket_address node_ip, socket_address client_ip,
             std::optional<db::consistency_level> cl, const sstring& username, bool error);
     future<> log_alternator_batch(const audit_info& audit_info, std::string_view role, socket_address node_ip, socket_address client_ip,
-            std::optional<db::consistency_level> cl, const sstring& username, bool error);
+            std::optional<db::consistency_level> cl, sstring username, bool error);
     future<> rebuild_rules();
 public:
     static seastar::sharded<audit>& audit_instance() {
