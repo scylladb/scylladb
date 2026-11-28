@@ -899,19 +899,6 @@ future<> snapshot_table_helper::update_sstable_download_status(sstring snapshot_
                                   cql3::query_processor::cache_internal::no);
 }
 
-future<> snapshot_table_helper::insert_snapshot_remote_location(sstring snapshot_name, sstring datacenter, sstring endpoint, sstring bucket, sstring prefix, snapshot_state state, db::consistency_level cl) {
-    co_await insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry>({
-        snapshot_remote_location_entry{
-            .snapshot_name = std::move(snapshot_name),
-            .datacenter = std::move(datacenter),
-            .endpoint = std::move(endpoint),
-            .bucket = std::move(bucket),
-            .prefix = std::move(prefix),
-            .state = state,
-        }
-    }), cl);
-}
-
 future<snapshot_remote_location_entry> snapshot_table_helper::get_snapshot_remote_location(sstring snapshot_name, sstring datacenter, db::consistency_level cl) const {
     static const sstring query = format("SELECT endpoint, bucket, prefix, state FROM {}.{} WHERE snapshot_name = ? AND datacenter = ?", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS);
     auto rs = co_await _qp.execute_internal(query, cl, internal_distributed_query_state(), {snapshot_name, datacenter}, cql3::query_processor::cache_internal::yes);
@@ -920,9 +907,11 @@ future<snapshot_remote_location_entry> snapshot_table_helper::get_snapshot_remot
     }
     auto& row = rs->one();
     co_return snapshot_remote_location_entry{snapshot_name, datacenter
-        , row.get_as<sstring>("endpoint")
-        , row.get_as<sstring>("bucket")
-        , row.get_as<sstring>("prefix")
+        , snapshot_dc_location{
+            row.get_as<sstring>("endpoint")
+            , row.get_as<sstring>("bucket")
+            , row.get_as<sstring>("prefix")
+        }
         , snapshot_state(row.get_as<int32_t>("state"))
     };
 }
@@ -1032,7 +1021,7 @@ future<> snapshot_table_helper::insert_snapshot_remote_locations(std::span<const
             return _qp.execute_internal(
                         query, cl,
                         internal_distributed_query_state(),
-                        { e.snapshot_name, e.datacenter, e.endpoint, e.bucket, e.prefix, int32_t(e.state), ttl },
+                        { e.snapshot_name, e.datacenter, e.location.endpoint, e.location.bucket, e.location.prefix, int32_t(e.state), ttl },
                         cql3::query_processor::cache_internal::yes).discard_result();
         });
     }
@@ -1055,9 +1044,11 @@ snapshot_table_helper::get_snapshot_remote_locations(std::string_view snapshot_n
         1000, [&] (const cql3::untyped_result_set_row& row) {
             entries.emplace_back(row.get_as<sstring>("snapshot_name")
                 , row.get_as<sstring>("datacenter")
-                , row.get_as<sstring>("endpoint")
-                , row.get_as<sstring>("bucket")
-                , row.get_as<sstring>("prefix")
+                , snapshot_dc_location{
+                    row.get_as<sstring>("endpoint")
+                    , row.get_as<sstring>("bucket")
+                    , row.get_as<sstring>("prefix")
+                }
                 , snapshot_state(row.get_as<int32_t>("state")) 
             );
             return make_ready_future<stop_iteration>(stop_iteration::no);

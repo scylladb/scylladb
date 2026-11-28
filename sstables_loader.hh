@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <vector>
+#include <unordered_map>
 #include <seastar/core/sharded.hh>
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token.hh"
@@ -17,6 +18,7 @@
 #include "sstables/shared_sstable.hh"
 #include "tasks/task_manager.hh"
 #include "db/consistency_level_type.hh"
+#include "db/snapshot_types.hh"
 #include "locator/tablets.hh"
 #include "service/topology_guard.hh"
 #include "utils/assert.hh"
@@ -52,13 +54,11 @@ class tablet_metadata_guard;
 }
 
 // A single backup location for tablet-aware restore: where in the object
-// storage the sstables of one datacenter's backup live, and the datacenter
-// of the restored cluster they are to be loaded into.
+// storage the sstables of one datacenter's backup live. The datacenter
+// of the restored cluster they are to be loaded into is the key in the
+// map of locations.
 struct tablet_restore_location {
-    sstring datacenter;
-    sstring endpoint;
-    sstring bucket;
-    sstring prefix;
+    db::snapshot_dc_location location;
     utils::chunked_vector<sstring> manifests;
 };
 
@@ -125,8 +125,8 @@ private:
 
     // Downloads the sstables from the object store and streams them with load_and_stream()
     // on every shard, reporting through the progress. Called on the shard that owns the task.
-    future<> download_and_stream(download_progress& progress, const sstring& endpoint, const sstring& bucket, const sstring& ks, const sstring& cf,
-            const sstring& prefix, const std::vector<sstring>& sstable_names, stream_scope scope, bool_class<struct primary_replica_only_tag> primary_replica, abort_source& as);
+    future<> download_and_stream(download_progress& progress, const db::snapshot_dc_location& location, const sstring& ks, const sstring& cf,
+            const std::vector<sstring>& sstable_names, stream_scope scope, bool_class<struct primary_replica_only_tag> primary_replica, abort_source& as);
 
     // Pins the table at tablet_count tablets, restores them from the snapshot and alters the table back
     // to its original hints. Called on the shard that owns the task.
@@ -172,11 +172,11 @@ public:
      * Download new SSTables not currently tracked by the system from object store
      */
     future<tasks::task_id> download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring prefix, std::vector<sstring> sstables,
-            sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
+            db::snapshot_dc_location location, std::vector<sstring> sstables,
+            stream_scope scope, bool primary_replica);
 
     // Takes one backup location per datacenter the keyspace replicates to.
-    future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations);
+    future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, std::unordered_map<sstring, tablet_restore_location> locations);
 
     replica::database& local_db() {
         return _db.local();
@@ -222,4 +222,4 @@ struct manifest_summary {
 };
 
 // Manifests coming from a datacenter other than the expected one are rejected.
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::QUORUM);
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, db::snapshot_dc_location location, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::QUORUM);

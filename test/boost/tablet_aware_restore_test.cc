@@ -92,7 +92,7 @@ struct fmt::formatter<db::snapshot_remote_location_entry> : fmt::formatter<strin
     auto format(const db::snapshot_remote_location_entry& e, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), 
             "{{ {}, {}, {}, {}, {}, {} }}",
-            e.snapshot_name, e.datacenter, e.endpoint, e.bucket, e.prefix, e.state
+            e.snapshot_name, e.datacenter, e.location.endpoint, e.location.bucket, e.location.prefix, e.state
         );
     }
 };
@@ -201,9 +201,11 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works) {
         db::snapshot_remote_location_entry rle {
             .snapshot_name = snapshot_name,
             .datacenter = dc,
-            .endpoint = "The end of all things",
-            .bucket = "A_bucket_for_fun",
-            .prefix = prefix,
+            .location = {
+                .endpoint = "The end of all things",
+                .bucket = "A_bucket_for_fun",
+                .prefix = prefix,
+            },
             .state = db::snapshot_state::local,
         };
 
@@ -317,7 +319,7 @@ future<sstring> backup(cql_test_env& env, sstring endpoint, sstring bucket) {
     );
     auto prefix = fmt::format("/backup-{}", utils::UUID_gen::get_time_UUID());
 
-    auto task_id = co_await ctl.local().start_backup(endpoint, bucket, prefix, "ks", "cf", "snapshot", false);
+    auto task_id = co_await ctl.local().start_backup(db::snapshot_dc_location{.endpoint = endpoint, .bucket = bucket, .prefix = prefix}, "ks", "cf", "snapshot", false);
     auto task = tasks::task_handler{env.get_task_manager().local(), task_id};
     auto status = co_await task.wait_for_task(30s);
     BOOST_REQUIRE(status.state == tasks::task_manager::task_state::done);
@@ -376,11 +378,11 @@ SEASTAR_TEST_CASE(test_populate_snapshot_sstables_from_manifests, *boost::unit_t
 
             auto dc = env.get_storage_proxy().local().get_token_metadata_ptr()->get_topology().get_datacenter();
 
-            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "unexpected_snapshot", dc, {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
-            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", "unexpected_dc", {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
+            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", db::snapshot_dc_location{.endpoint = ep, .bucket = bucket}, "unexpected_snapshot", dc, {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
+            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", db::snapshot_dc_location{.endpoint = ep, .bucket = bucket}, "snapshot", "unexpected_dc", {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
 
             // populate system_distributed.snapshot_sstables with the content of the snapshot manifest
-            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", dc, {manifest_path}, db::consistency_level::ONE).get();
+            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", db::snapshot_dc_location{.endpoint = ep, .bucket = bucket}, "snapshot", dc, {manifest_path}, db::consistency_level::ONE).get();
 
             check_snapshot_sstables(env).get();
     }, false, db_cfg_ptr, 10);
@@ -434,7 +436,7 @@ SEASTAR_TEST_CASE(test_restore_should_handle_missing_optional_fields, *boost::un
             auto manifest_path = prefix + "/manifest-without-optional-fields.json";
             upload_object(env, ep, bucket, manifest_path, rjson::print(manifest)).get();
 
-            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", dc, {manifest_path}, db::consistency_level::ONE).get();
+            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", db::snapshot_dc_location{.endpoint = ep, .bucket = bucket}, "snapshot", dc, {manifest_path}, db::consistency_level::ONE).get();
 
             check_snapshot_sstables(env, [] (const db::snapshot_sstable_entry& e) {
                 // the fields dropped above default to 0

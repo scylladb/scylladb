@@ -29,17 +29,13 @@ namespace db::snapshot {
 
 backup_state::backup_state(snapshot_ctl& ctl,
                            sharded<sstables::storage_manager>& sstm,
-                           sstring endpoint,
-                           sstring bucket,
-                           sstring prefix,
+                           snapshot_dc_location location,
                            sstring ks,
                            std::filesystem::path snapshot_dir,
                            bool move_files)
     : _snap_ctl(ctl)
     , _sstm(sstm)
-    , _endpoint(std::move(endpoint))
-    , _bucket(std::move(bucket))
-    , _prefix(std::move(prefix))
+    , _location(std::move(location))
     , _keyspace(std::move(ks))
     , _snapshot_dir(std::move(snapshot_dir))
     , _remove_on_uploaded(move_files)
@@ -58,7 +54,7 @@ future<tasks::task_manager::task::progress> backup_state::get_progress() const {
 
 future<> backup_state::worker::upload_component(sstring name) {
     auto component_name = _state._snapshot_dir / name;
-    auto destination = sstables::object_name(_state._bucket, _state._prefix, name);
+    auto destination = sstables::object_name(_state._location.bucket, _state._location.prefix, name);
     snap_log.trace("Upload {} to {}", component_name.native(), destination);
 
     // Start uploading in the background. The caller waits for these fibers
@@ -285,7 +281,7 @@ backup_state::worker::worker(const replica::database& db, backup_state& state)
     // system and the user manager depends only on the keyspace name.
     : _manager(db.get_sstables_manager(state._keyspace))
     , _state(state)
-    , _client(state._sstm.local().get_endpoint_client(state._endpoint))
+    , _client(state._sstm.local().get_endpoint_client(state._location.endpoint))
 {
     _manager.subscribe(*this);
 }

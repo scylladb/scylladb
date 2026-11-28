@@ -114,17 +114,23 @@ inline sstring make_snapshot_attempt_name(std::string_view tag, utils::UUID atte
     return sstring(fmt::format("{}{}{}", tag, snapshot_attempt_separator, attempt));
 }
 
+struct snapshot_dc_location {
+    std::string endpoint;
+    std::string bucket;
+    std::string prefix;
+
+    constexpr bool operator==(const snapshot_dc_location& o) const noexcept = default;
+};
+
 // Backup location for a snapshot for a given dc
 struct snapshot_remote_location_entry {
     std::string snapshot_name;
     std::string datacenter;
 
-    // reference to named endpoint in scylla conf.
+    // location.endpoint is a reference to named endpoint in scylla conf.
     // note: need to be consistent across creation
-    // and usage of this info. 
-    std::string endpoint;
-    std::string bucket;
-    std::string prefix;
+    // and usage of this info.
+    snapshot_dc_location location;
 
     snapshot_state state;
 
@@ -191,12 +197,12 @@ struct snapshot_entries {
     std::vector<snapshot_tablet_entry> tablets;
 };
 
-struct snapshot_dc_location {
-    std::string endpoint;
-    std::string bucket;
-    std::string prefix;
-
-    constexpr bool operator==(const snapshot_dc_location& o) const noexcept = default;
-};
-
 } // namespace db
+
+template <>
+struct fmt::formatter<db::snapshot_dc_location> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_dc_location& l, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}:{}/{}", l.endpoint, l.bucket, l.prefix);
+    }
+};

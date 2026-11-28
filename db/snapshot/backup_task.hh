@@ -26,6 +26,7 @@
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/sstables_manager_subscription.hh"
+#include "db/snapshot_types.hh"
 
 namespace replica {
     class database;
@@ -47,9 +48,7 @@ inline constexpr auto backup_task_type = "backup";
 class backup_state {
     snapshot_ctl& _snap_ctl;
     sharded<sstables::storage_manager>& _sstm;
-    sstring _endpoint;
-    sstring _bucket;
-    sstring _prefix;
+    snapshot_dc_location _location;
     sstring _keyspace;
     std::filesystem::path _snapshot_dir;
     bool _remove_on_uploaded;
@@ -113,9 +112,7 @@ class backup_state {
 public:
     backup_state(snapshot_ctl& ctl,
                  sharded<sstables::storage_manager>& sstm,
-                 sstring endpoint,
-                 sstring bucket,
-                 sstring prefix,
+                 snapshot_dc_location location,
                  sstring ks,
                  std::filesystem::path snapshot_dir,
                  bool move_files);

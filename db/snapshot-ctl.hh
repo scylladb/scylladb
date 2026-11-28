@@ -141,7 +141,7 @@ public:
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
 
-    future<tasks::task_id> start_backup(sstring endpoint, sstring bucket, sstring prefix, sstring keyspace, sstring table, sstring snapshot_name, bool move_files);
+    future<tasks::task_id> start_backup(snapshot_dc_location location, sstring keyspace, sstring table, sstring snapshot_name, bool move_files);
 
     future<std::unordered_map<sstring, db_snapshot_details>> get_snapshot_details();
 
@@ -216,7 +216,7 @@ private:
             const snapshot_options& opts, reject_committed_snapshot reject_committed);
 
     future<> delete_expired_snapshots();
-    future<> backup_sstables(table_id, std::string, std::string, std::string, std::string, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
+    future<> backup_sstables(table_id, std::string, snapshot_dc_location, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
 };
 
 }
