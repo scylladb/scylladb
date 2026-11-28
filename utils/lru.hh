@@ -125,6 +125,15 @@ public:
         add(e);
     }
 
+    // The next entry to be evicted in LRU order, or nullptr.
+    const evictable* front() const noexcept {
+        return _list.empty() ? nullptr : &_list.front();
+    }
+
+    bool has_index_entries() const noexcept {
+        return !_index_list.empty();
+    }
+
     // Evicts a single element from the LRU
     template <bool Shallow = false>
     reclaiming_result do_evict(bool should_evict_index) noexcept {

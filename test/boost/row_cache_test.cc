@@ -944,6 +944,196 @@ SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
     });
 }
 
+static uint64_t eviction_age_samples(const cache_tracker& tracker, uint64_t age_seconds) {
+    auto& h = tracker.eviction_age();
+    return h.get(h.find_bucket_index(age_seconds));
+}
+
+static uint64_t eviction_age_total(const cache_tracker& tracker) {
+    auto& h = tracker.eviction_age();
+    uint64_t total = 0;
+    for (size_t i = 0; i < h.size(); ++i) {
+        total += h.get(i);
+    }
+    return total;
+}
+
+// Ages sit at the low edge of wide buckets, so a long stall can't move them across a boundary.
+SEASTAR_THREAD_TEST_CASE(test_eviction_age_recorded_under_pressure) {
+    auto s = make_schema();
+    auto mt = make_lw_shared<replica::memtable>(s);
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+    auto now = lowres_clock::now();
+    tracker.insert_age_marker(now - 900s);
+    for (int i = 0; i < 10; ++i) {
+        cache.populate(make_new_mutation(s));
+    }
+    tracker.insert_age_marker(now - 130s);
+    for (int i = 0; i < 10; ++i) {
+        cache.populate(make_new_mutation(s));
+    }
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 2);
+
+    while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
+
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 0);
+    // An empty LRU has no old entry, so the front timestamp is reset.
+    BOOST_REQUIRE(tracker.lru_front_timestamp() >= now);
+    auto old_samples = eviction_age_samples(tracker, 900);
+    auto young_samples = eviction_age_samples(tracker, 130);
+    BOOST_REQUIRE_GE(old_samples, 10);
+    BOOST_REQUIRE_GE(young_samples, 10);
+    BOOST_REQUIRE_EQUAL(old_samples + young_samples, eviction_age_total(tracker));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_eviction_age_not_recorded_for_invalidation) {
+    auto s = make_schema();
+    auto mt = make_lw_shared<replica::memtable>(s);
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+    auto populate = [&] {
+        tracker.insert_age_marker(lowres_clock::now() - 900s);
+        for (int i = 0; i < 10; ++i) {
+            cache.populate(make_new_mutation(s));
+        }
+    };
+
+    populate();
+    auto before_invalidate = lowres_clock::now();
+    cache.invalidate(row_cache::external_updater([] {})).get();
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    // The cache is empty, so the old marker must not date what is cached next.
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 0);
+    BOOST_REQUIRE(tracker.lru_front_timestamp() >= before_invalidate);
+
+    populate();
+    tracker.clear();
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 0);
+
+    BOOST_REQUIRE_EQUAL(eviction_age_total(tracker), 0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_eviction_age_markers_bounded) {
+    auto s = make_schema();
+    auto mt = make_lw_shared<replica::memtable>(s);
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+    auto now = lowres_clock::now();
+    tracker.insert_age_marker(now - 900s);
+    cache.populate(make_new_mutation(s));
+    for (int i = 0; i < 1000; ++i) {
+        tracker.insert_age_marker(now - 130s);
+        BOOST_REQUIRE_LE(tracker.linked_age_markers(), 256);
+    }
+    BOOST_REQUIRE_GE(tracker.linked_age_markers(), 128);
+
+    // Coarsening keeps the oldest marker, so the entry behind it still reports its age.
+    while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
+    BOOST_REQUIRE_EQUAL(tracker.linked_age_markers(), 0);
+    BOOST_REQUIRE_GE(eviction_age_samples(tracker, 900), 1);
+    BOOST_REQUIRE_EQUAL(eviction_age_samples(tracker, 900), eviction_age_total(tracker));
+}
+
+template <typename Histogram>
+static uint64_t histogram_samples(const Histogram& h) {
+    uint64_t total = 0;
+    for (size_t i = 0; i < h.size(); ++i) {
+        total += h.get(i);
+    }
+    return total;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_ghost_hits_only_after_pressure_eviction) {
+    auto s = make_schema();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto mt = make_lw_shared<replica::memtable>(s);
+    cache_tracker tracker;
+    tracker.set_ghost_list_size(1 << 20);
+    row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+    std::vector<mutation> muts;
+    for (int i = 0; i < 10; ++i) {
+        muts.push_back(make_new_mutation(s));
+        mt->apply(muts.back());
+        cache.populate(muts.back());
+    }
+    auto read_all = [&] {
+        for (auto& m : muts) {
+            auto pr = dht::partition_range::make_singular(m.decorated_key());
+            auto rd = cache.make_reader(s, semaphore.make_permit(), pr);
+            auto close_rd = deferred_close(rd);
+            rd.fill_buffer().get();
+        }
+    };
+
+    auto evict_all = [&] {
+        while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    };
+
+    evict_all();
+    read_all();
+    auto hits = histogram_samples(tracker.ghost_hit_age());
+    // Ghost slots are direct-mapped; a rare collision drops one.
+    BOOST_REQUIRE_GE(hits, 9);
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.ghost_hit_evicted_bytes()), hits);
+    // Single-row partitions are covered by the partition ghost alone.
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.row_ghost_hit_age()), 0);
+
+    // Re-populated without a miss, then forcibly cleared: those misses are not capacity misses.
+    evict_all();
+    for (auto& m : muts) {
+        cache.populate(m);
+    }
+    tracker.clear();
+    read_all();
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.ghost_hit_age()), hits);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_ghost_hits_in_wide_partition) {
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    cache_tracker tracker;
+    tracker.set_ghost_list_size(1 << 20);
+    memtable_snapshot_source underlying(s.schema());
+    auto pk = s.make_pkey(0);
+    mutation m(s.schema(), pk);
+    for (int i = 0; i < 20; ++i) {
+        s.add_row(m, s.make_ckey(i), "v");
+    }
+    underlying.apply(m);
+    row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+    auto pr = dht::partition_range::make_singular(pk);
+    auto read = [&] {
+        auto rd = cache.make_reader(s.schema(), semaphore.make_permit(), pr);
+        auto close_rd = deferred_close(rd);
+        while (rd().get()) {}
+    };
+    read();
+    auto evictions_before = tracker.get_stats().row_evictions;
+    for (int i = 0; i < 10; ++i) {
+        tracker.region().evict_some();
+    }
+    // The partition stays cached, so only row-level ghosts can see the re-reads.
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 1);
+    auto evicted = tracker.get_stats().row_evictions - evictions_before;
+    BOOST_REQUIRE_GT(evicted, 0);
+
+    read();
+    auto hits = histogram_samples(tracker.row_ghost_hit_age());
+    BOOST_REQUIRE_GT(hits, 0);
+    BOOST_REQUIRE_LE(hits, evicted);
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.row_ghost_hit_evicted_bytes()), hits);
+    BOOST_REQUIRE_EQUAL(histogram_samples(tracker.ghost_hit_age()), 0);
+}
+
 void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::deque<int> expected)
 {
     auto close_reader = deferred_close(reader);

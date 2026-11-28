@@ -568,6 +568,7 @@ public:
 
     named_value<bool> cache_index_pages;
     named_value<double> index_cache_fraction;
+    named_value<uint32_t> cache_ghost_list_size_mb;
 
     named_value<bool> consistent_cluster_management;
     named_value<bool> force_gossip_topology_changes;

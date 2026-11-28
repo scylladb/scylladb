@@ -636,6 +636,8 @@ void cache_mutation_reader::maybe_update_continuity() {
 inline
 void cache_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
     if (!can_populate()) {
+        // Still a re-read even if not populated; leaving the ghost would date a later hit wrongly.
+        _snp->tracker()->check_row_ghost(table_schema().id(), _dk.token(), cr.key());
         _last_row = nullptr;
         _population_range_starts_before_all_rows = false;
         _read_context.cache().on_mispopulate();
@@ -659,6 +661,7 @@ void cache_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         it = insert_result.first;
         if (insert_result.second) {
             _snp->tracker()->insert(*it);
+            _snp->tracker()->check_row_ghost(table_schema().id(), _dk.token(), cr.key());
             restore_continuity_after_insertion(it);
         }
 
