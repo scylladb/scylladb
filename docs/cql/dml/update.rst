@@ -18,6 +18,7 @@ Updating a row is done using an ``UPDATE`` statement:
    int_value: ( `integer` | `bind_marker` )
    assignment: `simple_selection` '=' `term`
              : | `column_name` '=' `column_name` ( '+' | '-' ) `term`
+             : | `column_name` ( '+=' | '-=' ) `term`
              : | `column_name` '=' `list_literal` '+' `column_name`
    simple_selection: `column_name`
                    : | `column_name` '[' `term` ']'
@@ -67,6 +68,8 @@ Regarding the :token:`assignment`:
   operations allowed on counters. See the section on :ref:`counters <counters>` for details.
 - ``id = id + <some-collection>`` and ``id[value1] = value2`` are for collections, see the :ref:`relevant section
   <collections>` for details.
+- ``c += 3`` and ``c -= 3`` are shorthands for ``c = c + 3`` and ``c = c - 3``. They can be used wherever the
+  longer forms can, for both counters and collections.
 - ``id.field = 3`` is for setting the value of a field on non-frozen user-defined types. 
 
 Please refer to the :ref:`update parameters <update-parameters>` section for more information on the :token:`update_parameter`.
