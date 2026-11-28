@@ -158,6 +158,9 @@ public:
     // Several overwrites of one set at the same write timestamp merge into their union,
     // so callers finishing more than one request in a pass must use this.
     topology_mutation_builder& finish_restore_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& req_ids);
+    topology_mutation_builder& start_cluster_compaction_request(const utils::UUID& req_id);
+    // Removes req_ids from ongoing_cluster_compaction_requests, which is `current`.
+    topology_mutation_builder& finish_cluster_compaction_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& req_ids);
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -199,6 +202,11 @@ public:
     topology_request_tracking_mutation_builder& set_prepare_migration_data(const sstring& ks_name,
             const std::unordered_map<table_id, size_t>& tables);
     topology_request_tracking_mutation_builder& set_restore_tablets_data(const table_id& tid, const sstring& snapshot_name);
+    // The tables a compact_tablets request compacts, and its scope: the table it was made for,
+    // if a single one was named, or the keyspace, if it was made for a whole keyspace.
+    topology_request_tracking_mutation_builder& set_cluster_compaction_tables(const std::unordered_set<table_id>& table_ids,
+            const std::optional<table_id>& for_table, const std::optional<sstring>& for_keyspace);
+    topology_request_tracking_mutation_builder& set_cluster_compaction_params(const sstring& compaction_type, const std::unordered_map<sstring, sstring>& options);
 
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

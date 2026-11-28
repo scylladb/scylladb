@@ -454,8 +454,11 @@ public:
     // holds a snapshot of the gc state taken before that flush. It is a precondition for narrowing
     // tombstone GC to skip the memtable check, so a major that did not flush keeps consulting the
     // memtables. See tombstone_gc_scope.
+    // With throw_if_stopping::yes, a major compaction which doesn't run to completion, because
+    // it is stopped or compaction is disabled, fails with compaction_stopped_exception, rather
+    // than completing as if it succeeded.
     future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false,
-            std::optional<tombstone_gc_state> pre_flush_gc_state = {});
+            std::optional<tombstone_gc_state> pre_flush_gc_state = {}, throw_if_stopping do_throw_if_stopping = throw_if_stopping::no);
 
     // Splits a compaction group by segregating all its sstable according to the classifier[1].
     // [1]: See compaction_type_options::splitting::classifier.

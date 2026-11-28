@@ -202,6 +202,13 @@ struct tablet_info {
     // coordinator moves it to repair_task_info when it starts the repair
     // transition of the tablet.
     std::unique_ptr<tablet_task_info> pending_repair_request;
+    // The id of the last cluster-wide compaction request (a topology request) which
+    // processed this tablet, or null. A tablet is pending compaction by a request as long
+    // as this differs from the request's id.
+    cluster_compaction_id cluster_compaction_request_id;
+    // Set when the request of cluster_compaction_request_id failed to compact this tablet.
+    // The request doesn't retry it.
+    bool cluster_compaction_failed = false;
 
     tablet_info() = default;
     tablet_info(tablet_replica_set, db_clock::time_point, std::unique_ptr<tablet_task_info> repair_task_info, std::unique_ptr<tablet_task_info> migration_task_info, int64_t sstables_repaired_at);
@@ -271,6 +278,7 @@ enum class tablet_transition_stage {
     repair,
     end_repair,
     restore,
+    tablet_compaction,
 
     start_migration = allow_write_both_read_old,
     sc_add_nonvoter = write_both_read_old,
@@ -301,6 +309,9 @@ enum class tablet_transition_kind {
 
     // Download sstables for tablet
     restore,
+
+    // Major compaction of the tablet replicas, on behalf of a cluster-wide major compaction
+    tablet_compaction,
 };
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features);
@@ -383,6 +394,7 @@ tablet_transition_info migration_to_transition_info(const tablet_info&, const ta
 constexpr int tablet_migration_stream_weight_default = 1;
 constexpr int tablet_migration_stream_weight_repair = 2;
 constexpr int tablet_migration_stream_weight_restore = 2;
+constexpr int tablet_migration_stream_weight_tablet_compaction = 2;
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;
     std::unordered_set<tablet_replica> written_to;

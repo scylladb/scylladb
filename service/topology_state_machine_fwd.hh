@@ -51,6 +51,7 @@ enum class global_topology_request: uint16_t {
     // vnodes-to-tablets migration. Gated by the
     // PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION cluster feature.
     prepare_migration,
+    compact_tablets,
 };
 
 // The storage mode of a node during vnodes-to-tablets migration.

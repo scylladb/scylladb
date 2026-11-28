@@ -31,6 +31,9 @@ namespace locator {
 
 using tablet_task_id = utils::tagged_uuid<struct tablet_task_id_tag>;
 
+// The id of a cluster-wide compaction of tablets, which is the id of its topology request.
+using cluster_compaction_id = utils::tagged_uuid<struct cluster_compaction_id_tag>;
+
 // Identifies tablet within the scope of a single tablet_map,
 // which has a scope of (table_id, token metadata version).
 // Different tablets of different tables can have the same tablet_id.

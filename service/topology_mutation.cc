@@ -331,6 +331,18 @@ topology_mutation_builder& topology_mutation_builder::resume_rf_change_requests(
     return apply_set("paused_rf_change_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
 }
 
+topology_mutation_builder& topology_mutation_builder::start_cluster_compaction_request(const utils::UUID& req_id) {
+    return apply_set("ongoing_cluster_compaction_requests", collection_apply_mode::update, std::vector<data_value>{req_id});
+}
+
+topology_mutation_builder& topology_mutation_builder::finish_cluster_compaction_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& req_ids) {
+    auto new_values = current;
+    for (auto& req_id : req_ids) {
+        new_values.erase(req_id);
+    }
+    return apply_set("ongoing_cluster_compaction_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
+}
+
 topology_mutation_builder& topology_mutation_builder::set_upgrade_state_done() {
     return apply_atomic("upgrade_state", "done");
 }
@@ -469,6 +481,31 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     }
     apply_atomic("prepare_migration_tables",
                  make_map_value(schema().get_column_definition("prepare_migration_tables")->type, std::move(values)));
+    return *this;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_cluster_compaction_params(const sstring& compaction_type, const std::unordered_map<sstring, sstring>& options) {
+    apply_atomic("cluster_compaction_type", compaction_type);
+    // Sorted, so that equal options are serialized the same way.
+    auto sorted_options = options | std::ranges::to<std::map<sstring, sstring>>();
+    apply_atomic("cluster_compaction_options",
+                 make_map_value(schema().get_column_definition("cluster_compaction_options")->type,
+                                map_type_impl::native_type(sorted_options.begin(), sorted_options.end())));
+    return *this;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_cluster_compaction_tables(const std::unordered_set<table_id>& table_ids,
+        const std::optional<table_id>& for_table, const std::optional<sstring>& for_keyspace) {
+    if (for_table) {
+        apply_atomic("cluster_compaction_table_id", for_table->uuid());
+    }
+    if (for_keyspace) {
+        apply_atomic("cluster_compaction_ks_name", *for_keyspace);
+    }
+    auto uuids = table_ids | std::views::transform(std::mem_fn(&table_id::uuid));
+    apply_atomic("cluster_compaction_table_ids",
+                 make_set_value(schema().get_column_definition("cluster_compaction_table_ids")->type,
+                                set_type_impl::native_type(uuids.begin(), uuids.end())));
     return *this;
 }
 
