@@ -1002,7 +1002,7 @@ SEASTAR_TEST_CASE(test_db_config_backed_option_applies_to_db_config_and_restores
         const auto node_uuid = topo.my_host_id().uuid();
 
         auto value_on_every_shard = [&] (unsigned expected) {
-            for (unsigned shard = 0; shard < smp::count; ++shard) {
+            for (unsigned shard = 0; shard < this_smp_shard_count(); ++shard) {
                 BOOST_REQUIRE_EQUAL(smp::submit_to(shard, [&] { return entry(); }).get(), expected);
             }
         };
