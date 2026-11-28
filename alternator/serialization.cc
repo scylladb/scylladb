@@ -447,10 +447,20 @@ clustering_key_prefix ck_prefix_from_json(const rjson::value& item, schema_ptr s
         return clustering_key_prefix::make_empty();
     }
     std::vector<bytes> raw_ck;
+    // A prefix may omit trailing clustering columns, but not a column
+    // followed by one which is present: such a key is not a prefix.
+    const column_definition* missing_column = nullptr;
     for (const column_definition& cdef : schema->clustering_key_columns()) {
         auto raw_value = try_get_key_column_value(item,  cdef);
         if (!raw_value) {
-            break;
+            if (!missing_column) {
+                missing_column = &cdef;
+            }
+            continue;
+        }
+        if (missing_column) {
+            throw api_error::validation(fmt::format("Key column {} found, but preceding key column {} is missing",
+                    cdef.name_as_text(), missing_column->name_as_text()));
         }
         raw_ck.push_back(std::move(*raw_value));
     }
