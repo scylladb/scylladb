@@ -1015,6 +1015,90 @@ SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_region_empty) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_uri) {
+    // With `uri` the name is the lookup key and the uri is the address.
+    auto s3 = object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\nuri: https://s3.us-east-1.amazonaws.com\naws_region: us-east-1\n"));
+    BOOST_REQUIRE(s3.is_s3_storage());
+    BOOST_CHECK_EQUAL(s3.key(), "primary");
+    BOOST_CHECK_EQUAL(s3.get_s3_storage().endpoint, "https://s3.us-east-1.amazonaws.com");
+    BOOST_CHECK_MESSAGE(s3.to_json_string().contains("\"uri\": \"https://s3.us-east-1.amazonaws.com\""), s3.to_json_string());
+
+    auto gs = object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\ntype: gs\nuri: https://storage.googleapis.com\n"));
+    BOOST_REQUIRE(gs.is_gs_storage());
+    BOOST_CHECK_EQUAL(gs.key(), "primary");
+    BOOST_CHECK_EQUAL(gs.get_gs_storage().endpoint, "https://storage.googleapis.com");
+    BOOST_CHECK_MESSAGE(gs.to_json_string().contains("\"uri\": \"https://storage.googleapis.com\""), gs.to_json_string());
+
+    // Without `uri` the name stays the address, in both the URL and the host form.
+    auto url = object_storage_endpoint_param::decode(
+            YAML::Load("name: https://s3.us-east-1.amazonaws.com\naws_region: us-east-1\n"));
+    BOOST_CHECK_EQUAL(url.key(), "https://s3.us-east-1.amazonaws.com");
+    BOOST_CHECK_EQUAL(url.get_s3_storage().endpoint, "https://s3.us-east-1.amazonaws.com");
+    auto host = object_storage_endpoint_param::decode(
+            YAML::Load("name: s3.us-east-1.amazonaws.com\nport: 443\nhttps: true\naws_region: us-east-1\n"));
+    BOOST_CHECK_EQUAL(host.key(), "s3.us-east-1.amazonaws.com");
+    BOOST_CHECK_EQUAL(host.get_s3_storage().endpoint, "https://s3.us-east-1.amazonaws.com:443");
+
+    // An S3 uri is a URL; the host form belongs to an entry with no uri.
+    BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\nuri: s3.us-east-1.amazonaws.com\naws_region: us-east-1\n")),
+        std::invalid_argument);
+
+    // The scheme alone is not a URL the client can connect to.
+    BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\nuri: \"https://\"\naws_region: us-east-1\n")),
+        std::invalid_argument);
+
+    // A GCS uri is a URL or `default`.
+    auto gs_default = object_storage_endpoint_param::decode(YAML::Load("name: primary\ntype: gs\nuri: default\n"));
+    BOOST_CHECK_EQUAL(gs_default.key(), "primary");
+    BOOST_CHECK_EQUAL(gs_default.get_gs_storage().endpoint, "default");
+    BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\ntype: gs\nuri: storage.googleapis.com\n")),
+        std::invalid_argument);
+
+    // An empty uri is not "no uri", for either type.
+    BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\nuri: \"\"\naws_region: us-east-1\n")),
+        std::invalid_argument);
+    BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\ntype: gs\nuri: \"\"\n")),
+        std::invalid_argument);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoints_conflicting_settings_on_one_address) {
+    // Entries with one address share a client. An entry that would build it differently is
+    // skipped, as an entry that does not decode is, so its name does not exist.
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
+    cfg.read_from_yaml(R"yaml(
+object_storage_endpoints:
+  - name: first
+    uri: https://s3.us-east-1.amazonaws.com
+    aws_region: us-east-1
+  - name: same
+    uri: https://s3.us-east-1.amazonaws.com
+    aws_region: us-east-1
+  - name: other_region
+    uri: https://s3.us-east-1.amazonaws.com
+    aws_region: eu-west-1
+  - name: https://s3.eu-west-1.amazonaws.com
+    aws_region: eu-west-1
+  - name: alias
+    uri: https://s3.eu-west-1.amazonaws.com
+    aws_region: eu-west-1
+  - name: alias_other_region
+    uri: https://s3.eu-west-1.amazonaws.com
+    aws_region: us-east-1
+)yaml", throw_on_error);
+    auto names = cfg.object_storage_endpoints() | std::views::transform(&object_storage_endpoint_param::key) | std::ranges::to<std::vector>();
+    // The address of an entry with no uri is its name, so it shares a client with its alias.
+    const std::vector<std::string> expected{"first", "same", "https://s3.eu-west-1.amazonaws.com", "alias"};
+    BOOST_CHECK_EQUAL_COLLECTIONS(names.begin(), names.end(), expected.begin(), expected.end());
+}
+
 SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
     tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
     auto cfg_ptr = std::make_unique<config>();

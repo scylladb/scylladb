@@ -110,7 +110,7 @@ public:
     virtual future<> close() = 0;
 };
 
-using shard_client_factory = std::function<shared_ptr<object_storage_client>(std::string)>;
+using shard_client_factory = std::function<shared_ptr<object_storage_client>()>;
 
 shared_ptr<object_storage_client> make_object_storage_client(const db::object_storage_endpoint_param&, semaphore&, shard_client_factory, s3::group_connections connections = {});
 

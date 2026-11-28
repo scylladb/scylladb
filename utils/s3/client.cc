@@ -203,6 +203,15 @@ void client::report_object_storage_metrics(utils::object_storage_metrics_labels 
     }
 }
 
+void client::unregister_metrics() {
+    _client_metrics.clear();
+    _object_storage_metrics_labels.reset();
+    for (auto& [name, gc] : _pools) {
+        gc.metrics.clear();
+        gc.object_storage_metrics.reset();
+    }
+}
+
 static std::unique_ptr<throttling_controller> make_default_throttling_controller() {
     return std::make_unique<aws_throttling_controller>();
 }

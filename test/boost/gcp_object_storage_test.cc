@@ -1041,7 +1041,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_metrics_across_config_update, local_g
     });
 
     seastar::semaphore memory{16 * 1024 * 1024};
-    auto client = sstables::make_object_storage_client(ep, memory, [](std::string) {
+    auto client = sstables::make_object_storage_client(ep, memory, [] {
         return seastar::shared_ptr<sstables::object_storage_client>{};
     });
 

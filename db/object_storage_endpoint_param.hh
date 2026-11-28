@@ -28,18 +28,24 @@ public:
         std::string region;
         std::string iam_role_arn;
         bool legacy_format; // FIXME convert it to bool_class after seastar#3198
+        // Set when the entry gives its address in `uri`; the entry is then looked up by this name.
+        std::string name;
 
         std::strong_ordering operator<=>(const s3_storage&) const = default;
         std::string to_json_string() const;
         std::string key() const;
+        bool same_client_settings(const s3_storage&) const;
     };
     struct gs_storage {
         std::string endpoint; // "default"/empty or an URI
         std::string credentials_file; // optional
+        // Set when the entry gives its address in `uri`; the entry is then looked up by this name.
+        std::string name;
 
         std::strong_ordering operator<=>(const gs_storage&) const = default;
         std::string to_json_string() const;
         std::string key() const;
+        bool same_client_settings(const gs_storage&) const;
     };
 
     object_storage_endpoint_param();
@@ -54,6 +60,10 @@ public:
     std::string to_json_string() const;
     std::string key() const;
     const std::string& type() const;
+    // The address a client of this entry connects to.
+    const std::string& endpoint() const;
+    // Entries with one address share a client; true when both would build it the same way.
+    bool same_client_settings(const object_storage_endpoint_param&) const;
 
     bool is_s3_storage() const;
     bool is_gs_storage() const;

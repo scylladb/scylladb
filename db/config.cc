@@ -625,7 +625,15 @@ struct convert<std::vector<db::object_storage_endpoint_param>> {
         endpoints.clear();
         for (size_t i = 0; i < node.size(); ++i) {
             try {
-                endpoints.push_back(db::object_storage_endpoint_param::decode(node[i]));
+                auto ep = db::object_storage_endpoint_param::decode(node[i]);
+                // Entries with one address share a client, so they cannot build it differently.
+                auto other = std::ranges::find_if(endpoints, [&ep] (const db::object_storage_endpoint_param& o) {
+                    return o.type() == ep.type() && o.endpoint() == ep.endpoint() && !o.same_client_settings(ep);
+                });
+                if (other != endpoints.end()) {
+                    throw std::invalid_argument(fmt::format("it has the address of endpoint {} with other settings", other->key()));
+                }
+                endpoints.push_back(std::move(ep));
             } catch (const std::exception& e) {
                 cfglogger.error("Ignoring object_storage_endpoints entry {}: {}", i, e.what());
             }
