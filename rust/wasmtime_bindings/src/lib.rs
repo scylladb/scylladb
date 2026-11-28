@@ -107,7 +107,7 @@ pub struct Instance {
 
 fn create_instance(engine: &Engine, module: &Module, store: &mut Store) -> Result<Box<Instance>> {
     let mut linker = wasmtime::Linker::new(&engine.wasmtime_engine);
-    wasmtime_wasi::preview1::add_to_linker_async(&mut linker, |s| s).context("Failed to add wasi to linker")?;
+    wasmtime_wasi::preview1::add_to_linker_async(&mut linker, |s: &mut StoreData| &mut s.wasi).context("Failed to add wasi to linker")?;
     let wasmtime_module = module
         .wasmtime_module
         .as_ref()
@@ -186,13 +186,78 @@ impl Module {
     }
 }
 
+struct StoreData {
+    wasi: wasmtime_wasi::preview1::WasiP1Ctx,
+    limiter: Limiter,
+}
+
+// The memory limit (wasm_udf_memory_limit) applies to each memory, but a
+// module may have several memories, and also tables, which wasmtime allocates
+// itself (not through ScyllaMemoryCreator) - and if such an allocation fails,
+// Rust aborts Scylla. So Limiter limits the total size of a UDF's memories to
+// the memory limit, and the total size of its tables to the same amount.
+// With this limiter, creating too large memories or tables fails instantiation,
+// and the memory.grow and table.grow instructions return -1 instead of growing
+// beyond the limit.
+struct Limiter {
+    max_size: usize,
+    memories_size: usize,
+    tables_size: usize,
+    // The size added by the last allowed growth, undone if it fails
+    last_memory_growth: usize,
+    last_table_growth: usize,
+}
+
+// The size of a table element (a pointer to a function, or a reference)
+const TABLE_ELEMENT_SIZE: usize = 8;
+
+impl Limiter {
+    // Allow growing an item from current to desired bytes if the total stays
+    // within the limit
+    fn grow(max_size: usize, total: &mut usize, last_growth: &mut usize, current: usize, desired: usize) -> bool {
+        let growth = desired.saturating_sub(current);
+        if growth > max_size - *total {
+            return false;
+        }
+        *total += growth;
+        *last_growth = growth;
+        true
+    }
+}
+
+impl wasmtime::ResourceLimiter for Limiter {
+    fn memory_growing(&mut self, current: usize, desired: usize, _maximum: Option<usize>) -> Result<bool> {
+        Ok(Limiter::grow(self.max_size, &mut self.memories_size, &mut self.last_memory_growth, current, desired))
+    }
+    fn memory_grow_failed(&mut self, _error: anyhow::Error) -> Result<()> {
+        self.memories_size -= self.last_memory_growth;
+        Ok(())
+    }
+    fn table_growing(&mut self, current: usize, desired: usize, _maximum: Option<usize>) -> Result<bool> {
+        Ok(Limiter::grow(self.max_size, &mut self.tables_size, &mut self.last_table_growth,
+                current.saturating_mul(TABLE_ELEMENT_SIZE), desired.saturating_mul(TABLE_ELEMENT_SIZE)))
+    }
+    fn table_grow_failed(&mut self, _error: anyhow::Error) -> Result<()> {
+        self.tables_size -= self.last_table_growth;
+        Ok(())
+    }
+}
+
 pub struct Store {
-    wasmtime_store: wasmtime::Store<wasmtime_wasi::preview1::WasiP1Ctx>,
+    wasmtime_store: wasmtime::Store<StoreData>,
 }
 
 fn create_store(engine: &mut Engine, total_fuel: u64, yield_fuel: u64) -> Result<Box<Store>> {
     let wasi = wasmtime_wasi::WasiCtxBuilder::new().build_p1();
-    let mut store = wasmtime::Store::new(&engine.wasmtime_engine, wasi);
+    let limiter = Limiter {
+        max_size: engine.max_size,
+        memories_size: 0,
+        tables_size: 0,
+        last_memory_growth: 0,
+        last_table_growth: 0,
+    };
+    let mut store = wasmtime::Store::new(&engine.wasmtime_engine, StoreData { wasi, limiter });
+    store.limiter(|data| &mut data.limiter);
     store.set_fuel(total_fuel)?;
     store.fuel_async_yield_interval(Some(yield_fuel))?;
     Ok(Box::new(Store {
@@ -254,12 +319,17 @@ fn get_abi(instance: &Instance, store: &mut Store, memory: &Memory) -> Result<u3
 
 pub struct Engine {
     wasmtime_engine: wasmtime::Engine,
+    // The maximum size of a module's memory
+    max_size: usize,
 }
 
 fn create_engine(max_size: u32) -> Result<Box<Engine>> {
     let mut config = wasmtime::Config::new();
     config.async_support(true);
     config.consume_fuel(true);
+    // Our UDF ABI and ScyllaMemoryCreator support only 32-bit memories, so
+    // reject modules with 64-bit memories (memory64 is enabled by default)
+    config.wasm_memory64(false);
     config.wasm_reference_types(true);
     config.allocation_strategy(wasmtime::InstanceAllocationStrategy::OnDemand);
     // ScyllaMemoryCreator uses malloc (from seastar) to allocate linear memory
@@ -267,9 +337,12 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
         max_size as usize,
     )));
     // The following configuration settings make wasmtime allocate only as much memory as it needs
-    config.static_memory_maximum_size(0);
-    config.dynamic_memory_reserved_for_growth(0);
-    config.dynamic_memory_guard_size(0);
+    config.memory_reservation(0);
+    config.memory_reservation_for_growth(0);
+    config.memory_guard_size(0);
+    // Copy-on-write memory initialization requires mmap-based memories,
+    // but ScyllaMemoryCreator allocates memory with malloc
+    config.memory_init_cow(false);
     config.max_wasm_stack(128 * 1024);
     config.async_stack_size(256 * 1024);
     // Don't generate native unwind information (.eh_frame) for the compiled
@@ -286,6 +359,7 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
         wasmtime::Engine::new(&config).map_err(|e| anyhow!("Failed to create engine: {:?}", e))?;
     Ok(Box::new(Engine {
         wasmtime_engine: engine,
+        max_size: max_size as usize,
     }))
 }
 
@@ -293,15 +367,21 @@ fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
     let mut config = wasmtime::Config::new();
     config.async_support(true);
     config.consume_fuel(true);
+    // Our UDF ABI and ScyllaMemoryCreator support only 32-bit memories, so
+    // reject modules with 64-bit memories (memory64 is enabled by default)
+    config.wasm_memory64(false);
     // ScyllaMemoryCreator uses malloc (from seastar) to allocate linear memory
     config.with_host_memory(std::sync::Arc::new(TestScyllaMemoryCreator::new(
         max_size as usize,
         fail_after,
     )));
     // The following configuration settings make wasmtime allocate only as much memory as it needs
-    config.static_memory_maximum_size(0);
-    config.dynamic_memory_reserved_for_growth(0);
-    config.dynamic_memory_guard_size(0);
+    config.memory_reservation(0);
+    config.memory_reservation_for_growth(0);
+    config.memory_guard_size(0);
+    // Copy-on-write memory initialization requires mmap-based memories,
+    // but ScyllaMemoryCreator allocates memory with malloc
+    config.memory_init_cow(false);
     config.max_wasm_stack(128 * 1024);
     config.async_stack_size(256 * 1024);
     // Don't generate native unwind information (.eh_frame) for the compiled
@@ -318,6 +398,7 @@ fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
         wasmtime::Engine::new(&config).map_err(|e| anyhow!("Failed to create engine: {:?}", e))?;
     Ok(Box::new(Engine {
         wasmtime_engine: engine,
+        max_size: max_size as usize,
     }))
 }
 
@@ -353,6 +434,8 @@ impl Val {
             wasmtime::Val::FuncRef(_) => Ok(ffi::ValKind::FuncRef),
             wasmtime::Val::ExternRef(_) => Ok(ffi::ValKind::ExternRef),
             wasmtime::Val::AnyRef(_) => Ok(ffi::ValKind::AnyRef),
+            // Exception references require the exceptions proposal, which we don't enable
+            wasmtime::Val::ExnRef(_) => Err(anyhow!("Unsupported value kind: exnref")),
         }
     }
     fn i32(&self) -> Result<i32> {

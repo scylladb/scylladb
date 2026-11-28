@@ -9,11 +9,11 @@ edition = "2021"
 # (see the note in rust/inc/Cargo.toml). Pinned to avoid a cxxbridge ABI/symbol
 # mismatch at link time.
 cxx = { version = "=1.0.83", features = ["c++20"] }
-wasmtime-wasi = "24.0.2"
+wasmtime-wasi = "36.0.19"
 futures = "0.3.25"
 anyhow = "1.0.66"
 
 [dependencies.wasmtime]
-version = "24.0.2"
+version = "36.0.19"
 default-features = false
-features = ["async", "wat", "cranelift", "gc"]
+features = ["async", "wat", "cranelift", "gc", "gc-drc"]
