@@ -12,6 +12,7 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/metrics.hh>
 #include <utility>
@@ -161,8 +162,7 @@ private:
     query::max_result_size _max_result_size{query::result_memory_limiter::unlimited_result_size};
     tracing::trace_state_ptr _trace_ptr;
 
-    // Used by with_permit/with_ready_permit for admission signaling.
-    // Kept inline since it's used on the hot (direct admission) path.
+    // Signals admission/memory waiters, and completion of reads run by the execution loop.
     promise<> _pr;
     // Used by with_permit/with_ready_permit to store the read function.
     // Kept inline since it's checked on the hot (direct admission) path.
@@ -1589,8 +1589,13 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
     };
 
     const auto [admit, why] = can_admit_read(permit);
-    ++(_stats.*stats_table[static_cast<int>(why)]);
-    tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] {}", _name, result_as_string[static_cast<int>(why)]);
+    // An admissible read that queues behind existing waiters was not admitted immediately.
+    if (admit == can_admit::yes && !_wait_list.empty()) {
+        tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] queued behind waiters", _name);
+    } else {
+        ++(_stats.*stats_table[static_cast<int>(why)]);
+        tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] {}", _name, result_as_string[static_cast<int>(why)]);
+    }
     if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(permit, wait_on::admission);
         if (admit == can_admit::yes && !_wait_list.empty()) {
@@ -1610,7 +1615,15 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
     permit.on_admission();
     ++_stats.reads_admitted;
     if (permit.func()) {
-        return with_ready_permit(permit);
+        // seastar::thread stacks are small (128 KiB); a pending preemption must yield first, like execution_loop() does.
+        if (seastar::thread::running_in_thread() || need_preempt()) {
+            return with_ready_permit(permit);
+        }
+        // Admitted immediately: both _wait_list and _ready_list are empty, so
+        // running inline overtakes no one and saves a trip through execution_loop().
+        tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] executing read", _name);
+        auto func = std::move(permit.func());
+        return futurize_invoke(func, reader_permit(permit.shared_from_this()));
     }
     return make_ready_future<>();
 }
