@@ -41,6 +41,7 @@
 #include "cell_locking.hh"
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
+#include "utils/usdt.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/div_ceil.hh"
@@ -2372,6 +2373,11 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
     // right at the end of the flush. Run them in the memtable-to-cache group, which has
     // static shares and already hosts the cache update.
     co_await coroutine::switch_to(_config.memtable_to_cache_scheduling_group);
+    // The probe fires right before the try block so that every _start is
+    // followed by a _done or a _failed.
+    auto usdt_start = std::chrono::steady_clock::now();
+    const uint64_t memtable_bytes = old->occupancy().total_space();
+    SCYLLA_USDT(memtable_flush_start, _schema->ks_name().c_str(), _schema->cf_name().c_str(), memtable_bytes, old->partition_count());
     try {
         co_await std::move(f);
         co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
@@ -2395,8 +2401,15 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
 
         cg.memtables()->erase(old);
         tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
+        uint64_t sstable_bytes = 0;
+        for (const auto& sst : newtabs) {
+            sstable_bytes += sst->bytes_on_disk();
+        }
+        SCYLLA_USDT(memtable_flush_done, _schema->ks_name().c_str(), _schema->cf_name().c_str(), memtable_bytes,
+                    utils::usdt_us_since(usdt_start), newtabs.size(), sstable_bytes);
         co_return;
     } catch (const std::exception& e) {
+        SCYLLA_USDT(memtable_flush_failed, _schema->ks_name().c_str(), _schema->cf_name().c_str(), memtable_bytes, utils::usdt_us_since(usdt_start));
         for (auto& newtab : newtabs) {
             newtab->mark_for_deletion();
             tlogger.error("failed to write sstable {}: {}", newtab->get_filename(), e);

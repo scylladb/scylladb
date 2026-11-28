@@ -14,6 +14,7 @@
 #include "streaming/stream_plan.hh"
 #include "utils/pretty_printers.hh"
 #include "utils/error_injection.hh"
+#include "utils/usdt.hh"
 #include "locator/host_id.hh"
 #include "replica/database.hh"
 #include "replica/logstor/segment_manager.hh"
@@ -289,6 +290,7 @@ future<> stream_blob_handler(replica::database& db,
     bool status_sent = false;
     size_t total_size = 0;
     auto start_time = std::chrono::steady_clock::now();
+    SCYLLA_USDT(file_stream_rx_start, meta.filename.c_str());
     std::optional<output_stream<char>> fstream;
     std::exception_ptr error;
     stream_blob_finish_fn finish;
@@ -469,12 +471,14 @@ future<> stream_blob_handler(replica::database& db,
 
         blogger.warn("fstream[{}] Follower failed peer={} file={} received_size={} bw={} error={}",
                 meta.ops_id, from, meta.filename, total_size, get_bw(total_size, start_time), error);
+        SCYLLA_USDT(file_stream_rx_failed, meta.filename.c_str(), total_size, utils::usdt_us_since(start_time));
         // Do not call rethrow_exception(error) because the caller could do nothing but log
         // the error. We have already logged the error here.
     } else {
         // Get some statistics
         blogger.debug("fstream[{}] Follower finished peer={} file={} received_size={} bw={}",
                 meta.ops_id, from, meta.filename, total_size, get_bw(total_size, start_time));
+        SCYLLA_USDT(file_stream_rx_done, meta.filename.c_str(), total_size, utils::usdt_us_since(start_time));
     }
     co_return;
 }
@@ -645,6 +649,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
         std::vector<sink_and_source> ss;
         size_t total_size = 0;
         auto start_time = std::chrono::steady_clock::now();
+        SCYLLA_USDT(file_stream_tx_start, filename.c_str());
         bool got_error_from_peer = false;
         try {
             for (auto& x : targets) {
@@ -756,6 +761,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
         if (error) {
             blogger.warn("fstream[{}] Master failed sending file={} to targets={} send_size={} bw={} error={}",
                     ops_id, filename, targets, total_size, get_bw(total_size, start_time), error);
+            SCYLLA_USDT(file_stream_tx_failed, filename.c_str(), total_size, utils::usdt_us_since(start_time));
             // Error handling for fstream and sink
             if (!fstream_closed) {
                 try {
@@ -808,6 +814,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
         } else {
             blogger.debug("fstream[{}] Master done sending file={} to targets={} send_size={} bw={}",
                     ops_id, filename, targets, total_size, get_bw(total_size, start_time));
+            SCYLLA_USDT(file_stream_tx_done, filename.c_str(), total_size, utils::usdt_us_since(start_time));
         }
     }
     co_await utils::get_local_injector().inject("tablet_stream_files_end_wait", utils::wait_for_message(std::chrono::minutes(5)));

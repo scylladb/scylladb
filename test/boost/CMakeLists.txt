@@ -330,6 +330,8 @@ add_scylla_test(unique_view_test
   KIND BOOST)
 add_scylla_test(scoped_item_list_test
   KIND SEASTAR)
+add_scylla_test(usdt_test
+  KIND BOOST)
 add_scylla_test(utf8_test
   KIND BOOST
   LIBRARIES utils)

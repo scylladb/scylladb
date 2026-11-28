@@ -1,0 +1,40 @@
+#!/usr/bin/env bpftrace
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+/*
+ * scylla-cpuprofile: sample the on-CPU user stacks of the scylla reactor
+ * threads at 99 Hz and print, on Ctrl-C, the sample counts per shard
+ * thread and the 30 most frequent stacks. Needs no scylla probe.
+ *
+ * Usage: bpftrace tools/bpftrace/scylla-cpuprofile.bt $(pgrep -x scylla)
+ *
+ * The scylla process is selected by its pid, the first argument. Do not
+ * add -p: it makes bpftrace sample the main thread (shard 0) only, and
+ * the other shards are missing from the output. Shard 0 keeps the process name
+ * ("scylla"), shards 1 and up are named reactor-N. User stacks are only
+ * complete when scylla was built with -fno-omit-frame-pointer.
+ */
+
+config = {
+    max_map_keys = 65536
+}
+
+BEGIN
+{
+    printf("Sampling scylla on-CPU stacks at 99 Hz... Hit Ctrl-C to end.\n");
+}
+
+profile:hz:99 /pid == $1/
+{
+    @samples[comm] = count();
+    @stacks[ustack(6)] = count();
+}
+
+END
+{
+    print(@samples);
+    print(@stacks, 30);
+    clear(@stacks);
+}

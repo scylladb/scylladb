@@ -70,6 +70,7 @@
 
 #include "utils/human_readable.hh"
 #include "utils/error_injection.hh"
+#include "utils/usdt.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
@@ -1988,8 +1989,13 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     column_family& cf = find_column_family(cmd.cf_id);
 
+    // The duration costs two steady_clock reads per query, paid with no tracer attached.
+    auto usdt_start = std::chrono::steady_clock::now();
+    SCYLLA_USDT(query_start, cf.schema()->ks_name().c_str(), cf.schema()->cf_name().c_str());
+
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
         ++_stats->total_reads_rate_limited;
+        SCYLLA_USDT(query_failed, cf.schema()->ks_name().c_str(), cf.schema()->cf_name().c_str(), utils::usdt_us_since(usdt_start));
         co_await coroutine::return_exception(replica::rate_limit_exception());
     }
 
@@ -2040,11 +2046,15 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
     if (querier_opt) {
         co_await querier_opt->close();
     }
+    auto usdt_duration_us = utils::usdt_us_since(usdt_start);
     if (ex) {
+        SCYLLA_USDT(query_failed, cf.schema()->ks_name().c_str(), cf.schema()->cf_name().c_str(), usdt_duration_us);
         ++semaphore.get_stats().total_failed_reads;
         co_return coroutine::exception(std::move(ex));
     }
 
+    SCYLLA_USDT(query_done, cf.schema()->ks_name().c_str(), cf.schema()->cf_name().c_str(), usdt_duration_us,
+                result->buf().size(), bool(result->is_short_read()));
     auto hit_rate = cf.get_global_cache_hit_rate();
     ++semaphore.get_stats().total_successful_reads;
     _stats->short_data_queries += bool(result->is_short_read());

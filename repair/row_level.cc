@@ -44,6 +44,7 @@
 #include "repair/row_level.hh"
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
+#include "utils/usdt.hh"
 #include "service/migration_manager.hh"
 #include "streaming/consumer.hh"
 #include <seastar/core/coroutine.hh>
@@ -607,6 +608,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     if (_writer_done) {
         return;
     }
+    auto usdt_start = std::chrono::steady_clock::now();
     replica::table& t = _db.local().find_column_family(_schema->id());
     rlogger.debug("repair_writer: keyspace={}, table={}, estimated_partitions={}", w->schema()->ks_name(), w->schema()->cf_name(), w->get_estimated_partitions());
     // #17384 don't use off-strategy for repair (etc) if using tablets. sstables generated will 
@@ -647,9 +649,10 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     }
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder.sharder, std::move(_queue_reader),
             std::move(consumer),
-    t.stream_in_progress()).then([w] (uint64_t partitions) {
+    t.stream_in_progress()).then([w, usdt_start] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
+        SCYLLA_USDT(repair_writer_done, w->schema()->ks_name().c_str(), w->schema()->cf_name().c_str(), partitions, utils::usdt_us_since(usdt_start));
         return utils::get_local_injector().inject("repair_writer_impl_create_writer_wait", utils::wait_for_message(200s));
     }).handle_exception([w, keepalive = std::move(sharder.keepalive)] (std::exception_ptr ep) {
         rlogger.warn("repair_writer: keyspace={}, table={}, multishard_writer failed: {}",
@@ -761,8 +764,9 @@ static bool is_tablet_rebuild_repair(replica::table& t, const dht::token_range& 
     return trinfo && trinfo->transition == locator::tablet_transition_kind::rebuild_v2;
 }
 
-future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, schema_ptr s, uint64_t seed, repair_master is_master, reader_permit permit, repair_hasher hasher) {
+future<std::pair<std::list<repair_row>, size_t>> to_repair_rows_list(repair_rows_on_wire rows, schema_ptr s, uint64_t seed, repair_master is_master, reader_permit permit, repair_hasher hasher) {
     std::list<repair_row> row_list;
+    size_t wire_bytes = 0;
     std::exception_ptr ex;
     try {
         lw_shared_ptr<const decorated_key_with_hash> dk_ptr;
@@ -794,6 +798,7 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
 
                     _metrics.rx_row_nr += 1;
                     _metrics.rx_row_bytes += fmf.representation().size();
+                    wire_bytes += fmf.representation().size();
                     // Keep the mutation_fragment in repair_row as an
                     // optimization to avoid unfreeze again when
                     // mutation_fragment is needed by _repair_writer.do_write()
@@ -810,6 +815,7 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
 
                     _metrics.rx_row_nr += 1;
                     _metrics.rx_row_bytes += fmf.representation().size();
+                    wire_bytes += fmf.representation().size();
                     auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*s, permit));
                     // If the mutation_fragment has the same position as
                     // the last mutation_fragment, it means they are the
@@ -836,7 +842,7 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
         co_await utils::clear_gently(row_list);
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
-    co_return std::move(row_list);
+    co_return std::pair(std::move(row_list), wire_bytes);
 }
 
 class repair_meta {
@@ -937,6 +943,19 @@ private:
     const bool _is_eligible_to_repair_rejection;
 private:
     incremental_repair_meta _incremental_repair_meta;
+    // Bytes on disk selected and skipped by prepare_sstables_for_incremental_repair().
+    uint64_t _inc_sst_read_bytes = 0;
+    uint64_t _inc_sst_skipped_bytes = 0;
+
+    // The master's host id. On a follower, node 1 is the master that sent
+    // repair_row_level_start. With _repair_meta_id, which is unique per
+    // master only, it identifies this repair_meta on any node.
+    const locator::host_id& master_host() const {
+        return _all_node_states[_repair_master ? 0 : 1].node;
+    }
+    int64_t master_host_msb() const {
+        return master_host().uuid().get_most_significant_bits();
+    }
 public:
     bool is_incremental_repair() {
         return _repaired_at.has_value();
@@ -1096,6 +1115,8 @@ public:
             // Prevent this by marking the permit as evictable ASAP.
             // FIXME: provide a better API for this, this is very clunky
             _fake_inactive_read_handle = _db.local().get_reader_concurrency_semaphore().register_inactive_read(make_empty_mutation_reader(_schema, _permit));
+            SCYLLA_USDT(repair_meta_start, _repair_meta_id, master_host_msb(), master_host().uuid().get_least_significant_bits(),
+                    _schema->ks_name().c_str(), _schema->cf_name().c_str(), bool(master));
     }
 
     // follower constructor
@@ -1149,11 +1170,16 @@ public:
         auto f2 = _sink_source_for_get_row_diff.close();
         auto f3 = _sink_source_for_put_row_diff.close();
         rlogger.debug("repair_meta::stop");
+        auto usdt_stop_start = std::chrono::steady_clock::now();
         // move to background.  waited on via _stopped->get_future.
-        when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this] {
-            return _repair_writer->wait_for_writer_done().finally([this] {
+        when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this, usdt_stop_start] {
+            auto usdt_writer_start = std::chrono::steady_clock::now();
+            return _repair_writer->wait_for_writer_done().finally([this, usdt_stop_start, usdt_writer_start] {
+                SCYLLA_USDT(repair_meta_writer_done, _repair_meta_id, master_host_msb(), utils::usdt_us_since(usdt_writer_start));
                 return close().then([this] {
                     return clear_gently();
+                }).finally([this, usdt_stop_start] {
+                    SCYLLA_USDT(repair_meta_stop, _repair_meta_id, master_host_msb(), utils::usdt_us_since(usdt_stop_start));
                 });
             });
         }).forward_to(std::move(stopped));
@@ -1438,6 +1464,7 @@ private:
                 rlogger.info("Skipped adding sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for incremental repair",
                     sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard);
                 _metrics.inc_sst_skipped_bytes += bytes_on_disk;
+                _inc_sst_skipped_bytes += bytes_on_disk;
             } else {
                 if (!_for_tablet_rebuild) {
                     sst->mark_as_being_repaired(_frozen_topology_guard);
@@ -1446,6 +1473,7 @@ private:
                     sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard, _for_tablet_rebuild);
                 _incremental_repair_meta.sst_set->insert(sst);
                 _metrics.inc_sst_read_bytes += bytes_on_disk;
+                _inc_sst_read_bytes += bytes_on_disk;
             }
         }
         // Note: It is safe to re-enable compaction again because all
@@ -1469,6 +1497,7 @@ private:
         size_t new_rows_size = 0;
         std::list<repair_row> cur_rows;
         std::exception_ptr ex;
+        auto usdt_read_start = std::chrono::steady_clock::now();
         if (!_repair_reader) {
             // We are about to create a real evictable reader, so drop the fake
             // reader (evicted or not), we don't need it anymore.
@@ -1476,6 +1505,63 @@ private:
             if (is_incremental_repair()) {
                 co_await prepare_sstables_for_incremental_repair();
             }
+            auto strategy = std::invoke([this]() {
+                if (is_incremental_repair()) {
+                    return repair_reader::read_strategy::incremental_repair;
+                }
+
+                if (can_read_locally()) {
+                    rlogger.debug("repair_reader: meta_id={}, _repair_master={}, _same_sharding_config={},"
+                                  "read_strategy {} is chosen",
+                       _repair_meta_id, _repair_master, _same_sharding_config,
+                       repair_reader::read_strategy::local);
+                    return repair_reader::read_strategy::local;
+                }
+
+                // multishard_filter means load all the data in the range and apply
+                // filter by master shard on top, discarding partitions from other shards.
+                // multishard_split means split the range into multiple subranges,
+                // each containing only the required data from the master shard.
+                // For situations with a sparse data set spread across numerous ranges,
+                // the overhead from continuously switching between these ranges,
+                // specifically during the fast_forward_to function on the multishard_reader,
+                // can become the main factor in performance.
+                // Similarly, with multishard_filter, reading all the partitions within
+                // the range can lead to the next_partition cost dominating the overall cost.
+                // The heuristic here chooses the strategy with minimal such cost.
+                // Note that with multishard_filter we don't read entire partitions which
+                // can be a huge waste. We only fill the buffer inside
+                // mutation_reader, if a partition is found to belong to the incorrect
+                // master shard, we call next_partition(), which effectively clears
+                // the buffer until the next partition is reached.
+
+                if (utils::get_local_injector().enter("repair_reader_force_multishard_split")) {
+                    rlogger.debug("repair_reader: meta_id={}, read_strategy {} is forced by error injection",
+                        _repair_meta_id, repair_reader::read_strategy::multishard_split);
+                    return repair_reader::read_strategy::multishard_split;
+                }
+
+                if (!_local_range_estimation) {
+                    // this should not normally happen since the master
+                    // calls get_estimated_partitions before get_sync_boundary
+                    rlogger.warn("repair_reader: meta_id={}, no _local_range_estimation, "
+                                 "read_strategy {} is chosen",
+                        _repair_meta_id, repair_reader::read_strategy::multishard_split);
+                    return repair_reader::read_strategy::multishard_split;
+                }
+
+                const auto read_strategy =
+                    _local_range_estimation->partitions_count <= _local_range_estimation->master_subranges_count
+                    ? repair_reader::read_strategy::multishard_filter
+                    : repair_reader::read_strategy::multishard_split;
+                rlogger.debug("repair_reader: meta_id={}, _local_range_estimation: partitions_count={}, "
+                              "master_subranges_count={}, read_strategy {} is chosen",
+                    _repair_meta_id,
+                    _local_range_estimation->partitions_count,
+                    _local_range_estimation->master_subranges_count,
+                    read_strategy);
+                return read_strategy;
+            });
             _repair_reader.emplace(_db,
                 _db.local().find_column_family(_schema->id()),
                 _schema,
@@ -1484,67 +1570,13 @@ private:
                 _remote_sharder,
                 _master_node_shard_config.shard,
                 _seed,
-                std::invoke([this]() {
-                    if (is_incremental_repair()) {
-                        return repair_reader::read_strategy::incremental_repair;
-                    }
-
-                    if (can_read_locally()) {
-                        rlogger.debug("repair_reader: meta_id={}, _repair_master={}, _same_sharding_config={},"
-                                      "read_strategy {} is chosen",
-                           _repair_meta_id, _repair_master, _same_sharding_config,
-                           repair_reader::read_strategy::local);
-                        return repair_reader::read_strategy::local;
-                    }
-
-                    // multishard_filter means load all the data in the range and apply
-                    // filter by master shard on top, discarding partitions from other shards.
-                    // multishard_split means split the range into multiple subranges,
-                    // each containing only the required data from the master shard.
-                    // For situations with a sparse data set spread across numerous ranges,
-                    // the overhead from continuously switching between these ranges,
-                    // specifically during the fast_forward_to function on the multishard_reader,
-                    // can become the main factor in performance.
-                    // Similarly, with multishard_filter, reading all the partitions within
-                    // the range can lead to the next_partition cost dominating the overall cost.
-                    // The heuristic here chooses the strategy with minimal such cost.
-                    // Note that with multishard_filter we don't read entire partitions which
-                    // can be a huge waste. We only fill the buffer inside
-                    // mutation_reader, if a partition is found to belong to the incorrect
-                    // master shard, we call next_partition(), which effectively clears
-                    // the buffer until the next partition is reached.
-
-                    if (utils::get_local_injector().enter("repair_reader_force_multishard_split")) {
-                        rlogger.debug("repair_reader: meta_id={}, read_strategy {} is forced by error injection",
-                            _repair_meta_id, repair_reader::read_strategy::multishard_split);
-                        return repair_reader::read_strategy::multishard_split;
-                    }
-
-                    if (!_local_range_estimation) {
-                        // this should not normally happen since the master
-                        // calls get_estimated_partitions before get_sync_boundary
-                        rlogger.warn("repair_reader: meta_id={}, no _local_range_estimation, "
-                                     "read_strategy {} is chosen",
-                            _repair_meta_id, repair_reader::read_strategy::multishard_split);
-                        return repair_reader::read_strategy::multishard_split;
-                    }
-
-                    const auto read_strategy =
-                        _local_range_estimation->partitions_count <= _local_range_estimation->master_subranges_count
-                        ? repair_reader::read_strategy::multishard_filter
-                        : repair_reader::read_strategy::multishard_split;
-                    rlogger.debug("repair_reader: meta_id={}, _local_range_estimation: partitions_count={}, "
-                                  "master_subranges_count={}, read_strategy {} is chosen",
-                        _repair_meta_id,
-                        _local_range_estimation->partitions_count,
-                        _local_range_estimation->master_subranges_count,
-                        read_strategy);
-                    return read_strategy;
-                }),
+                strategy,
                 _compaction_time,
                 _incremental_repair_meta,
                 _rs.get_config().repair_multishard_reader_buffer_hint_size(),
                 bool(_rs.get_config().repair_multishard_reader_enable_read_ahead()));
+            SCYLLA_USDT(repair_meta_reader_created, _repair_meta_id, master_host_msb(), unsigned(strategy),
+                    _inc_sst_read_bytes, _inc_sst_skipped_bytes, utils::usdt_us_since(usdt_read_start));
         }
         try {
             while (cur_size < _max_row_buf_size) {
@@ -1564,6 +1596,7 @@ private:
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
         _repair_reader->pause();
+        SCYLLA_USDT(repair_meta_read_rows_done, _repair_meta_id, master_host_msb(), cur_rows.size(), new_rows_size, utils::usdt_us_since(usdt_read_start));
         co_return value_type(std::move(cur_rows), new_rows_size);
     }
 
@@ -1725,7 +1758,7 @@ private:
         if (rows.empty()) {
             return;
         }
-        auto row_diff = to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher).get();
+        auto row_diff = to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher).get().first;
         auto sz = get_repair_rows_size(row_diff).get();
         stats().rx_row_bytes += sz;
         stats().rx_row_nr += row_diff.size();
@@ -1837,8 +1870,11 @@ private:
         if (rows.empty()) {
             co_return;
         }
-        std::list<repair_row> row_diff = co_await to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher);
+        auto usdt_start = std::chrono::steady_clock::now();
+        auto [row_diff, bytes] = co_await to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher);
+        auto nr_rows = row_diff.size();
         co_await do_apply_rows(std::move(row_diff), update_working_row_buf::no);
+        SCYLLA_USDT(repair_meta_apply_rows_done, _repair_meta_id, master_host_msb(), nr_rows, bytes, utils::usdt_us_since(usdt_start));
     }
 
     struct fragments_limiter {
@@ -2072,7 +2108,9 @@ public:
         if (remote_node == myhostid()) {
             co_await stop();
             if (mark_as_repaired) {
+                auto usdt_start = std::chrono::steady_clock::now();
                 co_await mark_sstable_as_repaired();
+                SCYLLA_USDT(repair_meta_mark_repaired_done, ks_name.c_str(), cf_name.c_str(), utils::usdt_us_since(usdt_start));
             }
             co_return;
         }
@@ -3477,6 +3515,34 @@ private:
         all_done,
     };
 
+    // Outcome argument of the repair_round_done probe.
+    enum class round_outcome : unsigned {
+        synced_by_boundary = 0,
+        synced_by_combined_hash = 1,
+        slow_path = 2,
+        no_more_data = 3,
+    };
+
+    // Step argument of the repair_master_rpc_done probe.
+    enum class rpc_step : unsigned {
+        row_level_start = 1,
+        get_estimated_partitions = 2,
+        set_estimated_partitions = 3,
+        row_level_stop = 4,
+    };
+
+    // Index of a node in repair_meta::all_nodes(): 0 is the master itself,
+    // peers follow in the order of _all_live_peer_nodes.
+    static unsigned index_of(repair_meta& master, const locator::host_id& node) {
+        auto& nodes = master.all_nodes();
+        for (unsigned i = 0; i < nodes.size(); i++) {
+            if (nodes[i].node == node) {
+                return i;
+            }
+        }
+        return nodes.size();
+    }
+
     host_id_vector_replica_set sort_peer_nodes(const std::vector<locator::host_id>& nodes) {
         host_id_vector_replica_set sorted_nodes(nodes.begin(), nodes.end());
         auto& topology = get_erm()->get_topology();
@@ -3503,6 +3569,7 @@ private:
         rlogger.debug("ROUND {}, _last_sync_boundary={}, _current_sync_boundary={}, _skipped_sync_boundary={}",
                 master.stats().round_nr, master.last_sync_boundary(), master.current_sync_boundary(), _skipped_sync_boundary);
         master.stats().round_nr++;
+        SCYLLA_USDT(repair_round_start, master.repair_meta_id(), master.stats().round_nr);
         parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
             const auto& node = ns.node;
             auto dst_cpu_id = ns.shard;
@@ -3510,9 +3577,12 @@ private:
             // is moved to the `_current_sync_boundary` or
             // `_skipped_sync_boundary` if it is not std::nullopt.
             ns.state = repair_state::get_sync_boundary_started;
+            auto usdt_start = std::chrono::steady_clock::now();
             try {
                 get_sync_boundary_response res = co_await master.get_sync_boundary(node, _skipped_sync_boundary, dst_cpu_id);
                 ns.state = repair_state::get_sync_boundary_finished;
+                SCYLLA_USDT(repair_round_sync_boundary_done, master.repair_meta_id(), master.stats().round_nr, unsigned(&ns - master.all_nodes().data()),
+                        res.new_rows_nr, res.new_rows_size, utils::usdt_us_since(usdt_start));
                 master.stats().row_from_disk_bytes[node] += res.new_rows_size;
                 master.stats().row_from_disk_nr[node] += res.new_rows_nr;
                 if (res.boundary && res.row_buf_size > 0) {
@@ -3586,9 +3656,11 @@ private:
             // row hashes to the repair master.
             auto& ns = master.all_nodes()[idx];
             ns.state = repair_state::get_combined_row_hash_started;
+            auto usdt_start = std::chrono::steady_clock::now();
             try {
                 get_combined_row_hash_response resp = co_await master.get_combined_row_hash(_common_sync_boundary, ns.node, ns.shard);
                 master.all_nodes()[idx].state = repair_state::get_combined_row_hash_finished;
+                SCYLLA_USDT(repair_round_combined_hash_done, master.repair_meta_id(), master.stats().round_nr, idx, utils::usdt_us_since(usdt_start));
                 rlogger.debug("Calling master.get_combined_row_hash for node {}, got combined_hash={}", master.all_nodes()[idx].node, resp);
                 combined_hashes[idx]= std::move(resp);
             } catch (...) {
@@ -3641,6 +3713,9 @@ private:
             // Fast path: if local has zero row and remote has rows, request them all.
             if (master.working_row_buf_combined_hash() == repair_hash() && combined_hashes[node_idx + 1] != repair_hash()) {
                 master.peer_row_hash_sets(node_idx).clear();
+                auto usdt_start = std::chrono::steady_clock::now();
+                auto rx_rows = master.stats().rx_row_nr;
+                auto rx_bytes = master.stats().rx_row_bytes;
                 if (master.use_rpc_stream()) {
                     rlogger.debug("FastPath: get_row_diff with needs_all_rows_t::yes rpc stream");
                     ns.state = repair_state::get_row_diff_with_rpc_stream_started;
@@ -3652,12 +3727,15 @@ private:
                     master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx, dst_cpu_id);
                     ns.state = repair_state::get_row_diff_and_update_peer_row_hash_sets_finished;
                 }
+                SCYLLA_USDT(repair_round_get_diff_done, master.repair_meta_id(), master.stats().round_nr, node_idx + 1,
+                        master.stats().rx_row_nr - rx_rows, master.stats().rx_row_bytes - rx_bytes, utils::usdt_us_since(usdt_start));
                 continue;
             }
 
             rlogger.debug("Before master.get_full_row_hashes for node {}, hash_sets={}",
                 node, master.peer_row_hash_sets(node_idx).size());
             // Ask the peer to send the full list hashes in the working row buf.
+            auto usdt_hashes_start = std::chrono::steady_clock::now();
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::get_full_row_hashes_with_rpc_stream_started;
                 master.peer_row_hash_sets(node_idx) = master.get_full_row_hashes_with_rpc_stream(node, node_idx, dst_cpu_id).get();
@@ -3667,6 +3745,8 @@ private:
                 master.peer_row_hash_sets(node_idx) = master.get_full_row_hashes(node, dst_cpu_id).get();
                 ns.state = repair_state::get_full_row_hashes_finished;
             }
+            SCYLLA_USDT(repair_round_full_hashes_done, master.repair_meta_id(), master.stats().round_nr, node_idx + 1,
+                    master.peer_row_hash_sets(node_idx).size(), utils::usdt_us_since(usdt_hashes_start));
             rlogger.debug("After master.get_full_row_hashes for node {}, hash_sets={}",
                 node, master.peer_row_hash_sets(node_idx).size());
 
@@ -3689,6 +3769,9 @@ private:
             // If we need to pull all rows from the peer. We can avoid
             // sending the row hashes on wire by setting needs_all_rows flag.
             auto needs_all_rows = repair_meta::needs_all_rows_t(set_diff.size() == master.peer_row_hash_sets(node_idx).size());
+            auto usdt_diff_start = std::chrono::steady_clock::now();
+            auto rx_rows = master.stats().rx_row_nr;
+            auto rx_bytes = master.stats().rx_row_bytes;
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::get_row_diff_with_rpc_stream_started;
                 master.get_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, repair_meta::update_peer_row_hash_sets::no, node, node_idx, dst_cpu_id);
@@ -3698,6 +3781,8 @@ private:
                 master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx, dst_cpu_id);
                 ns.state = repair_state::get_row_diff_finished;
             }
+            SCYLLA_USDT(repair_round_get_diff_done, master.repair_meta_id(), master.stats().round_nr, node_idx + 1,
+                    master.stats().rx_row_nr - rx_rows, master.stats().rx_row_bytes - rx_bytes, utils::usdt_us_since(usdt_diff_start));
             rlogger.debug("After get_row_diff node {}, rows={}", master.myhostid(), master.working_row_buf_size());
           } catch (...) {
             rlogger.warn("repair[{}]: get_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
@@ -3705,7 +3790,9 @@ private:
             throw;
           }
         }
+        auto usdt_flush_start = std::chrono::steady_clock::now();
         master.flush_rows_in_working_row_buf(_small_table_optimization ? std::make_optional(small_table_optimization_params{ .erm = get_erm() }) : std::nullopt);
+        SCYLLA_USDT(repair_round_flush_rows_done, master.repair_meta_id(), master.stats().round_nr, utils::usdt_us_since(usdt_flush_start));
         return op_status::next_step;
     }
 
@@ -3727,6 +3814,9 @@ private:
             auto& set_diff = set_diffs[idx];
             rlogger.debug("Calling master.put_row_diff to node {}, set_diff={}, needs_all_rows={}", _all_live_peer_nodes[idx], set_diff.size(), needs_all_rows);
             auto& node = master.all_nodes()[idx].node;
+            auto usdt_start = std::chrono::steady_clock::now();
+            auto tx_rows = master.stats().tx_row_nr;
+            auto tx_bytes = master.stats().tx_row_bytes;
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::put_row_diff_with_rpc_stream_started;
                 try {
@@ -3751,6 +3841,8 @@ private:
                     std::rethrow_exception(ep);
                 }
             }
+            SCYLLA_USDT(repair_round_put_diff_done, master.repair_meta_id(), master.stats().round_nr, idx + 1,
+                    master.stats().tx_row_nr - tx_rows, master.stats().tx_row_bytes - tx_bytes, utils::usdt_us_since(usdt_start));
         })).get();
         master.stats().round_nr_slow_path++;
     }
@@ -3850,9 +3942,15 @@ public:
     future<> run() {
         return seastar::async([this] {
             _rstate.check_in_abort_or_shutdown();
+            auto usdt_run_start = std::chrono::steady_clock::now();
             auto repair_meta_id = _rstate.rs.get_next_repair_meta_id().get();
             auto algorithm = get_common_diff_detect_algorithm(_rstate.messaging.local(), _all_live_peer_nodes);
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
+            // mode: 0 full, 1 incremental, 2 rebuild repair
+            const unsigned usdt_mode = _rstate.sched_info.for_tablet_rebuild ? 2
+                    : (_rstate.sched_info.incremental_mode != locator::tablet_repair_incremental_mode::disabled ? 1 : 0);
+            SCYLLA_USDT(repair_master_start, repair_meta_id, _rstate.get_keyspace().c_str(), _cf_name.c_str(),
+                    _all_live_peer_nodes.size(), max_row_buf_size, usdt_mode);
             auto& cf = _rstate.db.local().find_column_family(_table_id);
             auto& sharder = cf.get_effective_replication_map()->get_sharder(*(cf.schema()));
             auto master_node_shard_config = shard_config {
@@ -3870,11 +3968,15 @@ public:
             wanted = std::min(max, wanted);
             rlogger.trace("repair[{}]: Started to get memory budget, wanted={}, available={}, max_repair_memory={}",
                     _rstate.global_repair_id.uuid(), wanted, mem_sem.current(), max);
+            auto usdt_mem_start = std::chrono::steady_clock::now();
             auto mem_permit = seastar::get_units(mem_sem, wanted).get();
+            auto usdt_mem_us = utils::usdt_us_since(usdt_mem_start);
             rlogger.trace("repair[{}]: Finished to get memory budget, wanted={}, available={}, max_repair_memory={}",
                     _rstate.global_repair_id.uuid(), wanted, mem_sem.current(), max);
 
+            auto usdt_permit_start = std::chrono::steady_clock::now();
             auto permit = _rstate.db.local().obtain_reader_permit(_rstate.db.local().find_column_family(_table_id), "repair-meta", db::no_timeout, {}).get();
+            SCYLLA_USDT(repair_master_wait_done, repair_meta_id, usdt_mem_us, utils::usdt_us_since(usdt_permit_start));
 
             auto compaction_time = gc_clock::now();
 
@@ -3933,6 +4035,10 @@ public:
 
             rlogger.debug(">>> Started Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_size={}",
                     master.myhostid(), _all_live_peer_nodes, master.repair_meta_id(), _rstate.get_keyspace(), _cf_name, schema_version, _range, _seed, max_row_buf_size);
+            for (unsigned i = 1; i < master.all_nodes().size(); i++) {
+                const auto& ns = master.all_nodes()[i];
+                SCYLLA_USDT(repair_master_peer, repair_meta_id, i, ns.node.uuid().get_most_significant_bits(), ns.node.uuid().get_least_significant_bits(), ns.shard);
+            }
 
             std::exception_ptr ex = nullptr;
             std::vector<repair_node_state> nodes_to_stop;
@@ -3940,13 +4046,18 @@ public:
             try {
                 parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                     const auto& node = ns.node;
+                    auto idx = index_of(master, node);
+                    auto usdt_start = std::chrono::steady_clock::now();
                     ns.state = repair_state::row_level_start_started;
                     co_await master.repair_row_level_start(node, _rstate.get_keyspace(), _cf_name, _range, schema_version, _rstate.reason(), compaction_time, ns.shard);
                     ns.state = repair_state::row_level_start_finished;
+                    SCYLLA_USDT(repair_master_rpc_done, repair_meta_id, idx, unsigned(rpc_step::row_level_start), utils::usdt_us_since(usdt_start));
                     nodes_to_stop.push_back(ns);
+                    usdt_start = std::chrono::steady_clock::now();
                     ns.state = repair_state::get_estimated_partitions_started;
                     uint64_t partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
                     ns.state = repair_state::get_estimated_partitions_finished;
+                    SCYLLA_USDT(repair_master_rpc_done, repair_meta_id, idx, unsigned(rpc_step::get_estimated_partitions), utils::usdt_us_since(usdt_start));
                     rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
                     _estimated_partitions += partitions;
                 })).get();
@@ -3975,23 +4086,33 @@ public:
                 parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                     const auto& node = ns.node;
                     rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
+                    auto usdt_start = std::chrono::steady_clock::now();
                     ns.state = repair_state::set_estimated_partitions_started;
                     co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
                     ns.state = repair_state::set_estimated_partitions_finished;
+                    SCYLLA_USDT(repair_master_rpc_done, repair_meta_id, index_of(master, node), unsigned(rpc_step::set_estimated_partitions), utils::usdt_us_since(usdt_start));
                 })).get();
 
                 while (true) {
+                    auto usdt_round_start = std::chrono::steady_clock::now();
+                    auto round_done = [&] (round_outcome outcome) {
+                        SCYLLA_USDT(repair_round_done, repair_meta_id, master.stats().round_nr, unsigned(outcome), utils::usdt_us_since(usdt_round_start));
+                    };
                     auto status = negotiate_sync_boundary(master);
                     if (status == op_status::next_round) {
+                        round_done(round_outcome::synced_by_boundary);
                         continue;
                     } else if (status == op_status::all_done) {
+                        round_done(round_outcome::no_more_data);
                         break;
                     }
                     status = get_missing_rows_from_follower_nodes(master);
                     if (status == op_status::next_round) {
+                        round_done(round_outcome::synced_by_combined_hash);
                         continue;
                     }
                     send_missing_rows_to_follower_nodes(master);
+                    round_done(round_outcome::slow_path);
                 }
             } catch (replica::no_such_column_family& e) {
                 table_dropped = true;
@@ -4015,11 +4136,23 @@ public:
 
             parallel_for_each(nodes_to_stop, coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                 auto node = ns.node;
+                auto usdt_start = std::chrono::steady_clock::now();
                 master.set_repair_state(repair_state::row_level_stop_started, node);
                 co_await master.repair_row_level_stop(node, _rstate.get_keyspace(), _cf_name, _range, ns.shard, mark_as_repaired);
                 master.set_repair_state(repair_state::row_level_stop_finished, node);
+                SCYLLA_USDT(repair_master_rpc_done, repair_meta_id, index_of(master, node), unsigned(rpc_step::row_level_stop), utils::usdt_us_since(usdt_start));
             })).get();
 
+            {
+                const auto& st = master.stats();
+                uint64_t row_from_disk_bytes = 0;
+                for (const auto& [node, bytes] : st.row_from_disk_bytes) {
+                    row_from_disk_bytes += bytes;
+                }
+                SCYLLA_USDT(repair_master_done, repair_meta_id, utils::usdt_us_since(usdt_run_start), st.round_nr,
+                        st.round_nr_fast_path_already_synced + st.round_nr_fast_path_same_combined_hashes, st.round_nr_slow_path, _failed);
+                SCYLLA_USDT(repair_master_stats, repair_meta_id, row_from_disk_bytes, st.tx_row_bytes, st.rx_row_bytes, st.tx_hashes_nr, st.rx_hashes_nr);
+            }
             _rstate.update_statistics(master.stats());
             if (_failed) {
                 if (table_dropped) {
@@ -4319,7 +4452,9 @@ repair_service::insert_repair_meta(
         bool explicit_dst_cpu_id) {
     schema_ptr s = co_await get_migration_manager().get_schema_for_write(schema_version, from_id, src_cpu_id, get_messaging(), as);
     auto& db = get_db();
+    auto usdt_permit_start = std::chrono::steady_clock::now();
     reader_permit permit = co_await db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {});
+    SCYLLA_USDT(repair_meta_permit_done, s->ks_name().c_str(), s->cf_name().c_str(), utils::usdt_us_since(usdt_permit_start));
     node_repair_meta_id id{from_id, repair_meta_id};
     auto rm = seastar::make_shared<repair_meta>(*this,
             get_db().local().find_column_family(s->id()),
@@ -4402,7 +4537,9 @@ repair_service::remove_repair_meta(const locator::host_id& from,
         rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} started", id.repair_meta_id, id.ip);
         co_await rm->stop();
         if (mark_as_repaired) {
+            auto usdt_start = std::chrono::steady_clock::now();
             co_await rm->mark_sstable_as_repaired();
+            SCYLLA_USDT(repair_meta_mark_repaired_done, ks_name.c_str(), cf_name.c_str(), utils::usdt_us_since(usdt_start));
         }
         rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
     }

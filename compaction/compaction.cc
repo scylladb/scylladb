@@ -51,6 +51,7 @@
 #include "utils/error_injection.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/pretty_printers.hh"
+#include "utils/usdt.hh"
 #include "readers/multi_range.hh"
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
@@ -2201,18 +2202,34 @@ public:
 future<compaction_result> compaction::run(std::unique_ptr<compaction> c) {
     return seastar::async([c = std::move(c)] () mutable {
         c->setup().get();
-        auto consumer = c->consume();
 
-        auto start_time = db_clock::now();
+        // Probe arguments are kept apart from c, which is reset on failure below.
+        const schema_ptr schema = c->_schema;
+        const std::string_view type = to_string(c->_type);
+        auto usdt_start = std::chrono::steady_clock::now();
+        SCYLLA_USDT(compaction_start, schema->ks_name().c_str(), schema->cf_name().c_str(), type.data(),
+                    c->_sstables.size(), c->_start_size);
         try {
-           consumer.get();
+            auto consumer = c->consume();
+
+            auto start_time = db_clock::now();
+            try {
+               consumer.get();
+            } catch (...) {
+                c->on_interrupt(std::current_exception());
+                c = nullptr; // make sure writers are stopped while running in thread context. This is because of calls to file.close().get();
+                throw;
+            }
+
+            auto ret = c->finish(std::move(start_time), db_clock::now());
+            SCYLLA_USDT(compaction_done, schema->ks_name().c_str(), schema->cf_name().c_str(), type.data(),
+                        utils::usdt_us_since(usdt_start), c->_start_size, c->_end_size);
+            return ret;
         } catch (...) {
-            c->on_interrupt(std::current_exception());
-            c = nullptr; // make sure writers are stopped while running in thread context. This is because of calls to file.close().get();
+            SCYLLA_USDT(compaction_failed, schema->ks_name().c_str(), schema->cf_name().c_str(), type.data(),
+                        utils::usdt_us_since(usdt_start));
             throw;
         }
-
-        return c->finish(std::move(start_time), db_clock::now());
     });
 }
 

@@ -1,0 +1,40 @@
+#!/usr/bin/env bpftrace
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+/*
+ * scylla-largealloc: report every allocation above Seastar's large
+ * allocation warning threshold, with size and the allocating shard, and
+ * keep a size histogram and per-stack counts until Ctrl-C.
+ *
+ * This attaches a uprobe to Seastar's allocator rather than a scylla USDT
+ * probe, so the first argument is the file that holds the Seastar code:
+ * the scylla binary for release builds, libseastar.so for dev builds. When
+ * scylla runs in a container, prefix the path with /proc/<pid>/root.
+ *
+ * Usage:
+ *     bpftrace tools/bpftrace/scylla-largealloc.bt -p $(pgrep -x scylla) /usr/bin/scylla
+ *     bpftrace tools/bpftrace/scylla-largealloc.bt -p $(pgrep -x scylla) \
+ *         /proc/$(pgrep -x scylla)/root/path/to/build/dev/seastar/libseastar.so
+ *
+ * User stacks are only complete when scylla was built with
+ * -fno-omit-frame-pointer.
+ */
+
+BEGIN
+{
+    printf("Watching large allocations in %s... Hit Ctrl-C to end.\n", str($1));
+}
+
+uprobe:$1:*cpu_pages*warn_large_allocation*
+{
+    /* size is the second argument after this (dev builds); LTO drops the
+     * unused this pointer in release builds and the size is the first.
+     * A pointer is above 2^40 on x86_64, a size never is. */
+    $size = arg0 < (1 << 40) ? arg0 : arg1;
+    printf("%s %s: %d bytes\n", strftime("%H:%M:%S", nsecs), comm, $size);
+    @bytes = hist($size);
+    @by_thread[comm] = count();
+    @by_stack[ustack(8)] = count();
+}

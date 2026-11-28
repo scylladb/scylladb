@@ -500,6 +500,9 @@ See [Tell GDB to not stop on signals used by seastar](#tell-gdb-to-not-stop-on-s
 Guides focusing on different aspects of debugging Scylla. These guides
 assume a release build of Scylla.
 
+For observing a live node without GDB, see the USDT tracepoints in
+[usdt-tracing.md](usdt-tracing.md).
+
 #### The seastar memory allocator
 
 Seastar has its own memory allocator optimized for Seastar's

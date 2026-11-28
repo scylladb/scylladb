@@ -1,0 +1,111 @@
+#!/usr/bin/env bpftrace
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+/*
+ * scylla-query-impact: how much do background operations cost the reads on
+ * the same shard. For each of repair, memtable flush, compaction, LSA
+ * reclaim and row cache update, the read latency histogram of every shard
+ * is split into reads that ran while that operation was active on the
+ * shard and reads that ran outside it. On exit, prints one map per
+ * operation (@repair_us, @flush_us, @compaction_us, @reclaim_us,
+ * @cache_update_us) keyed [shard thread, during|outside], with the thread name
+ * as the first key and "all" for the whole node. An operation that was
+ * never active on the node during the capture prints a note instead of
+ * its map.
+ *
+ * Usage: bpftrace tools/bpftrace/scylla-query-impact.bt -p $(pgrep -x scylla)
+ *
+ * The shard key is the thread name: "scylla" is shard 0, "reactor-N"
+ * shard N.
+ *
+ * Repair is active on a shard from repair_meta_start to
+ * repair_meta_stop, which covers the node's own reads, hashing and
+ * writes for a range whether it is the master or a follower.
+ *
+ * Reading the output: compare the "during" and "outside" rows of one
+ * shard in one map; a p99 that only moves in the "during" row of one
+ * operation names the operation. The "outside" row of an operation
+ * still includes the other operations. The query probes fire for every
+ * read, so this tool costs a few microseconds per read on busy shards;
+ * keep the run short.
+ */
+
+BEGIN
+{
+    printf("Watching scylla read latency against background operations... Hit Ctrl-C to end.\n");
+}
+
+/* ---- what is active on each shard, as nesting counters per thread ---- */
+
+usdt:*:scylla:repair_meta_start { @repair[tid]++; @seen["repair"] = 1; }
+usdt:*:scylla:repair_meta_stop /@repair[tid] > 0/ { @repair[tid]--; }
+
+usdt:*:scylla:memtable_flush_start { @flush[tid]++; @seen["flush"] = 1; }
+usdt:*:scylla:memtable_flush_done,
+usdt:*:scylla:memtable_flush_failed /@flush[tid] > 0/ { @flush[tid]--; }
+
+usdt:*:scylla:compaction_start { @compaction[tid]++; @seen["compaction"] = 1; }
+usdt:*:scylla:compaction_done,
+usdt:*:scylla:compaction_failed /@compaction[tid] > 0/ { @compaction[tid]--; }
+
+usdt:*:scylla:lsa_reclaim_start { @reclaim[tid]++; @seen["reclaim"] = 1; }
+usdt:*:scylla:lsa_reclaim_done /@reclaim[tid] > 0/ { @reclaim[tid]--; }
+
+usdt:*:scylla:row_cache_update_start { @cache_update[tid]++; @seen["cache_update"] = 1; }
+usdt:*:scylla:row_cache_update_end /@cache_update[tid] > 0/ { @cache_update[tid]--; }
+
+/* ---- read latency split by what was active ---- */
+
+usdt:*:scylla:query_done
+{
+    /* per shard thread: "scylla" is shard 0, "reactor-N" shard N */
+    $shard = comm;
+    $repair = @repair[tid] > 0 ? "during" : "outside";
+    $flush = @flush[tid] > 0 ? "during" : "outside";
+    $compaction = @compaction[tid] > 0 ? "during" : "outside";
+    $reclaim = @reclaim[tid] > 0 ? "during" : "outside";
+    $cache = @cache_update[tid] > 0 ? "during" : "outside";
+    @repair_us[$shard, $repair] = hist(arg2);
+    @flush_us[$shard, $flush] = hist(arg2);
+    @compaction_us[$shard, $compaction] = hist(arg2);
+    @reclaim_us[$shard, $reclaim] = hist(arg2);
+    @cache_update_us[$shard, $cache] = hist(arg2);
+    @repair_us["all", $repair] = hist(arg2);
+    @flush_us["all", $flush] = hist(arg2);
+    @compaction_us["all", $compaction] = hist(arg2);
+    @reclaim_us["all", $reclaim] = hist(arg2);
+    @cache_update_us["all", $cache] = hist(arg2);
+}
+
+END
+{
+    /* the map of an operation that never ran only repeats the full distribution */
+    if (@seen["repair"] == 0) {
+        printf("no repair was active on this node during the capture\n");
+        clear(@repair_us);
+    }
+    if (@seen["flush"] == 0) {
+        printf("no memtable flush was active on this node during the capture\n");
+        clear(@flush_us);
+    }
+    if (@seen["compaction"] == 0) {
+        printf("no compaction was active on this node during the capture\n");
+        clear(@compaction_us);
+    }
+    if (@seen["reclaim"] == 0) {
+        printf("no LSA reclaim was active on this node during the capture\n");
+        clear(@reclaim_us);
+    }
+    if (@seen["cache_update"] == 0) {
+        printf("no row cache update was active on this node during the capture\n");
+        clear(@cache_update_us);
+    }
+    clear(@seen);
+    clear(@repair);
+    clear(@flush);
+    clear(@compaction);
+    clear(@reclaim);
+    clear(@cache_update);
+}

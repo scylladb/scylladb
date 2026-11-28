@@ -232,6 +232,7 @@ public:
     // Repair a single local range, multiple column families.
     // Comparable to RepairSession in Origin
     future<> repair_range(shard_repair_state& rstate, const dht::token_range& range, table_info table, gc_clock::time_point flush_time);
+    future<> do_repair_range(shard_repair_state& rstate, const dht::token_range& range, const table_info& table, gc_clock::time_point flush_time);
 
     // Repair the given shard_repair_state's ranges for all its tables, in limited
     // parallelism.
@@ -377,7 +378,8 @@ class repair_writer;
 future<> repair_cf_range_row_level(shard_repair_state& rstate,
         sstring cf_name, table_id table_id, dht::token_range range,
         const std::vector<locator::host_id>& all_peer_nodes, gc_clock::time_point flush_time);
-future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
+// Returns the rows and the wire size of the fragments they were built from.
+future<std::pair<std::list<repair_row>, size_t>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
 // False for fragments repair makes no row from: partition end, and partition start without a tombstone.

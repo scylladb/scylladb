@@ -1,0 +1,105 @@
+#!/usr/bin/env bpftrace
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+/*
+ * scylla-repair-rounds: one line per step of every row-level repair round
+ * on the repair master, for following a single slow range. Attach on the
+ * node that runs the repair. Each line starts with the repair_meta_id
+ * (meta=N), which the scylla-repair-tablet.bt summary and the peers'
+ * scylla-repair-follower.bt lines carry too. Node 0 is the master itself,
+ * nodes 1.. are the peers in the order printed at start.
+ *
+ * Usage: bpftrace tools/bpftrace/scylla-repair-rounds.bt -p $(pgrep -x scylla)
+ *
+ * Filter one table by editing the predicate on repair_master_start, or
+ * post-process with grep on meta=N.
+ */
+
+BEGIN
+{
+    printf("Tracing scylla row-level repair rounds... Hit Ctrl-C to end.\n");
+}
+
+usdt:*:scylla:repair_master_start
+{
+    printf("%s meta=%u start %s.%s peers=%ld buf=%ld KB mode=%s\n", strftime("%H:%M:%S", nsecs),
+           arg0, str(arg1), str(arg2), arg3, arg4 / 1024,
+           arg5 == 0 ? "full" : (arg5 == 1 ? "incremental" : "rebuild"));
+}
+
+usdt:*:scylla:repair_master_peer
+{
+    printf("%s meta=%u node %ld = %016lx%016lx shard %ld\n", strftime("%H:%M:%S", nsecs),
+           arg0, arg1, arg2, arg3, arg4);
+}
+
+usdt:*:scylla:repair_master_wait_done
+{
+    printf("%s meta=%u waited memory %ld us, permit %ld us\n", strftime("%H:%M:%S", nsecs), arg0, arg1, arg2);
+}
+
+usdt:*:scylla:repair_master_rpc_done
+{
+    printf("%s meta=%u node %ld %s %ld us\n", strftime("%H:%M:%S", nsecs), arg0, arg1,
+           arg2 == 1 ? "row_level_start" : (arg2 == 2 ? "get_estimated_partitions" : (arg2 == 3 ? "set_estimated_partitions" : "row_level_stop")),
+           arg3);
+}
+
+usdt:*:scylla:repair_round_start
+{
+    printf("%s meta=%u round %ld start\n", strftime("%H:%M:%S", nsecs), arg0, arg1);
+}
+
+usdt:*:scylla:repair_round_sync_boundary_done
+{
+    printf("%s meta=%u round %ld node %ld sync_boundary %ld rows %ld KB %ld us\n", strftime("%H:%M:%S", nsecs),
+           arg0, arg1, arg2, arg3, arg4 / 1024, arg5);
+}
+
+usdt:*:scylla:repair_round_combined_hash_done
+{
+    printf("%s meta=%u round %ld node %ld combined_hash %ld us\n", strftime("%H:%M:%S", nsecs), arg0, arg1, arg2, arg3);
+}
+
+usdt:*:scylla:repair_round_full_hashes_done
+{
+    printf("%s meta=%u round %ld node %ld full_hashes %ld hashes %ld us\n", strftime("%H:%M:%S", nsecs), arg0, arg1, arg2, arg3, arg4);
+}
+
+usdt:*:scylla:repair_round_get_diff_done
+{
+    printf("%s meta=%u round %ld node %ld get_diff %ld rows %ld KB %ld us\n", strftime("%H:%M:%S", nsecs),
+           arg0, arg1, arg2, arg3, arg4 / 1024, arg5);
+}
+
+usdt:*:scylla:repair_round_put_diff_done
+{
+    printf("%s meta=%u round %ld node %ld put_diff %ld rows %ld KB %ld us\n", strftime("%H:%M:%S", nsecs),
+           arg0, arg1, arg2, arg3, arg4 / 1024, arg5);
+}
+
+usdt:*:scylla:repair_round_flush_rows_done
+{
+    printf("%s meta=%u round %ld flush_rows %ld us\n", strftime("%H:%M:%S", nsecs), arg0, arg1, arg2);
+}
+
+usdt:*:scylla:repair_round_done
+{
+    printf("%s meta=%u round %ld done %s %ld us\n", strftime("%H:%M:%S", nsecs), arg0, arg1,
+           arg2 == 0 ? "synced_by_boundary" : (arg2 == 1 ? "synced_by_combined_hash" : (arg2 == 2 ? "slow_path" : "no_more_data")),
+           arg3);
+}
+
+usdt:*:scylla:repair_master_done
+{
+    printf("%s meta=%u done %s%ld ms, %ld rounds (%ld fast, %ld slow)\n", strftime("%H:%M:%S", nsecs),
+           arg0, arg5 ? "FAILED " : "", arg1 / 1000, arg2, arg3, arg4);
+}
+
+usdt:*:scylla:repair_master_stats
+{
+    printf("%s meta=%u disk %ld KB, tx %ld KB, rx %ld KB, hashes tx %ld rx %ld\n", strftime("%H:%M:%S", nsecs),
+           arg0, arg1 / 1024, arg2 / 1024, arg3 / 1024, arg4, arg5);
+}
