@@ -189,6 +189,27 @@ class ScyllaRESTAPIClient:
         assert isinstance(data, list)
         return data
 
+    async def get_endpoint_states(self, node_ip: IPAddress) -> list[dict[str, Any]]:
+        """Retrieve the gossip state of all endpoints from gossiper's point of view.
+
+        Each entry has "addrs", "is_alive", "generation", "version", "update_time"
+        and "application_state": a list of {"application_state", "value", "version"},
+        where "application_state" is the index in gms::application_state.
+        """
+        data = await self.client.get_json("/failure_detector/endpoints/", node_ip)
+        assert isinstance(data, list)
+        return data
+
+    async def sees_cql_ready(self, node_ip: IPAddress, endpoint_ip: IPAddress) -> bool:
+        """Whether node_ip sees the CQL server of endpoint_ip as ready, according to its gossip state.
+        False also when it has no gossip state for endpoint_ip."""
+        RPC_READY = 17 # gms::application_state::RPC_READY
+        for endpoint in await self.get_endpoint_states(node_ip):
+            if endpoint["addrs"] == str(endpoint_ip):
+                return any(state["application_state"] == RPC_READY and int(state["value"]) != 0
+                           for state in endpoint["application_state"])
+        return False
+
     async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
                           ignore_dead: list[IPAddress], timeout: float) -> None:
         """Initiate remove node of host_id in initiator initiator_ip"""
