@@ -3367,7 +3367,12 @@ check_compatibility(const vector_type_impl &t, const abstract_type& previous, bo
     if (!x) {
         return false;
     }
-    return ((*t.get_elements_type()).*predicate)(*x->get_elements_type()) && t.get_dimension() == x->get_dimension();
+    // A vector of fixed-length elements is serialized without the elements'
+    // lengths, so its elements must also have the same fixed length, or both
+    // be of variable length - even if each element could be interpreted as
+    // the other type, the vector as a whole can't.
+    return ((*t.get_elements_type()).*predicate)(*x->get_elements_type()) && t.get_dimension() == x->get_dimension()
+            && t.get_elements_type()->value_length_if_fixed() == x->get_elements_type()->value_length_if_fixed();
 }
 
 static bool is_value_compatible_with_internal_aux(const user_type_impl& t, const abstract_type& previous) {
