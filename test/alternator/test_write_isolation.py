@@ -51,7 +51,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from .util import create_test_table, random_string, new_test_table
+from .util import create_test_table, random_string, new_test_table, scylla_config_temporary
 
 @pytest.fixture(scope="function", autouse=True)
 def all_tests_are_scylla_only(scylla_only):
@@ -480,3 +480,20 @@ def test_isolation_batchwriteitem(dynamodb):
             assert table.get_item(Key={'p': p1, 'c': 'item3'}, ConsistentRead=True)['Item'] == {'p': p1, 'c': 'item3', 'x': 'dog'}
             assert table.get_item(Key={'p': p1, 'c': 'item4'}, ConsistentRead=True)['Item'] == {'p': p1, 'c': 'item4', 'x': 'cat'}
             assert table.get_item(Key={'p': p2, 'c': 'item5'}, ConsistentRead=True)['Item'] == {'p': p2, 'c': 'item5', 'x': 'mouse'}
+
+#############################################################################
+# The alternator_force_read_before_write configuration option makes UpdateItem
+# and DeleteItem read the item before writing it, only to calculate the write
+# capacity units (WCU) they consume. This read is not part of the operation,
+# so it must not make a write-only UpdateItem or DeleteItem a
+# read-modify-write operation, which forbid_rmw mode would reject.
+# Reproduces SCYLLADB-6144.
+def test_isolation_force_read_before_write(dynamodb, table_forbid_rmw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        p = random_string()
+        table_forbid_rmw.update_item(Key={'p': p},
+            UpdateExpression='SET a = :val',
+            ExpressionAttributeValues={':val': 1})
+        assert table_forbid_rmw.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1}
+        table_forbid_rmw.delete_item(Key={'p': p})
+        assert 'Item' not in table_forbid_rmw.get_item(Key={'p': p}, ConsistentRead=True)
