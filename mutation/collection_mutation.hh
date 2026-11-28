@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <seastar/core/future.hh>
 #include "utils/chunked_vector.hh"
 #include "schema/schema_fwd.hh"
 #include "gc_clock.hh"
@@ -18,6 +19,8 @@
 #include <forward_list>
 #include <iterator>
 #include <optional>
+#include <seastar/core/byteorder.hh>
+#include "utils/fragment_range.hh"
 
 class abstract_type;
 class compaction_garbage_collector;
@@ -102,6 +105,11 @@ public:
     iterator begin() const;
     iterator end() const;
 
+    // Calls fn(key, cell) for each element until it returns false. Cheaper than
+    // the iterator in hot loops: elements are parsed in place, not copied out.
+    template <typename Fn>
+    void for_each_element(Fn&& fn) const;
+
     class printer {
         const abstract_type& _type;
         const collection_mutation_view& _cmv;
@@ -111,6 +119,80 @@ public:
         friend fmt::formatter<printer>;
     };
 };
+
+namespace collection_mutation_detail {
+
+// Size of the element framed at the start of `frag`, or 0 if it does not lie wholly within it.
+[[gnu::always_inline]] inline size_t contiguous_element_size(bytes_view frag) {
+    constexpr size_t len_size = sizeof(uint32_t);
+    const auto p = reinterpret_cast<const char*>(frag.data());
+    if (frag.size() < 2 * len_size) {
+        return 0;
+    }
+    const size_t key_size = seastar::read_be<uint32_t>(p);
+    if (frag.size() - 2 * len_size < key_size) {
+        return 0;
+    }
+    const size_t value_size = seastar::read_be<uint32_t>(p + len_size + key_size);
+    if (frag.size() - 2 * len_size - key_size < value_size) {
+        return 0;
+    }
+    return 2 * len_size + key_size + value_size;
+}
+
+// Reads (and consumes) one element's key and value bytes from `v`. Elements
+// almost always lie within one fragment; parse those without fragmented reads.
+[[gnu::always_inline]] inline std::pair<managed_bytes_view, managed_bytes_view> read_element(managed_bytes_view& v) {
+    constexpr size_t len_size = sizeof(uint32_t);
+    const auto frag = v.current_fragment();
+    if (const auto total = contiguous_element_size(frag)) {
+        const size_t key_size = seastar::read_be<uint32_t>(reinterpret_cast<const char*>(frag.data()));
+        std::pair<managed_bytes_view, managed_bytes_view> ret{
+                managed_bytes_view(frag.substr(len_size, key_size)),
+                managed_bytes_view(frag.substr(2 * len_size + key_size, total - 2 * len_size - key_size))};
+        v.remove_prefix(total);
+        return ret;
+    }
+    auto key = v.prefix(read_simple<uint32_t>(v));
+    v.remove_prefix(key.size_bytes());
+    auto value = v.prefix(read_simple<uint32_t>(v));
+    v.remove_prefix(value.size_bytes());
+    return {key, value};
+}
+
+// Reads (and consumes) the tombstone prefix from `v`; empty if the has_tombstone flag is not set.
+inline tombstone read_collection_tombstone(managed_bytes_view& v) {
+    if (read_simple<uint8_t>(v)) {
+        auto timestamp = read_simple<api::timestamp_type>(v);
+        auto deletion_time = read_simple<gc_clock::duration::rep>(v);
+        return tombstone{timestamp, gc_clock::time_point(gc_clock::duration(deletion_time))};
+    }
+    return tombstone{};
+}
+
+// Reads (and consumes) the cell-count field, after the tombstone.
+inline uint32_t read_collection_size(managed_bytes_view& v) {
+    return read_simple<uint32_t>(v);
+}
+
+// Skips the tombstone and returns the element count.
+inline uint32_t skip_header(managed_bytes_view& v) {
+    read_collection_tombstone(v);
+    return read_collection_size(v);
+}
+
+}
+
+template <typename Fn>
+void collection_mutation_view::for_each_element(Fn&& fn) const {
+    auto v = data;
+    for (auto n = collection_mutation_detail::skip_header(v); n; --n) {
+        auto [key, value] = collection_mutation_detail::read_element(v);
+        if (!fn(key, atomic_cell_view::from_bytes(value))) {
+            return;
+        }
+    }
+}
 
 // A serialized mutation of a collection of cells.
 // Used to represent mutations of collections (lists, maps, sets) or non-frozen user defined types.
@@ -158,6 +240,8 @@ public:
     void push_back(managed_bytes_view key, atomic_cell value) {
         push_back(std::move(key), atomic_cell_view(value));
     }
+    // Appends `count` already-serialized elements verbatim.
+    void append_serialized(managed_bytes_view elements, uint32_t count);
 
     void push_back(value_type kv) {
         push_back(std::move(kv.first), std::move(kv.second));
@@ -170,6 +254,22 @@ struct collection_mutation_compact_and_expire_result {
     collection_mutation collection; // can be empty
     compact_and_expire_result result;
 };
+
+struct collection_mutation_compact_and_expire_if_changed_result {
+    std::optional<collection_mutation> collection; // nullopt: cmv is unchanged
+    compact_and_expire_result result;
+};
+
+// compact_and_expire() that returns no copy of a collection it leaves unchanged.
+collection_mutation_compact_and_expire_if_changed_result compact_and_expire_if_changed(
+        collection_mutation_view cmv,
+        column_id id,
+        const abstract_type& type,
+        row_tombstone base_tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before,
+        compaction_garbage_collector* collector);
 
 // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
 // Removes cells covered by base_tomb or cmv.tomb.
@@ -185,6 +285,10 @@ collection_mutation_compact_and_expire_result compact_and_expire(
 
 collection_mutation merge(const abstract_type&, collection_mutation_view, collection_mutation_view);
 
+// Size from which collection merges take their large-collection fast paths.
+// Tests lower it, per shard, to cover them.
+extern thread_local size_t collection_fast_path_min_size;
+
 collection_mutation difference(const abstract_type&, collection_mutation_view, collection_mutation_view);
 
 // Transcode a collection from the IDL representation directly into the
@@ -192,9 +296,17 @@ collection_mutation difference(const abstract_type&, collection_mutation_view, c
 // Only the final collection-mutation blob is allocated, no intermediate allocations needed.
 // Safe to use in LSA, it won't produce garbage.
 collection_mutation read_from_collection_cell_view(const abstract_type&, const ser::collection_cell_view&);
+// Same, yielding inside the cell so that a large collection does not stall.
+// Not for LSA: compaction could move the output buffer while it yields.
+seastar::future<collection_mutation> read_from_collection_cell_view_gently(const ser::collection_cell_view&);
+// Size of a collection cell from which the gentle (un)freezing paths yield inside it.
+constexpr size_t gentle_collection_min_size = 128 * 1024;
 
 // Serializes the given collection of cells to a sequence of bytes ready to be sent over the CQL protocol.
 bytes_ostream serialize_for_cql(const abstract_type&, collection_mutation_view);
+
+// The size of serialize_for_cql()'s output, computed without materializing it.
+size_t serialized_size_for_cql(const abstract_type&, collection_mutation_view);
 
 // Like serialize_for_cql, but uses an extended format that embeds per-element
 // timestamps and expiries, for use with WRITETIME(col[key]) / TTL(col[key])
