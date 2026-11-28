@@ -18,6 +18,7 @@
 #include <seastar/testing/test_fixture.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/core/metrics_api.hh>
 
 #include "db/config.hh"
 #include "sstables/sstables_manager.hh"
@@ -35,6 +36,8 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/gcs_fixture.hh"
+#include "test/lib/eventually.hh"
+#include "utils/memory_data_sink.hh"
 
 namespace fs = std::filesystem;
 
@@ -127,6 +130,193 @@ future<> test_sstable_attributes(test_env_config cfg) {
         BOOST_REQUIRE_EQUAL(attributes.at(sstring(object_storage_sstable_version_attribute)), fmt::format("{}", sst->get_version()));
         BOOST_REQUIRE_EQUAL(attributes.at(sstring(object_storage_sstable_format_attribute)), fmt::format("{}", sst->get_format()));
     }, std::move(cfg));
+}
+
+// The http client counts a request once in total_*_requests; its retries are a separate counter.
+static double object_storage_delete_requests() {
+    double total = 0;
+    const auto& value_map = seastar::metrics::impl::get_value_map();
+    if (auto it = value_map.find("object_storage_total_delete_requests"); it != value_map.end()) {
+        for (const auto& [holder, reg] : it->second) {
+            if (reg && reg->is_enabled()) {
+                total += (*reg)().d();
+            }
+        }
+    }
+    return total;
+}
+
+// Every object under "{prefix}/{sid}/", by name relative to it.
+static std::vector<sstring> list_sstable_objects(sstables::object_storage_client& client, const sstring& bucket, const sstring& prefix, sstable_id sid) {
+    auto lister = client.make_object_lister(bucket, fmt::format("{}/{}/", prefix, sid), [] (const fs::path&, const directory_entry&) { return true; });
+    std::vector<sstring> names;
+    while (auto de = lister.get().get()) {
+        names.push_back(de->name);
+    }
+    lister.close().get();
+    return names;
+}
+
+static size_t count_components(const std::vector<sstring>& objects) {
+    return std::ranges::count_if(objects, [] (const sstring& name) { return !name.starts_with("refs/"); });
+}
+
+static shared_sstable make_object_storage_sstable(test_env& env) {
+    simple_schema ss;
+    auto schema = ss.schema();
+    auto mut = mutation(schema, tests::generate_partition_key(schema).key());
+    mut.partition().apply_insert(*schema, ss.make_ckey(0), ss.new_timestamp());
+    return make_sstable_containing(env.make_sstable(schema), {std::move(mut)}).get();
+}
+
+enum class removal { release_snapshot_ref, remove_by_registry_entry, destroy };
+
+// Removes the last reference of a freshly written sstable in the given way and
+// checks that only the objects actually there are deleted, and all of them.
+static future<> test_removal_deletes_existing_objects(test_env_config cfg, removal how) {
+    auto os = std::get<data_dictionary::storage_options::object_storage>(cfg.storage.value);
+    return test_env::do_with_async([os, how] (test_env& env) {
+        auto bucket = sstring(os.bucket);
+        auto prefix = sstables::object_storage_prefix(os);
+        auto client = env.manager().get_endpoint_client(env.db_config().object_storage_endpoints().front().key());
+        auto sst = make_object_storage_sstable(env);
+        auto sid = *sst->sstable_identifier();
+        entry_descriptor desc(sst->generation(), sid, sst->get_version(), sst->get_format(), component_type::TOC);
+
+        auto objects = list_sstable_objects(*client, bucket, prefix, sid);
+        auto components = count_components(objects);
+        BOOST_REQUIRE_GT(components, 0);
+        // The node reference written with the sstable.
+        BOOST_REQUIRE_EQUAL(objects.size() - components, 1);
+
+        auto deletes = object_storage_delete_requests();
+        switch (how) {
+        case removal::release_snapshot_ref:
+            // Trade the node reference for a snapshot one, which is then the last.
+            for (auto& name : objects) {
+                if (name.starts_with("refs/")) {
+                    client->delete_object(sstables::object_name(bucket, prefix, sid, name)).get();
+                }
+            }
+            client->put_object(sstables::object_name(bucket, prefix, sid, object_storage_snapshot_ref_name("snap", desc.generation)),
+                    memory_data_sink_buffers(), {}).get();
+            deletes = object_storage_delete_requests();
+            release_object_storage_snapshot_ref(*client, os, "snap", desc).get();
+            break;
+        case removal::remove_by_registry_entry:
+            sst->get_storage().remove_by_registry_entry(desc, env.manager().get_local_host_id()).get();
+            break;
+        case removal::destroy:
+            sst->unlink().get();
+            sst = {};
+            // destroy() runs in the background once the last reference is dropped.
+            BOOST_REQUIRE(eventually_true([&] { return list_sstable_objects(*client, bucket, prefix, sid).empty(); }));
+            break;
+        }
+        BOOST_REQUIRE(list_sstable_objects(*client, bucket, prefix, sid).empty());
+        // S3 batches the DELETEs; elsewhere it's one per object there: the components and the last reference.
+        if (os.type != "S3") {
+            BOOST_REQUIRE_EQUAL(object_storage_delete_requests() - deletes, components + 1);
+        }
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(test_release_snapshot_ref_deletes_existing_objects_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_removal_deletes_existing_objects(test_env_config{ .storage = make_test_object_storage_options("S3") }, removal::release_snapshot_ref);
+}
+
+SEASTAR_TEST_CASE(test_remove_by_registry_entry_deletes_existing_objects_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_removal_deletes_existing_objects(test_env_config{ .storage = make_test_object_storage_options("S3") }, removal::remove_by_registry_entry);
+}
+
+SEASTAR_TEST_CASE(test_destroy_deletes_existing_objects_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_removal_deletes_existing_objects(test_env_config{ .storage = make_test_object_storage_options("S3") }, removal::destroy);
+}
+
+// Another reference left keeps the components, and only the removed reference is deleted.
+static future<> test_removal_keeps_referenced_objects(test_env_config cfg, removal how) {
+    auto os = std::get<data_dictionary::storage_options::object_storage>(cfg.storage.value);
+    return test_env::do_with_async([os, how] (test_env& env) {
+        auto bucket = sstring(os.bucket);
+        auto prefix = sstables::object_storage_prefix(os);
+        auto client = env.manager().get_endpoint_client(env.db_config().object_storage_endpoints().front().key());
+        auto sst = make_object_storage_sstable(env);
+        auto sid = *sst->sstable_identifier();
+        entry_descriptor desc(sst->generation(), sid, sst->get_version(), sst->get_format(), component_type::TOC);
+        client->put_object(sstables::object_name(bucket, prefix, sid, object_storage_snapshot_ref_name("snap", desc.generation)),
+                memory_data_sink_buffers(), {}).get();
+        auto components = count_components(list_sstable_objects(*client, bucket, prefix, sid));
+        auto tid = sst->get_schema()->id();
+        auto gen = sst->generation();
+
+        auto deletes = object_storage_delete_requests();
+        switch (how) {
+        case removal::release_snapshot_ref:
+            // The node reference stays.
+            release_object_storage_snapshot_ref(*client, os, "snap", desc).get();
+            break;
+        case removal::remove_by_registry_entry:
+            sst->get_storage().remove_by_registry_entry(desc, env.manager().get_local_host_id()).get();
+            break;
+        case removal::destroy:
+            sst->unlink().get();
+            sst = {};
+            // destroy() deletes the registry entry last, after any component DELETEs.
+            BOOST_REQUIRE(eventually_true([&] {
+                bool found = false;
+                env.manager().sstables_registry().sstables_registry_list(tid, env.manager().get_local_host_id(),
+                        [&] (sstring, sstable_state, entry_descriptor e) { found |= e.generation == gen; return make_ready_future<>(); }).get();
+                return !found;
+            }));
+            break;
+        }
+        BOOST_REQUIRE_EQUAL(object_storage_delete_requests() - deletes, 1);
+        auto left = list_sstable_objects(*client, bucket, prefix, sid);
+        BOOST_REQUIRE_EQUAL(count_components(left), components);
+        BOOST_REQUIRE_EQUAL(left.size(), components + 1);
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(test_release_snapshot_ref_keeps_referenced_objects_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_removal_keeps_referenced_objects(test_env_config{ .storage = make_test_object_storage_options("S3") }, removal::release_snapshot_ref);
+}
+
+SEASTAR_TEST_CASE(test_remove_by_registry_entry_keeps_referenced_objects_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_removal_keeps_referenced_objects(test_env_config{ .storage = make_test_object_storage_options("S3") }, removal::remove_by_registry_entry);
+}
+
+SEASTAR_TEST_CASE(test_destroy_keeps_referenced_objects_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_removal_keeps_referenced_objects(test_env_config{ .storage = make_test_object_storage_options("S3") }, removal::destroy);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_release_snapshot_ref_deletes_existing_objects_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_removal_deletes_existing_objects(test_env_config{ .storage = make_test_object_storage_options("GS") }, removal::release_snapshot_ref);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_remove_by_registry_entry_deletes_existing_objects_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_removal_deletes_existing_objects(test_env_config{ .storage = make_test_object_storage_options("GS") }, removal::remove_by_registry_entry);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_destroy_deletes_existing_objects_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_removal_deletes_existing_objects(test_env_config{ .storage = make_test_object_storage_options("GS") }, removal::destroy);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_release_snapshot_ref_keeps_referenced_objects_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_removal_keeps_referenced_objects(test_env_config{ .storage = make_test_object_storage_options("GS") }, removal::release_snapshot_ref);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_remove_by_registry_entry_keeps_referenced_objects_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_removal_keeps_referenced_objects(test_env_config{ .storage = make_test_object_storage_options("GS") }, removal::remove_by_registry_entry);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_destroy_keeps_referenced_objects_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_removal_keeps_referenced_objects(test_env_config{ .storage = make_test_object_storage_options("GS") }, removal::destroy);
 }
 
 constexpr auto large_size = 256 * 1024 * 1024 + 351;
