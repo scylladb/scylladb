@@ -26,6 +26,12 @@ much faster.
 `build/*/scylla` - but this choice of Scylla executable can be overridden with
 the `SCYLLA` environment variable.
 
+If Scylla was built with the frozen toolchain (`tools/toolchain/dbuild`),
+it may need shared libraries which the host doesn't have. `run` starts Scylla
+through `tools/toolchain/run-scylla`, which notices this, and then runs
+Scylla - still on the host - with the shared libraries of dbuild's image.
+See `tools/toolchain/README.md`.
+
 By default, `pytest` or `test/alternator/run` run all Alternator tests.
 You can pass different options to control which tests run:
 

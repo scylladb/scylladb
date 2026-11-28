@@ -48,6 +48,27 @@ You will have access to both scylla and scylla-ccm in the container.
 Interactive mode is also supported: running `dbuild` with no arguments
 will drop you into a shell, with all of the toolchain accessible.
 
+## Running Scylla on the host: `run-scylla`
+
+A Scylla built with `dbuild` may not run on the host, if the host doesn't
+have the shared libraries it needs, or versions of them. The script
+`run-scylla` runs it anyway - on the host, not in a container - with the
+dynamic linker and shared libraries of dbuild's image, the same way a
+relocatable package runs with the libraries it bundles:
+
+    ./tools/toolchain/run-scylla build/dev/scylla --developer-mode 1
+
+If the host can run Scylla, `run-scylla` just runs it. Either way, Scylla
+replaces the script's process, so its process ID, exit status and signals
+are Scylla's. `test/cqlpy/run` and `test/alternator/run` start Scylla this
+way.
+
+`run-scylla` needs podman or docker, as `dbuild` itself does. With rootless
+podman and a single-layer image, as built by `prepare`, it uses the image's
+library directory directly. Otherwise, it first copies the libraries Scylla
+needs out of the image to `build/dbuild-libs`. If Scylla was built with
+`dbuild --image`, set `SCYLLA_DBUILD_IMAGE` to the same image.
+
 ## Obtaining the current toolchain
 
 The toolchain is stored in a file called `tools/toolchain/image`. Normally,

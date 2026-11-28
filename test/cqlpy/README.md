@@ -28,6 +28,12 @@ the `NODETOOL` environment variable. Nodetool is **not** needed to test
 Scylla: the few tests that run nodetool against Scylla use the running
 Scylla's own `scylla nodetool`.
 
+If Scylla was built with the frozen toolchain (`tools/toolchain/dbuild`),
+it may need shared libraries which the host doesn't have. "run" starts Scylla
+through `tools/toolchain/run-scylla`, which notices this, and then runs
+Scylla - still on the host - with the shared libraries of dbuild's image.
+See `tools/toolchain/README.md`.
+
 Modern Linux distributions usually do not carry a Cassandra package, so if
 you want to install Cassandra to run tests against it, please refer to the
 appendix below on _Installing Cassandra_.
