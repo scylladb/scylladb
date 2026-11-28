@@ -107,6 +107,11 @@ public:
 bool hosts_raft_group(const locator::tablet_info& tinfo,
         const locator::tablet_transition_info* trinfo, const locator::tablet_replica& replica);
 
+// The raft group configuration implied by a tablet's replica set and the stage its
+// migration is in.
+raft::config_member_set expected_raft_config(const locator::tablet_info& tinfo,
+        const locator::tablet_transition_info* trinfo);
+
 /// A sharded service responsible for the lifecycle and access
 /// management of all Raft groups for strongly consistent tablets hosted on this node.
 ///

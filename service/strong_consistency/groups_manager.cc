@@ -867,7 +867,7 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
 // removed by a later stage, once no request can still be inside its raft server with
 // a view that lets it serve. The pending replica joins as a non-voter and is promoted
 // once it has caught up.
-static raft::config_member_set expected_raft_config(
+raft::config_member_set expected_raft_config(
         const locator::tablet_info& tinfo,
         const locator::tablet_transition_info* trinfo) {
     // The non-voter is inserted after the voters, so that an intra-node migration, where
