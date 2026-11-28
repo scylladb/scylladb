@@ -420,14 +420,14 @@ repair_reader::read_mutation_fragment() {
 
 future<> repair_reader::on_end_of_stream() noexcept {
     co_await _reader.close();
-    _permit.release_base_resources();
+    _permit.release_credited_resources();
     _reader = mutation_fragment_v1_stream(make_empty_mutation_reader(_schema, _permit));
     _reader_handle.reset();
 }
 
 future<> repair_reader::close() noexcept {
     co_await _reader.close();
-    _permit.release_base_resources();
+    _permit.release_credited_resources();
     _reader_handle.reset();
 }
 

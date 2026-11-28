@@ -216,8 +216,6 @@ public:
         uint64_t reads_queued_because_memory_resources = 0;
         // Total number of reads enqueued because there weren't enough count resources
         uint64_t reads_queued_because_count_resources = 0;
-        // Total number of reads enqueued to be maybe admitted after evicting some inactive reads
-        uint64_t reads_queued_with_eviction = 0;
         // Total number of permits created so far.
         uint64_t total_permits = 0;
         // Current number of permits.
@@ -321,9 +319,6 @@ private:
     [[nodiscard]] mutation_reader detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
     void evict(reader_permit::impl&, evict_reason reason) noexcept;
 
-    enum class reason { all_ok = 0, ready_list, need_cpu_permits, memory_resources, count_resources };
-    reason has_available_units(const resources& r) const;
-
     bool cpu_concurrency_limit_reached() const;
 
     [[nodiscard]] std::exception_ptr check_queue_size(std::string_view queue_name);
@@ -338,13 +333,12 @@ private:
     // Check whether permit can be admitted or not.
     // The wait list is not taken into consideration, this is the caller's
     // responsibility.
-    // A return value of can_admit::maybe means admission might be possible if
-    // some of the inactive readers are evicted.
-    enum class can_admit { no, maybe, yes };
-    struct admit_result { can_admit decision; reason why; };
-    admit_result can_admit_read(const reader_permit::impl& permit) const noexcept;
+    // A return value of reason::all_ok means the permit can be admitted, any
+    // other value is the reason why it cannot be.
+    enum class reason { all_ok = 0, ready_list, need_cpu_permits, memory_resources, count_resources };
+    reason can_admit_read(const reader_permit::impl& permit) const noexcept;
 
-    bool should_evict_inactive_read() const noexcept;
+    bool should_evict_inactive_read(const reader_permit::impl& permit) const noexcept;
 
     void maybe_admit_waiters() noexcept;
 
@@ -548,8 +542,8 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    future<reader_permit> obtain_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
-    future<reader_permit> obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+    future<reader_permit> obtain_permit(schema_ptr schema, const char* const op_name, size_t memory_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+    future<reader_permit> obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
 
     /// Make a tracking only permit
     ///
@@ -586,7 +580,7 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    future<> with_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout,
+    future<> with_permit(schema_ptr schema, const char* const op_name, size_t memory_credit, db::timeout_clock::time_point timeout,
             tracing::trace_state_ptr trace_ptr, reader_permit_opt& permit_holder, read_func func);
 
     /// Run the function through the semaphore's execution stage with a pre-admitted permit
