@@ -668,6 +668,18 @@ public:
         }
     }
 
+    // Returns the number of keys whose token is in the range.
+    // The batch and its read guard end before each yield, so that the count does not make a
+    // segment free wait.
+    future<uint64_t> count_keys_in_token_range(dht::token_range tr) const {
+        uint64_t count = 0;
+        auto s = scan(tr);
+        while (s.next_batch(default_scan_batch_size, [&count] (const scanned_entry&) { ++count; })) {
+            co_await coroutine::maybe_yield();
+        }
+        co_return count;
+    }
+
     // Returns what the index holds now.
     primary_index_usage get_usage() const noexcept {
         return {
