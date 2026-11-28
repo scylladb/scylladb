@@ -12,6 +12,7 @@
 #include "mutation/frozen_mutation.hh"
 #include "mutation/timestamp.hh"
 #include <functional>
+#include <stdexcept>
 #include <unordered_map>
 #include <variant>
 #include "locator/tablets.hh"
@@ -134,8 +135,16 @@ public:
     future<schema_ptr> resolve_and_upgrade(frozen_mutation& m);
 };
 
+// Thrown when a command's raft_command::change index is past the alternatives this
+// version knows. Fails the applier or the replay instead of applying a wrong command.
+class unknown_raft_command_error : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 namespace detail {
 // The log entry must contain a raft::command in its data variant.
+// Throws unknown_raft_command_error on a command kind this version does not know.
 raft_command deserialize_raft_command(const raft::log_entry_ptr& entry);
 } // namespace detail
 } // namespace service::strong_consistency
