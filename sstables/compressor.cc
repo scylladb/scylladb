@@ -572,7 +572,7 @@ void compression_parameters::validate(dicts_feature_enabled dicts_enabled) const
     }
     if (_zstd_compression_level) {
         if (*_zstd_compression_level != std::clamp<int>(*_zstd_compression_level, ZSTD_minCLevel(), ZSTD_maxCLevel())) {
-            throw exceptions::configuration_exception(fmt::format("{} must be between {} and {}, got {}", ZSTD_minCLevel(), ZSTD_maxCLevel(), COMPRESSION_LEVEL, *_zstd_compression_level));
+            throw exceptions::configuration_exception(fmt::format("{} must be between {} and {}, got {}", COMPRESSION_LEVEL, ZSTD_minCLevel(), ZSTD_maxCLevel(), *_zstd_compression_level));
         }
     }
 }
