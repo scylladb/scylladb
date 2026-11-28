@@ -119,15 +119,15 @@ def test_operator_ne_token_not_supported(cql, table1):
 # has descending order. Regression test for issue #10183, when it was
 # incorrectly rejected as a "non-string" column.
 #
-# Currently, Cassandra only allows LIKE on a SASI index, *not* when doing
-# filtering, so this test will fail on Cassandra. We mark the test with
-# "cassandra_bug" because they have an open issue to fix it (CASSANDRA-17198).
-# When Cassandra fixes this issue, this mark should be removed.
-def test_filter_like_on_desc_column(cql, test_keyspace, cassandra_bug):
+# Cassandra allows LIKE when doing filtering, rather than only on a SASI
+# index, only since Cassandra 6 (CASSANDRA-17198). The pattern '%n%' is one
+# that Cassandra supports - it doesn't support '%' in the middle of a
+# pattern.
+def test_filter_like_on_desc_column(cql, test_keyspace, new_to_cassandra_6):
     with new_test_table(cql, test_keyspace, "a int, b text, primary key(a, b)",
             extra="with clustering order by (b desc)") as table:
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 'one')")
-        res = cql.execute(f"SELECT b FROM {table} WHERE b LIKE '%%%' ALLOW FILTERING")
+        res = cql.execute(f"SELECT b FROM {table} WHERE b LIKE '%n%' ALLOW FILTERING")
         assert res.one().b == "one"
 
 # Test that the fact that a column is indexed does not cause us to fetch
