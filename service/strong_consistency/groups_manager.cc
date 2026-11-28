@@ -221,6 +221,47 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
     return ok{};
 }
 
+auto raft_server::lost_quorum(lowres_clock::duration limit) const -> std::optional<voters_count> {
+    // no_leader_since lags behind raft: track_no_leader() clears it only when it runs,
+    // after raft has learned of a leader.
+    if (_state.server->current_leader() || !_state.no_leader_since) {
+        return std::nullopt;
+    }
+    const auto no_leader_for = lowres_clock::now() - *_state.no_leader_since;
+    if (no_leader_for <= limit) {
+        return std::nullopt;
+    }
+
+    auto count_voters = [this] (const raft::config_member_set& members) {
+        int32_t voters = 0;
+        int32_t alive = 0;
+        for (const auto& member : members) {
+            if (member.can_vote == raft::is_voter::yes) {
+                ++voters;
+                if (_state.failure_detector->is_alive(member.addr.id)) {
+                    ++alive;
+                }
+            }
+        }
+        return voters_count{.quorum = voters / 2 + 1, .alive = alive};
+    };
+
+    // Electing a leader takes a quorum of the group's voters. While the group changes its
+    // configuration, for example during a tablet migration, it takes a quorum of the old
+    // voters too.
+    const auto config = _state.server->get_configuration();
+    auto voters = count_voters(config.current);
+    if (voters.alive >= voters.quorum && config.is_joint()) {
+        voters = count_voters(config.previous);
+    }
+    if (voters.alive >= voters.quorum) {
+        // With a quorum alive, the group may have a leader this replica lost track of.
+        // The request's wait for a leader pings the group and finds it.
+        return std::nullopt;
+    }
+    return voters;
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
@@ -438,6 +479,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
+        co_await std::move(state.no_leader_tracker);
 
         if (state.metrics) {
             state.metrics->remove_server(*state.server);
@@ -860,6 +902,25 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
     }
 }
 
+future<> groups_manager::track_no_leader(raft_group_state& state, raft::group_id gid) {
+    try {
+        while (true) {
+            if (state.server->current_leader()) {
+                state.no_leader_since = std::nullopt;
+                co_await state.server->wait_for_state_change(nullptr);
+            } else {
+                logger.debug("track_no_leader(group_id={}): no leader known", gid);
+                state.no_leader_since = lowres_clock::now();
+                // Not wait_for_state_change(): a follower learns of a newly elected leader
+                // without a change of its raft state.
+                co_await state.server->wait_for_leader(nullptr);
+            }
+        }
+    } catch (const raft::stopped_error&) {
+        // The server is aborted, because the group is being deleted.
+    }
+}
+
 // The raft group configuration implied by a tablet's replica set and the stage its
 // migration is in; see "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
 //
@@ -1208,11 +1269,13 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
         co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats), std::move(rpc_stats),
                 std::move(apply_stats), state.effective_priority_members());
         state.server = &_raft_gr.get_server(id);
+        state.failure_detector = _raft_gr.failure_detector();
         state.metrics = std::move(m);
         if (state.metrics) {
             state.metrics->add_server(*state.server);
         }
         state.leader_info_updater = leader_info_updater(state, tablet.table, id, range);
+        state.no_leader_tracker = track_no_leader(state, id);
         co_await wait_for_first_leader(tablet, id, state, *g);
 
         // If a restart is already queued behind us, the group isn't started yet; that

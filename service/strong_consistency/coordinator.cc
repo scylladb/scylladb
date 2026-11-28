@@ -7,6 +7,7 @@
  */
 
 #include "coordinator.hh"
+#include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "raft/raft.hh"
@@ -523,6 +524,21 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     });
 }
 
+std::exception_ptr coordinator::lost_quorum_error(const schema& schema, const operation_ctx& op,
+        db::consistency_level cl) const {
+    const auto limit = std::chrono::seconds(_db.get_config().strongly_consistent_tables_no_leader_timeout_in_seconds());
+    const auto voters = op.raft_server.lost_quorum(limit);
+    if (!voters) {
+        return nullptr;
+    }
+    // Reports no live replica: a downgrading retry policy retries at the level the alive
+    // count allows, and a QUORUM read retried at ONE gets a relaxed read, not a linearizable one.
+    return std::make_exception_ptr(exceptions::unavailable_exception(
+            format("Tablet {} of {}.{} has had no raft leader for more than {}s",
+                    op.replicas.tablet_id(), schema.ks_name(), schema.cf_name(), limit.count()),
+            cl, voters->quorum, 0));
+}
+
 coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
         scheduling_group_key stats_key)
     : _groups_manager(groups_manager)
@@ -620,8 +636,8 @@ auto coordinator::mutate(schema_ptr schema,
                 "The outcome of this statement is unknown. It may or may not have been applied. "
                 "Retrying the statement may be necessary."));
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
-            logger.trace("mutate(): no live replica, table {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
-            ++get_stats().write_errors_unavailable;
+            logger.trace("mutate(): {}, table {}.{}, token {}", ex, schema->ks_name(), schema->cf_name(), token);
+            count_error([] (auto& s) { ++s.write_errors_unavailable; });
             return ex;
         } else if (try_catch<replica::no_such_column_family>(ex)
                 // The exception type doesn't say which table is missing.
@@ -675,6 +691,10 @@ auto coordinator::mutate(schema_ptr schema,
             co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
         }
 
+        // A write refused here has no entry that can still commit, so the client can retry it.
+        if (auto ex = lost_quorum_error(*schema, *op, cl)) {
+            co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+        }
         auto disposition = op->raft_server.begin_mutate(aoe.abort_source());
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
@@ -860,8 +880,8 @@ auto coordinator::query(schema_ptr schema,
             count_error([] (auto& s) { ++s.read_errors_timeout; });
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name(), cl));
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
-            logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
-            ++get_stats().read_errors_unavailable;
+            logger.trace("query(): {}, table {}.{}, read cmd {}", ex, schema->ks_name(), schema->cf_name(), cmd);
+            count_error([] (auto& s) { ++s.read_errors_unavailable; });
             return ex;
         } else if (try_catch<replica::no_such_column_family>(ex)
                 // The exception type doesn't say which table is missing.
@@ -907,6 +927,9 @@ auto coordinator::query(schema_ptr schema,
                 co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
             }
 
+            if (auto ex = lost_quorum_error(*schema, op, cl)) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+            }
             auto disposition = op.raft_server.begin_read(aoe.abort_source());
             if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
                 const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};

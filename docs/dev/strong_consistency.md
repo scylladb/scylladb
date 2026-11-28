@@ -465,6 +465,19 @@ tablet migrated away or its table dropped, will never be replayed. `release_all(
 destroys the handles instead of detaching them, so the use counts drop and the
 segments can be reclaimed (SCYLLADB-3827).
 
+# Requests to a tablet without a leader
+
+Each tablet of a strongly consistent table has a Raft leader, which a quorum of
+the tablet's replicas elects. Writes and reads at `QUORUM` or `LOCAL_QUORUM` go
+through the leader. While a tablet has no leader, for example with two of its
+three replicas down, they wait for one until they time out. Once the tablet has
+had no leader for longer than
+`strongly_consistent_tables_no_leader_timeout_in_seconds` (60 by default) and
+fewer than a quorum of its replicas are alive, they fail at once with an
+`Unavailable` error instead. A write refused this way is not applied, so it is
+safe to retry. Reads at `ONE` or `LOCAL_ONE` need no leader: a live replica
+answers them from its local data, which may be stale.
+
 # Failed writes and driver retries
 
 A strongly consistent write that fails with a timeout, a server error or
@@ -526,14 +539,15 @@ running servers of the table instead.
 The requests to a table are counted under the `scylla_strong_consistency_table_` prefix,
 with the same labels and flags: latency histograms of writes and of reads (with a
 `read_type` label) and error counters (with a `reason` label: `timeout`, `status_unknown`
-for writes, or `other`). A request counts only on the node it ends on, not on a node that
-redirected it, so no request is counted on more than one node. Its latency is the time it
-spent on the shard that ran it, as in the node-wide histograms. A request that fails before
-it reaches the raft group, for example one that times out while the group is still starting
-or finds no live replica, is not counted per table, and one that fails because the table
-was dropped counts only in the node-wide errors. The per-table series are not split by
-scheduling group, and the retry and bounce counters and the in-flight gauges have no
-per-table version.
+for writes, `unavailable`, or `other`). A request counts only on the node it ends on, not
+on a node that redirected it, so no request is counted on more than one node. Its latency
+is the time it spent on the shard that ran it, as in the node-wide histograms. A request
+that fails before it reaches the raft group, for example one that times out while the
+group is still starting or finds no live replica, is not counted per table, and one that
+fails because the table was dropped counts only in the node-wide errors. A request refused
+because its tablet lost its quorum has reached the raft group, so it counts per table as
+`unavailable`. The per-table series are not split by scheduling group, and the retry and
+bounce counters and the in-flight gauges have no per-table version.
 
 Applying a table's raft log entries to the replica on a node is counted under the
 `scylla_strong_consistency_state_machine_` prefix: `apply_latency` is the time to apply one
