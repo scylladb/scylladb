@@ -204,7 +204,7 @@ async def test_garbage_collect(manager: ScyllaClusterManager, object_storage):
         # Must be empty as no sstables should have been picked up
         assert not have_res, f'Sstables not cleaned, got {have_res}'
         # Make sure objects also disappeared
-        objects = object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all()
+        objects = object_storage.list_objects()
         print(f'Found objects: {[ objects ]}')
         for o in objects:
             for ent in sstable_entries:
@@ -875,14 +875,10 @@ async def test_stream_sink_abort_on_object_storage(manager: ScyllaClusterManager
         assert result == expected, f"Data mismatch: {result}"
 
         def get_components_and_refs():
-            objects = object_storage.get_resource().Bucket(
-                object_storage.bucket_name).objects.all()
+            objects = object_storage.list_objects()
             components = {}
             refs = {}
             for o in objects:
-                if o.key.endswith("/"):
-                    # the "sstables/" folder object
-                    continue
                 generation, has_refs, ref = o.key.rpartition("/refs/")
                 if has_refs:
                     refs.setdefault(generation, set()).add(ref)
@@ -1197,8 +1193,7 @@ async def test_scylla_sstable_layout_of_object_storage_table(manager: ScyllaClus
         def bucket_contents():
             if object_storage.type != 's3':
                 return []
-            return sorted((o.key, o.size, o.e_tag) for o in
-                          object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+            return sorted((o.key, o.size, o.etag) for o in object_storage.list_objects())
 
         before = bucket_contents()
 

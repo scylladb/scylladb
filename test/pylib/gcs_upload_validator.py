@@ -629,6 +629,11 @@ class handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(buf)
                     remaining -= len(buf)
+                if not truncated:
+                    # As for HEAD above: a reply is done with only once read()
+                    # returns empty, which a reply of no body (Content-Length:
+                    # 0) never got to.
+                    reply.read()
         else:
             payload = reply.read()
             self.send_header("Content-Length", str(len(payload)))

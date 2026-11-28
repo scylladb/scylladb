@@ -54,7 +54,8 @@ class DockerizedServer:
                  image_args : Callable[[str, int], list[str]] | list[str] = [],
                  host = '127.0.0.1',
                  port = None,
-                 env : dict[str, str] | None = None):
+                 env : dict[str, str] | None = None,
+                 extra_ports : list[int] = []):
         self.image = image
         # Environment for the container runtime's own process, None to inherit ours.
         self.env = env
@@ -67,8 +68,12 @@ class DockerizedServer:
         self.is_failure_line = lambda line, port : failure_string.lower() in line.lower() if isinstance(failure_string, str) else failure_string
         self.logfile = None
         self.port = None
+        # The host port each published container port is mapped to.
+        self.ports: dict[int, int] = {}
         self.proc = None
         self.service_port = port
+        # Container ports published besides the service port.
+        self.extra_ports = extra_ports
         self.echo_thread = None
 
     async def start(self):
@@ -98,6 +103,7 @@ class DockerizedServer:
             self.logfile.close()
             self.logfile = None
         self.port = None
+        self.ports = {}
 
     async def _start_attempt(self, exe, name):
         """Launch the container once. Raises _PortInUseError if the host port could not be bound."""
@@ -117,6 +123,8 @@ class DockerizedServer:
             args = args + ["-P"]
         else:
             args = args + ["-p", str(self.service_port)]
+        for port in self.extra_ports:
+            args = args + ["-p", str(port)]
 
         args = args + docker_args + [self.image] + image_args
 
@@ -197,9 +205,11 @@ class DockerizedServer:
             if not data:
                 break
             s = data.decode()
-            m = re.search(r"\d+\/\w+ -> [\w+\.\[\]\:]+:(\d+)", s)
+            m = re.search(r"(\d+)\/\w+ -> [\w+\.\[\]\:]+:(\d+)", s)
             if m:
-                self.port = int(m.group(1))
+                self.ports[int(m.group(1))] = int(m.group(2))
+                if self.service_port is None or int(m.group(1)) == self.service_port:
+                    self.port = int(m.group(2))
 
         await check_proc.wait()
         if not self.port:

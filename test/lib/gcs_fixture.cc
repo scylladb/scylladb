@@ -21,7 +21,6 @@
 #include <seastar/util/short_streams.hh>
 
 #include "gcs_fixture.hh"
-#include "tmpdir.hh"
 #include "proc_utils.hh"
 #include "test_utils.hh"
 
@@ -49,34 +48,13 @@ static future<std::optional<google_credentials>> credentials(const std::string& 
     } catch (...) {    
         BOOST_TEST_MESSAGE(fmt::format("Warning: could not load {} credentials: {}", source, std::current_exception()));
     }
-    co_return std::nullopt; // empty, useless. will work on fake server 
+    co_return std::nullopt; // empty, useless. will work on the test server
 }
 
-static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const tmpdir& tmp) {
-    return tp::start_docker_service("fake-gcs-server"
-        , "docker.io/fsouza/fake-gcs-server:1.54.0"
-        , {}
-        , [](std::string_view line) {
-            if (line.find("server started at") != std::string::npos) {
-                return tp::service_parse_state::success;
-            }
-            if (line.find("address already in use") != std::string::npos || line.find("Address already in use") != std::string::npos ||
-                line.find("port is already allocated") != std::string::npos) {
-                return tp::service_parse_state::failed;
-            }
-            return tp::service_parse_state::cont;
-        }
-        , {} 
-        , { "-scheme", "http", "-backend", "memory", "-log-level", "debug", "--port", "4443", "-public-host", "127.0.0.1" } // image args
-        , 4443
-    );
-}
-
-// fake-gcs-server accepts any Content-Range at all -- it stores the body and
-// derives the object size from it -- so protocol level upload bugs are invisible
-// when testing against it (SCYLLADB-3889). Put a validator in front of it that
-// tracks each upload session and rejects ranges real GCS would reject.
-static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int upstream_port) {
+// A validator in front of the test server tracks each upload session and rejects
+// ranges real GCS would reject (SCYLLADB-3889), and its control path lets tests
+// inject upload faults.
+static future<std::tuple<tp::process_fixture, int>> start_upload_validator(const std::string& upstream_host, int upstream_port) {
     auto pyexec = tp::find_file_in_path("python3");
     if (pyexec.empty()) {
         pyexec = tp::find_file_in_path("python");
@@ -106,6 +84,7 @@ static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int u
         , { // args
             pyexec.string(),
             script,
+            "--upstream-host", upstream_host,
             "--upstream-port", std::to_string(upstream_port),
         }
         , {} // env
@@ -142,7 +121,7 @@ static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int u
     try {
         // Python starts in well under a second, but this wait once timed out
         // after 20s in CI (SCYLLADB-5681), perhaps on a very loaded machine, so
-        // it is now as generous as the wait for the fake-gcs-server to start.
+        // it is now as generous as the wait for a test server container to start.
         constexpr auto port_timeout = 120s;
         try {
             port = co_await with_timeout(std::chrono::steady_clock::now() + port_timeout, std::move(port_future));
@@ -190,7 +169,6 @@ static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int u
 
 class gcs_fixture::impl {
 public:
-    std::optional<tp::process_fixture> fake_gcs_server;
     std::optional<tp::process_fixture> upload_validator;
     std::optional<google_credentials> creds;
 
@@ -200,8 +178,6 @@ public:
     std::string bucket; 
     std::string user_1_creds;
     std::string user_2_creds;
-
-    tmpdir tmp;
 
     bool created_bucket = false;
     std::unique_ptr<storage::client> client;
@@ -227,25 +203,27 @@ seastar::future<> gcs_fixture::impl::setup() {
         endpoint = storage::client::DEFAULT_ENDPOINT;
     }
     if (endpoint.empty()) {
-        auto [proc, port] = co_await start_fake_gcs_server(tmp);
-        fake_gcs_server.emplace(std::move(proc));
-        endpoint = "http://127.0.0.1:" + std::to_string(port);
-
-        // Unless explicitly disabled, talk to the mock through a validator that
-        // enforces the resumable upload rules the mock itself ignores.
-        if (getenv_or_default("GCP_STORAGE_SKIP_UPLOAD_VALIDATOR").empty()) {
+        throw std::runtime_error("No GCS server to test against: set GS_SERVER_ADDRESS_FOR_TEST (test.py does) "
+                                 "or GCP_STORAGE_ENDPOINT");
+    }
+    creds = co_await credentials(user_1_creds);
+    // Unless explicitly disabled, talk to the test environment's server, unlike
+    // a real GCS, through a validator, so that the tests can inject upload faults.
+    if (getenv_or_default("GCP_STORAGE_ENDPOINT").empty() && getenv_or_default("GCP_STORAGE_SKIP_UPLOAD_VALIDATOR").empty()) {
+        auto url = utils::http::parse_simple_url(endpoint);
+        if (!url.is_https()) {
             std::exception_ptr p;
             try {
-                auto [vproc, vport] = co_await start_upload_validator(port);
+                auto [vproc, vport] = co_await start_upload_validator(url.host, url.port);
                 upload_validator.emplace(std::move(vproc));
                 endpoint = "http://127.0.0.1:" + std::to_string(vport);
-                BOOST_TEST_MESSAGE(fmt::format("Validating uploads to fake gcs server on port {}", port));
+                BOOST_TEST_MESSAGE(fmt::format("Validating uploads to gcs server on {}:{}", url.host, url.port));
             } catch (...) {
                 p = std::current_exception();
             }
             if (p) {
-                // The mock is up by now and nothing else would stop it, the
-                // same reason create_bucket below tears down on failure.
+                // The validator may be up by now and nothing else would stop
+                // it, the same reason create_bucket below tears down on failure.
                 try {
                     co_await teardown();
                 } catch (...) {
@@ -253,13 +231,13 @@ seastar::future<> gcs_fixture::impl::setup() {
                 std::rethrow_exception(p);
             }
         }
-
-        BOOST_TEST_MESSAGE(fmt::format("Test server endpoint {}", endpoint));
-        user_1_creds = "none";
-    } else {
-        creds = co_await credentials(user_1_creds);
     }
 
+    if (project.empty() && getenv_or_default("GCP_STORAGE_ENDPOINT").empty()) {
+        // The test environment's server may want a project to create buckets
+        // in, as GCS does; any one will do.
+        project = "testproject";
+    }
     client = std::make_unique<storage::client>(endpoint, std::move(creds));
     std::exception_ptr p;
 
@@ -318,12 +296,6 @@ seastar::future<> gcs_fixture::impl::teardown() {
         upload_validator->terminate();
         co_await upload_validator->wait();
         upload_validator.reset();
-    }
-
-    if (fake_gcs_server) {
-        fake_gcs_server->terminate();
-        co_await fake_gcs_server->wait();
-        fake_gcs_server.reset();
     }
 
     if (client) {

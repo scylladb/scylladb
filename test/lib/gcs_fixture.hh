@@ -16,7 +16,8 @@
 #include "utils/gcp/object_storage.hh"
 
 /*
-    Simple Google object storage endpoint provider. Uses either real or local, fake, endpoint.
+    Simple Google object storage endpoint provider. Uses either a real endpoint or the test
+    environment's server (GS_SERVER_ADDRESS_FOR_TEST, which test.py starts).
 
     Note: the below text blobs are service account credentials, including private keys. 
     _Never_ give any real privileges to these accounts, as we are obviously exposing them here.
@@ -25,7 +26,7 @@
     User2 is assumed to only have permissions to read the bucket, but permission to 
     impersonate User1.
 
-    Note: fake gcp storage does not have any credentials or permissions, so
+    Note: the test server does not have any credentials or permissions, so
     for testing with such, leave them unset to skip those tests.
 
     * GCP_STORAGE_ENDPOINT - set to endpoint host. default is https://storage.googleapis.com
