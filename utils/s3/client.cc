@@ -20,6 +20,7 @@
 #else
 #include <rapidxml/rapidxml.hpp>
 #endif
+#include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
@@ -51,6 +52,7 @@
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "utils/div_ceil.hh"
+#include "utils/error_injection.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
@@ -1607,11 +1609,41 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     }).finally([gh = std::move(gh), mpu = std::move(mpu)] {});
 }
 
+// How long the DELETE that aborts a multipart upload may take, retries included.
+// Neither this client nor seastar's http client times requests out, so without a
+// limit an endpoint that accepts the connection and then never answers would hold
+// the DELETE forever - and with it whoever closes the sink, and client::close(),
+// which waits for every request in flight.
+//
+// The bound is not exact. It can be exceeded by:
+// - an attempt that seastar's http client starts after the time is up, which then
+//   cannot be cancelled. That happens when the time is up during a retry, or while
+//   a connection is being made (SCYLLADB-6270);
+// - a backoff of the retry strategy that is already running when the time is up,
+//   since the backoff cannot be cut short. The default strategy backs off for up
+//   to 60 s (before the seventh and later retries of a throttled request), so in
+//   the worst case the DELETE takes about twice this long;
+// - the throttling brake, which the default strategy waits for after the backoff,
+//   just as uncancellably;
+// - waiting for credentials, before the first attempt and on an expired token;
+// - the closing handshake of a TLS connection.
+static constexpr std::chrono::milliseconds abort_upload_timeout = 60s;
+
 future<> client::multipart_upload::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.set_query_param("uploadId", std::exchange(_upload_id, "")); // now upload_started() returns false
-    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content)
+    // The DELETE does not go with _as: an upload is often aborted precisely because
+    // _as fired, and an aborted source would stop the DELETE before it is even sent,
+    // leaving all the parts behind. A private abort source, armed by a timer, bounds
+    // it instead. It cancels the request itself rather than just stopping the wait for
+    // it, so the request - and the continuation below, which refers to this - is over
+    // by the time this returns.
+    auto timeout = utils::get_local_injector().inject_parameter<uint32_t>("s3_abort_upload_timeout_ms")
+            .transform([] (uint32_t ms) { return std::chrono::milliseconds(ms); })
+            .value_or(abort_upload_timeout);
+    abort_on_expiry<lowres_clock> deadline(lowres_clock::now() + timeout);
+    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, &deadline.abort_source())
         .handle_exception([this](const std::exception_ptr& ex) -> future<> {
             // Here we discard whatever exception is thrown when aborting multipart upload since we don't care about cleanly aborting it since there are other
             // means to clean up dangling parts, for example `rclone cleanup` or S3 bucket's Lifecycle Management Policy
