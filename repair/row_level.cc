@@ -2894,7 +2894,9 @@ future<repair_update_system_table_response> repair_service::repair_update_system
     co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
         db::replay_position high_rp;
         auto t = local_db.get_tables_metadata().get_table_if_exists(req.table_uuid);
-        if (t) {
+        // A strongly consistent table gets no cleanup record and no position: see
+        // shared_tombstone_gc_state::flush_pending_repair_time_update().
+        if (t && !t->uses_strong_consistency()) {
             high_rp = t->highest_flushed_replay_position(req.range);
             co_await _sys_ks.local().save_commitlog_cleanup_record(req.table_uuid, req.range, high_rp);
         }

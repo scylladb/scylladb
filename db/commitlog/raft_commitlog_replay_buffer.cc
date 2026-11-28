@@ -39,7 +39,7 @@ namespace sc = service::strong_consistency;
 static seastar::logger logger("raft_commitlog_replay");
 
 namespace {
-// Build a mapping from group_id to the tablet of the raft groups this shard hosts.
+// Build a mapping from group_id to the raft groups this shard hosts.
 //
 // The ownership test is what keeps replay from applying a group's entries into a tablet
 // that has moved away: the group still exists in tablet metadata - it lives on its other
@@ -49,7 +49,10 @@ namespace {
 // up its segment references, so a wider test here would try to recover a log whose
 // segments are being reclaimed. A replica in the middle of joining still answers yes, so
 // it replays what it received before the restart.
-std::unordered_map<raft::group_id, locator::global_tablet_id> build_group_to_tablet_map(replica::database& db) {
+//
+// Tablet metadata is not older here than it was at the crash: it is kept in the schema
+// commitlog, which is replayed before this one.
+std::unordered_map<raft::group_id, raft_commitlog_replay_buffer::hosted_group> build_hosted_groups_map(replica::database& db) {
     const auto token_metadata = db.get_shared_token_metadata().get();
     const auto& tm = *token_metadata;
     if (!tm.get_my_id()) {
@@ -64,7 +67,7 @@ std::unordered_map<raft::group_id, locator::global_tablet_id> build_group_to_tab
         .shard = this_shard_id()
     };
 
-    std::unordered_map<raft::group_id, locator::global_tablet_id> result;
+    std::unordered_map<raft::group_id, raft_commitlog_replay_buffer::hosted_group> result;
     const auto& tablets = tm.tablets();
     for (const auto& [tid, _] : tablets.all_table_groups()) {
         const auto& tablet_map = tablets.get_tablet_map(tid);
@@ -78,7 +81,9 @@ std::unordered_map<raft::group_id, locator::global_tablet_id> build_group_to_tab
                 continue;
             }
             const auto gid = tablet_map.get_tablet_raft_info(tablet_id).group_id;
-            result.emplace(gid, locator::global_tablet_id{.table = tid, .tablet = tablet_id});
+            result.emplace(gid, raft_commitlog_replay_buffer::hosted_group{
+                    .tablet = locator::global_tablet_id{.table = tid, .tablet = tablet_id},
+                    .last_token = tablet_map.get_last_token(tablet_id)});
         }
     }
     return result;
@@ -142,30 +147,27 @@ size_t superseded_by(const std::deque<buffered_entry>& buf, const raft::log_entr
 
 } // namespace raft_buffer_detail
 
-future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3::query_processor& qp,
-        raft::group_id group_id, group_state& group) {
+const raft_commitlog_replay_buffer::hosted_group* raft_commitlog_replay_buffer::find_hosted_group(
+        replica::database& db, raft::group_id group_id) {
+    if (!_hosted_groups) {
+        _hosted_groups = build_hosted_groups_map(db);
+    }
+    const auto it = _hosted_groups->find(group_id);
+    return it == _hosted_groups->end() ? nullptr : &it->second;
+}
+
+future<> raft_commitlog_replay_buffer::resolve_group(cql3::query_processor& qp, raft::group_id group_id,
+        const hosted_group& hosted, group_state& group) {
     group.resolved = true;
 
-    if (!_group_to_tablet) {
-        _group_to_tablet = build_group_to_tablet_map(db);
-    }
-    const auto tablet_it = _group_to_tablet->find(group_id);
-    if (tablet_it == _group_to_tablet->end()) {
-        // Nothing may be resurrected for this group, including its row.
-        logger.info("group {} is no longer hosted by this shard, discarding its entries", group_id);
-        co_return;
-    }
     // The floor: every index at or below it is committed.
     auto persisted = co_await service::strong_consistency::raft_groups_storage::load_descriptor(qp, group_id, this_shard_id());
     if (!persisted.exists) {
-        // This shard hosts the group but has no row for it: a cleanup erased the row when the
-        // tablet left, and the tablet came back before start_raft_group() bootstrapped a new
-        // one. A crash during a cleanup never gets here, since hosting ends before it runs.
-        logger.info("group {} has no persisted raft state on this shard, discarding its entries", group_id);
-        co_return;
+        on_internal_error(logger, fmt::format(
+                "group {} is hosted by this shard and has a raft batch in the commitlog, but no row in "
+                "system.raft_groups: the row is written before the group's first batch", group_id));
     }
-    group.known = true;
-    group.tablet = tablet_it->second;
+    group.tablet = hosted.tablet;
     // The truncate record is written once its entry is committed, so its index is a floor
     // too, and it can run ahead of the row's: the descriptor advances only when a segment
     // is released. Entries between the two would otherwise go back to raft as uncommitted
@@ -256,14 +258,11 @@ future<> raft_commitlog_replay_buffer::drain_committed(replica::database& db, db
 }
 
 future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::query_processor& qp,
-        db::system_keyspace& sys_ks, raft::group_id group_id, db::segment_id_type segment,
-        raft::index_t commit_idx, const std::vector<raft::log_entry_ptr>& entries) {
+        db::system_keyspace& sys_ks, raft::group_id group_id, const hosted_group& hosted,
+        db::segment_id_type segment, raft::index_t commit_idx, const std::vector<raft::log_entry_ptr>& entries) {
     auto& group = _groups[group_id];
     if (!group.resolved) {
-        co_await resolve_group(db, qp, group_id, group);
-    }
-    if (!group.known) {
-        co_return;
+        co_await resolve_group(qp, group_id, hosted, group);
     }
     _total_entries += entries.size();
     group.commit_idx = std::max(group.commit_idx, commit_idx);
@@ -371,7 +370,7 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     // covers every group that can be wrong.
     std::vector<sstring> lost;
     for (const auto& [group_id, group] : _groups) {
-        if (group.known && group.contiguous_to < group.commit_idx) {
+        if (group.contiguous_to < group.commit_idx) {
             lost.push_back(fmt::format("{} committed to {} but read only to {}",
                     group_id, group.commit_idx, group.contiguous_to));
         }
@@ -380,41 +379,10 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
         throw std::runtime_error(fmt::format(
                 "cannot replay the raft log: committed entries are missing: {}. Starting "
                 "would persist a commit index covering entries that were never applied. "
-                "{} Recovering means restoring the segment files that held them, or "
-                "rebuilding this replica once they are gone for good",
-                fmt::join(lost, "; "),
-                _unreadable_segments.empty()
-                    ? sstring("No segment was reported damaged, so the entries were in a "
-                              "segment file that is no longer there.")
-                    : sstring(fmt::format("Segments {} could not be read in full.",
-                            _unreadable_segments))));
-    }
-    // A damaged segment may have taken raft batches with it. A lost tail leaves no evidence:
-    // the batch that would have declared the higher commit_idx went down with the unread
-    // bytes, so no index check sees a log short of entries the node acknowledged.
-    if (!_unreadable_segments.empty()) {
-        if (!_group_to_tablet) {
-            _group_to_tablet = build_group_to_tablet_map(db);
-        }
-        if (!_group_to_tablet->empty()) {
-            if (db.get_config().strongly_consistent_tables_start_on_damaged_commitlog()) {
-                logger.warn("segments {} could not be read in full while this shard hosts {} "
-                        "strongly consistent raft group(s), and the unread bytes may have held "
-                        "raft batches this node acknowledged. Starting because "
-                        "strongly_consistent_tables_start_on_damaged_commitlog is set",
-                        _unreadable_segments, _group_to_tablet->size());
-            } else {
-                throw std::runtime_error(fmt::format(
-                        "cannot replay the raft log: segments {} could not be read in full, and "
-                        "this shard hosts {} strongly consistent raft group(s). The unread bytes "
-                        "may have held raft batches this node acknowledged, and nothing left on "
-                        "disk says whether they did. Starting would hand raft a log short of "
-                        "committed entries. Recovering means restoring the segment files, or "
-                        "rebuilding this replica once they are gone for good. Setting "
-                        "strongly_consistent_tables_start_on_damaged_commitlog starts the node "
-                        "on what replay could read", _unreadable_segments, _group_to_tablet->size()));
-            }
-        }
+                "They were in a segment file that is no longer there, or in one that could "
+                "not be read in full. Recovering means restoring the segment files that "
+                "held them, or rebuilding this replica once they are gone for good",
+                fmt::join(lost, "; ")));
     }
 
     if (_groups.empty()) {
@@ -433,7 +401,7 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     // Checked before any descriptor is written, so a refused boot leaves the rows
     // unchanged.
     for (const auto& [group_id, group] : _groups) {
-        if (!group.known || group.buf.empty()) {
+        if (group.buf.empty()) {
             continue;
         }
         if (group.buf.front().entry->idx != group.commit_idx + raft::index_t{1}) {
@@ -466,9 +434,6 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     }
 
     for (auto& [group_id, group] : _groups) {
-        if (!group.known) {
-            continue;
-        }
         // The recovered floor is a real descriptor: every index at or below
         // commit_idx is committed, and commit_term is the term of the entry there.
         co_await service::strong_consistency::raft_groups_storage::store_descriptor(
@@ -508,6 +473,36 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     }
     _groups.clear();
     logger.info("Raft groups commit log replayed data processing complete");
+}
+
+void raft_commitlog_replay_buffer::on_unreadable_segment(replica::database& db, db::segment_id_type segment) {
+    if (!_hosted_groups) {
+        _hosted_groups = build_hosted_groups_map(db);
+    }
+    if (_hosted_groups->empty()) {
+        return;
+    }
+    // The unread bytes may have held raft batches. A lost end of a group's log leaves
+    // no evidence: the batch that would have carried the higher commit index is among
+    // the unread bytes, so no index check sees a log short of entries the node
+    // acknowledged.
+    if (db.get_config().strongly_consistent_tables_start_on_damaged_commitlog()) {
+        logger.warn("segment {} could not be read in full while this shard hosts {} "
+                "strongly consistent raft group(s), and the unread bytes may have held "
+                "raft batches this node acknowledged. Starting because "
+                "strongly_consistent_tables_start_on_damaged_commitlog is set",
+                segment, _hosted_groups->size());
+        return;
+    }
+    throw std::runtime_error(fmt::format(
+            "cannot replay the raft log: segment {} could not be read in full, and "
+            "this shard hosts {} strongly consistent raft group(s). The unread bytes "
+            "may have held raft batches this node acknowledged, and nothing left on "
+            "disk says whether they did. Starting would hand raft a log short of "
+            "committed entries. Recovering means restoring the segment file, or "
+            "rebuilding this replica once it is gone for good. Setting "
+            "strongly_consistent_tables_start_on_damaged_commitlog starts the node "
+            "on what replay could read", segment, _hosted_groups->size()));
 }
 
 raft_commitlog_replay_buffer::~raft_commitlog_replay_buffer() {

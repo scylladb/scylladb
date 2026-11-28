@@ -402,6 +402,18 @@ public:
     // Advanced after a round's handlers run, so a handler sees the previous value.
     replay_position flush_position() const;
 
+    // The last position written on this shard, whether or not it has reached the
+    // disk yet: the end of the newest entry. Every entry added so far is at or below
+    // it, and every entry added later is above it. Default-constructed (not valid())
+    // if nothing was added since start.
+    //
+    // Kept as a value of its own, not computed from the newest segment: a closed
+    // segment with nothing left to flush leaves the segment list at once, while its
+    // file is deleted in the background, so the list can end below the newest entry
+    // that is still on disk. And an entry spread over several segments counts only
+    // once all of it is written, since a failed one is rolled back.
+    replay_position last_written_position() const;
+
     // For testing only. Returns the active segments current position
     // (ignoring chunk overhead etc)
     replay_position current_position() const;

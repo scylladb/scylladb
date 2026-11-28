@@ -3666,6 +3666,8 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
     cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft_commitlog_replay=debug',
+        # The replayer logs every raft batch it skips, and why.
+        '--logger-log-level', 'commitlog_replayer=debug',
     ]
     servers = await manager.servers_add(4, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
@@ -3721,11 +3723,12 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
             await manager.server_start(src_server.server_id)
             await manager.servers_see_each_other(servers)
 
-            # Replay must have refused the group, on either of the two counts: the
-            # tablet has no replica here anymore, or the cleanup erased its raft state.
-            discarded = await log.grep(
-                rf"raft_commitlog_replay - group {group_id} (is no longer hosted by this shard"
-                rf"|has no persisted raft state on this shard), discarding",
+            # Replay must have skipped every batch of the group, because this shard does
+            # not host the group. It decides that from the tablet metadata, before it reads
+            # the group's row, so the outcome is the same whether or not the tablet cleanup
+            # has erased the row.
+            skipped = await log.grep(
+                rf"commitlog_replayer - raft batch at .*: group {group_id} is not hosted by this shard",
                 from_mark=mark)
             # resolve_group() logs the recovered floor for a group it accepts, so its
             # absence is what says the entries were not replayed.
@@ -3733,11 +3736,9 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
                 rf"raft_commitlog_replay - group {group_id}: recovered floor", from_mark=mark)
             assert not entries_replayed, \
                 f"Replay processed entries of group {group_id} on a node that left it: {entries_replayed}"
-            assert discarded, f"Expected replay to discard the entries of group {group_id}"
-            logger.info(f"Replay discard messages for group {group_id}: {discarded}")
+            assert skipped, f"Expected replay to skip the batches of group {group_id}"
+            logger.info(f"Replay skip messages for group {group_id}: {skipped}")
 
-            # No assertion on the cleanup's erase: the ownership test above refuses the
-            # group whether or not the state is still there.
             cql, hosts = await manager.get_ready_cql(servers)
             for i in range(10):
                 rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")

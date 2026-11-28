@@ -69,6 +69,7 @@
 #include "dht/i_partitioner.hh"
 #include "replica/global_table_ptr.hh"
 #include "locator/tablets.hh"
+#include "locator/tablet_replication_strategy.hh"
 
 #include "utils/error_injection.hh"
 #include "readers/reversing.hh"
@@ -1035,6 +1036,11 @@ public:
 
 bool table::uses_tablets() const {
     return _erm && _erm->get_replication_strategy().uses_tablets();
+}
+
+bool table::uses_strong_consistency() const {
+    const auto* rs = _erm ? _erm->get_replication_strategy().maybe_as_tablet_aware() : nullptr;
+    return rs && data_dictionary::is_strongly_consistent(rs->get_consistency());
 }
 
 static bool may_publish_tablet_routing_info(const table& t) {
@@ -6321,18 +6327,28 @@ future<> table::stop_compaction_groups(storage_group& sg) {
     return sg.stop("tablet cleanup");
 }
 
-future<> table::cleanup_compaction_groups(db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
+future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
     for (auto& cg_ptr : sg.compaction_groups_immediate()) {
         co_await cg_ptr->cleanup();
-        // FIXME: at this point _highest_rp might be greater than the replay_position of the last cleaned mutation,
-        // and can cover some mutations which weren't cleaned, causing them to be lost during replay.
+        // The record makes commitlog replay skip what this shard's commitlog holds for the
+        // tablet's token range at or below the recorded position. That has to cover
+        // everything the departing replica wrote, and nothing a later replica of the same
+        // tablet on this shard will write. The last position written to the commitlog
+        // does both: writes are not supposed to race with cleanups, and the tablet can
+        // return to this shard only after its cleanup has finished.
         //
-        // This should be okay, because writes are not supposed to race with cleanups
-        // in the first place, but it would be better to extract the exact replay_position from
-        // the actually flushed/deleted sstables, like discard_sstable() does, so that the mutations
-        // cleaned from sstables are exactly the same as the ones cleaned from commitlog.
+        // The highest position applied to this table's memtables (_highest_rp) is not
+        // enough. A strongly consistent tablet's raft log is in the commitlog too, as
+        // batches which replay checks against this same record, and a batch moves
+        // _highest_rp only when one of its entries is applied. A batch whose entries
+        // were not applied yet when the tablet's raft group was stopped is above it, and
+        // replay would hand its entries to the tablet's next raft group on this shard.
+        // For the same reason the position comes from the database's commitlog and not
+        // from this table's: a table configured not to write to the commitlog has none
+        // (see mark_ready_for_writes()), while its raft batches are written all the same.
+        //
         // This also drops the unneeded records, which apply only to deleted commitlog segments.
-        co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg.token_range(), _highest_rp);
+        co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg.token_range(), db.commitlog()->last_written_position());
     }
 
     tlogger.info("Cleaned up tablet {} of table {}.{} successfully.", tid, _schema->ks_name(), _schema->cf_name());
@@ -6352,7 +6368,7 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     // compaction_group::stop takes care of flushing.
     co_await stop_compaction_groups(sg);
     co_await utils::get_local_injector().inject("delay_tablet_compaction_groups_cleanup", std::chrono::seconds(5));
-    co_await cleanup_compaction_groups(sys_ks, tid, sg);
+    co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
 }
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
@@ -6361,7 +6377,7 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
 
     co_await clear_inactive_reads_for_tablet(db, sg);
     co_await sg.flush_memtables();
-    co_await cleanup_compaction_groups(sys_ks, tid, sg);
+    co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
 }
 
 // Retires the memtables of every compaction group of the tablet. The replacements are

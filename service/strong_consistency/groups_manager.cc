@@ -271,23 +271,11 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
 
-    // A group this shard persists nothing about has no history here, so any commitlog
-    // entries replay left for it belong to an earlier membership: the tablet was migrated
-    // away, its raft state erased by the cleanup, and migrated back before the old segments
-    // were recycled. Handing those to the group would give it a log from an incarnation it
-    // knows nothing about, indices and terms included. Taken out of the buffer either way,
-    // so that its bookkeeping stays right.
-    const auto persisted = co_await raft_groups_storage::load_commit_idx_if_persisted(_qp, group_id, this_shard_id());
     auto replayed_data = _raft_replay_buffer.take_replayed_group_entries(group_id);
-    if (!persisted && !replayed_data.entries.empty()) {
-        logger.warn("start_raft_group(): tablet {}, group id {}: no persisted raft state, discarding {} "
-                "replayed commitlog entries left over from an earlier membership",
-                tablet, group_id, replayed_data.entries.size());
-        replayed_data = replayed_data_per_group{};
-    }
+    const auto replayed_entries = replayed_data.entries.size();
     if (logger.is_enabled(log_level::debug)) {
-        logger.debug("Starting the raft group of tablet {}, group id {}, with persisted commit index {} and {} replayed commitlog entries, "
-                "indexes {}.", tablet, group_id, persisted ? fmt::to_string(*persisted) : std::string("none"), replayed_data.entries.size(),
+        logger.debug("Starting the raft group of tablet {}, group id {}, with {} replayed commitlog entries, indexes {}.",
+                tablet, group_id, replayed_data.entries.size(),
                 replayed_data.entries.empty() ? std::string("none")
                         : fmt::format("{} to {}", replayed_data.entries.front()->idx, replayed_data.entries.back()->idx));
     }
@@ -308,6 +296,17 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     // on this node
     const auto snapshot = co_await storage->load_snapshot_descriptor();
     if (!snapshot.id) {
+        // Replayed entries always come with the group's row. Commitlog replay hands over
+        // entries only for a group that has a row, and never those of a stay of the
+        // tablet on this shard that ended before the node started: it skips the batches
+        // written before the tablet's last cleanup. After replay the row is erased only
+        // by cleanup_group(), which drops the replayed entries first, or once the group
+        // has been started and has taken them.
+        if (replayed_entries != 0) {
+            on_internal_error(logger, format("start_raft_group(): tablet {}, group id {}: commitlog replay "
+                    "left {} entries for a group that has no row in system.raft_groups",
+                    tablet, group_id, replayed_entries));
+        }
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
         const auto* trinfo = tablet_map.get_tablet_transition_info(tablet.tablet);
@@ -460,14 +459,11 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         const auto marker_timestamp = _resize_tracker.max_marker_timestamp(id);
         _resize_tracker.erase_group(id);
         // We erase the persisted state while the group is still in _raft_groups, which is what
-        // stop_shard() waits for.
+        // stop_shard() waits for. A failed erase is fatal, like any failure of a control
+        // operation (see chain_control_op()): nothing repeats this erase, and a row left behind
+        // would make the group read as bootstrapped.
         if (clean_up) {
-            try {
-                co_await raft_groups_storage::erase_persisted_state(_qp, id, this_shard_id(), marker_timestamp);
-            } catch (...) {
-                logger.warn("schedule_raft_group_deletion(): group id {}: failed to erase its persisted state: {}",
-                    id, std::current_exception());
-            }
+            co_await raft_groups_storage::erase_persisted_state(_qp, id, this_shard_id(), marker_timestamp);
             // A start may have arrived during the erase, as above.
             if (state.gate.get() != g.get()) {
                 co_return;
@@ -593,6 +589,12 @@ future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id g
                     "cleanup_group({}-{}): the raft server was not torn down before the deadline", tablet, group_id)));
         }
     }
+    // Commitlog replay can have recovered entries for this group while the shard still
+    // hosted it, with the group then torn down before it was ever started in this
+    // process. Nothing has taken those entries, and they go with the row: a later
+    // return of the tablet to this shard must not find them. Destroying them drops
+    // their segment reference, as release_all() does for a group that was running.
+    _raft_replay_buffer.take_replayed_group_entries(group_id);
     co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
 }
 
@@ -1431,12 +1433,11 @@ void groups_manager::start() {
     // schema at all: asking for its id without the flag aborts.
     if (_db.get_config().check_experimental(
                 db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        // The database always has a commitlog. The enable_commitlog and
+        // enable_in_memory_data_store options only keep the user tables from writing
+        // to it.
         auto* commitlog = _db.commitlog();
-        if (!commitlog) {
-            // Fail at startup: without the commitlog the first group trips an assert.
-            throw std::runtime_error(
-                    "strongly consistent tables require the commitlog, which is disabled");
-        }
+        SCYLLA_ASSERT(commitlog);
         check_commitlog_can_hold_a_raft_entry(*commitlog);
 
         // A round names one table, and only a round naming system.raft_groups says

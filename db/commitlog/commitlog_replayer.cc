@@ -220,9 +220,7 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
             f.get();
         } catch (commitlog::segment_data_corruption_error& e) {
             // Counted, skipped and reported: a bad sector or chunk header ends the read,
-            // and a broken entry header skips the rest of its chunk. finish_replay() refuses
-            // the boot over the unread bytes while this shard hosts a strongly consistent
-            // group, unless strongly_consistent_tables_start_on_damaged_commitlog is set.
+            // and a broken entry header skips the rest of its chunk.
             s->corrupt_bytes += e.bytes();
             unreadable = true;
         } catch (commitlog::segment_truncation& e) {
@@ -238,8 +236,9 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
         }
         if (unreadable && _raft_buffer) {
             // What the unread part held is unknowable, so the raft side decides,
-            // where it knows whether this shard hosts a group at all.
-            _raft_buffer->local().note_unreadable_segment(id);
+            // where it knows whether this shard hosts a group at all: it throws to
+            // refuse the boot.
+            _raft_buffer->local().on_unreadable_segment(_db.local(), id);
         }
         return make_ready_future<stats>(*s);
     });
@@ -278,8 +277,23 @@ future<> db::commitlog_replayer::impl::process(
             // Everything for this batch is decided as it arrives: see
             // raft_commitlog_replay_buffer.
             try {
-                co_await _raft_buffer->local().add_batch(_db.local(), _qp->local(), _sys_ks.local(),
-                        batch.group_id, rp.id, batch.commit_idx, batch.entries);
+                auto& raft_buffer = _raft_buffer->local();
+                const auto* hosted = raft_buffer.find_hosted_group(_db.local(), batch.group_id);
+                if (!hosted) {
+                    rlogger.debug("raft batch at {}: group {} is not hosted by this shard. skipping", rp, batch.group_id);
+                    co_return;
+                }
+                // The tablet's commitlog cleanup record, as for a mutation below: a
+                // batch at or below it was written by a replica of the tablet that
+                // has left this shard, not by the one hosted now. Tablet cleanup is the
+                // only writer of such a record for a strongly consistent table.
+                if (rp <= token_min_pos(hosted->tablet.table, rp.shard_id(), hosted->last_token)) {
+                    rlogger.debug("raft batch at {}: group {} wrote it before tablet {} was last cleaned up. skipping",
+                            rp, batch.group_id, hosted->tablet);
+                    co_return;
+                }
+                co_await raft_buffer.add_batch(_db.local(), _qp->local(), _sys_ks.local(),
+                        batch.group_id, *hosted, rp.id, batch.commit_idx, batch.entries);
             } catch (...) {
                 std::throw_with_nested(raft_replay_error(fmt::format(
                         "failed to replay raft batch for group {} at {}", batch.group_id, rp)));

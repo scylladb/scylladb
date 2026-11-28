@@ -435,12 +435,12 @@ schema_ptr system_keyspace::raft() {
 // on user-provided state machine and could be stored anywhere else in any other form.
 // This should be seen as a snapshot descriptor, instead.
 schema_ptr system_keyspace::raft_snapshots() {
-    static thread_local auto schema = replica::make_raft_snapshots_schema(db::system_keyspace::RAFT_SNAPSHOTS, true);
+    static thread_local auto schema = replica::make_raft_snapshots_schema(db::system_keyspace::RAFT_SNAPSHOTS);
     return schema;
 }
 
 schema_ptr system_keyspace::raft_snapshot_config() {
-    static thread_local auto schema = replica::make_raft_snapshot_config_schema(db::system_keyspace::RAFT_SNAPSHOT_CONFIG, true);
+    static thread_local auto schema = replica::make_raft_snapshot_config_schema(db::system_keyspace::RAFT_SNAPSHOT_CONFIG);
     return schema;
 }
 
