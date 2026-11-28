@@ -478,6 +478,14 @@ public:
 
     managed_bytes to_managed_bytes() && {
         if (_size) {
+            // clear(), clear_gently(), remove_suffix() and reserve() can leave the first chunk empty, which managed_bytes_view can't handle.
+            if (auto c = _begin.ptr; !c->frag_size) {
+                // _size > 0, so another chunk follows.
+                _begin = c->next;
+                _begin.ptr->backref = &_begin;
+                c->~chunk();
+                ::free(c);
+            }
             _begin.ptr->size = _size;
             _current = nullptr;
             _size = 0;

@@ -393,6 +393,33 @@ BOOST_AUTO_TEST_CASE(test_conversion_to_managed_bytes) {
     assert_sequence(buf2, 1024);
 }
 
+// Reproduces SCYLLADB-4983.
+BOOST_AUTO_TEST_CASE(test_to_managed_bytes_skips_empty_chunks) {
+    auto check = [] (bytes_ostream b) {
+        auto ph = b.write_place_holder(700); // larger than the first chunk, so it chains after the empty one
+        std::fill_n(ph, 700, 1);
+        managed_bytes mb = std::move(b).to_managed_bytes();
+        BOOST_REQUIRE(!managed_bytes_view(mb).current_fragment().empty());
+        BOOST_REQUIRE_EQUAL(managed_bytes_view(mb)[0], 1);
+        BOOST_REQUIRE(mb == managed_bytes(bytes(size_t(700), int8_t(1))));
+    };
+
+    // A small first chunk, so the test does not depend on the default chunk size.
+    bytes_ostream cleared(64);
+    cleared.write(bytes("abc"));
+    cleared.clear();
+    check(std::move(cleared));
+
+    bytes_ostream suffix_removed(64);
+    suffix_removed.write(bytes("abc"));
+    suffix_removed.remove_suffix(3);
+    check(std::move(suffix_removed));
+
+    bytes_ostream reserved;
+    reserved.reserve(64);
+    check(std::move(reserved));
+}
+
 BOOST_AUTO_TEST_CASE(test_write_managed_bytes_view) {
     // Generate data for test
     int count = 25000;
