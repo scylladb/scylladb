@@ -12,16 +12,10 @@ import sys
 import glob
 import platform
 import distro
-import re
 import traceback
 
-from scylla_util import sysconfig_parser, out, get_set_nic_and_disks_config_value, check_sysfs_numa_topology_is_valid, sysconfdir_p, scylla_excepthook, perftune_base_command
+from scylla_util import sysconfig_parser, out, get_set_nic_and_disks_config_value, check_sysfs_numa_topology_is_valid, sysconfdir_p, scylla_excepthook, perftune_base_command, cpuset_conf_cpus, setup_spare_cpu_pinning
 from subprocess import run
-
-def get_cur_cpuset():
-    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
-    cpuset = cfg.get('CPUSET')
-    return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
 
 def cpu_mask_is_zero(cpu_mask):
     """
@@ -71,7 +65,11 @@ def get_irq_cpu_mask():
 
     if not os.path.exists('/etc/scylla.d/cpuset.conf'):
         raise Exception('/etc/scylla.d/cpuset.conf not found')
-    cur_cpuset = get_cur_cpuset()
+    cur_cpuset = cpuset_conf_cpus()
+
+    # Without --cpuset, Scylla runs on every CPU, so the IRQs do too (MQ mode).
+    if not cur_cpuset:
+        return out("/opt/scylladb/bin/hwloc-calc all").strip()
 
     hwloc_cmd = "/opt/scylladb/bin/hwloc-calc --pi all {}".\
         format(" ".join(['~PU:{}'.format(c) for c in cur_cpuset.split(",")]))
@@ -149,6 +147,15 @@ if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
+
+    # Keep scylla-helper.slice and systemd-journald off Scylla's CPUs after a
+    # cpuset.conf edit or a CPU count change. A failure here must not stop
+    # Scylla from starting.
+    try:
+        setup_spare_cpu_pinning(cpuset_conf_cpus(), always_reload=False)
+    except Exception as e:
+        print(f'Warning: could not pin scylla-helper.slice and systemd-journald: {e}', file=sys.stderr)
+
     cfg = sysconfig_parser(sysconfdir_p() / 'scylla-server')
     mode = cfg.get('NETWORK_MODE')
 
