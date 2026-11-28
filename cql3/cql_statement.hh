@@ -161,7 +161,26 @@ public:
     audit::audit_info* get_audit_info() { return _audit_info.get(); }
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 
+<<<<<<< HEAD
     virtual void sanitize_audit_info() {}
+||||||| parent of ee86822b7d (cql3: expose the audit password masking as a statement method)
+    // Whether the driver can compute the token the statement is routed by. It
+    // can only if it got the partition key bind indices of the statement in its
+    // PREPARED metadata.
+    bool may_use_token_aware_routing() const { return _may_use_token_aware_routing; }
+
+    virtual void sanitize_audit_info() {}
+=======
+    // Whether the driver can compute the token the statement is routed by. It
+    // can only if it got the partition key bind indices of the statement in its
+    // PREPARED metadata.
+    bool may_use_token_aware_routing() const { return _may_use_token_aware_routing; }
+
+    // Returns the statement's CQL text with its credentials, if any, replaced
+    // by '***'. The audit log records the result, and so does the warning
+    // about a group0 guard conflict.
+    virtual sstring mask_secrets(sstring text) const { return text; }
+>>>>>>> ee86822b7d (cql3: expose the audit password masking as a statement method)
 };
 
 }

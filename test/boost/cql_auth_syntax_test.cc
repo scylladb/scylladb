@@ -14,6 +14,7 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "cql3/CqlParser.hpp"
+#include "cql3/cql_statement.hh"
 #include "cql3/role_options.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/util.hh"
@@ -353,4 +354,105 @@ BOOST_AUTO_TEST_CASE(create_role_with_hashed_no_quotation_marks) {
     BOOST_REQUIRE_THROW(
         cql3::util::do_with_parser("CREATE ROLE jane WITH HASHED = something;", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
         exceptions::syntax_exception);
+}
+
+/// Returns `cql_query` with the credentials of the role statement it holds masked.
+static sstring mask_secrets(std::string_view cql_query) {
+    auto stmt = test_valid(cql_query);
+    return dynamic_cast<cql3::cql_statement&>(*stmt).mask_secrets(sstring(cql_query));
+}
+
+// The literal in a password's position is masked wherever it is in the
+// statement and however it is written, since the statement's text goes to
+// the audit log and to log messages. No other token is masked.
+BOOST_AUTO_TEST_CASE(mask_role_secrets) {
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = 'secret' AND LOGIN = true;"),
+            "CREATE ROLE r WITH PASSWORD = '***' AND LOGIN = true;");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH LOGIN = true AND PASSWORD = 'secret';"),
+            "ALTER ROLE r WITH LOGIN = true AND PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE USER u WITH PASSWORD 'secret' SUPERUSER;"),
+            "CREATE USER u WITH PASSWORD '***' SUPERUSER;");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER USER u WITH PASSWORD 'secret';"),
+            "ALTER USER u WITH PASSWORD '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH HASHED PASSWORD = '$2a$05$ae4qyC7lYe47n8K2f/fgKuW/TCRCCpEvcYrA4Dl14VYJAjAEz3tli';"),
+            "CREATE ROLE r WITH HASHED PASSWORD = '***';");
+
+    // An empty password, a quote in a password, and pg-style quotes.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = '';"), "CREATE ROLE r WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = 'it''s';"), "CREATE ROLE r WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = $$se$cret$$;"), "CREATE ROLE r WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = $$$$;"), "CREATE ROLE r WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = $$pa'ss$$;"), "CREATE ROLE r WITH PASSWORD = '***';");
+
+    // Spelling, spacing and comments around the password do not matter, and
+    // a quote in a comment or in an identifier does not start a literal.
+    BOOST_REQUIRE_EQUAL(mask_secrets("create role r with password='secret';"), "create role r with password='***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH /* c */ PASSWORD /* c */ = /* c */ 'secret';"),
+            "CREATE ROLE r WITH /* c */ PASSWORD /* c */ = /* c */ '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE \"it's\" WITH PASSWORD = 'secret' -- don't\n;"),
+            "CREATE ROLE \"it's\" WITH PASSWORD = '***' -- don't\n;");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r -- don't\rWITH PASSWORD = 'secret';"),
+            "CREATE ROLE r -- don't\rWITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r // don't\nWITH PASSWORD = 'secret';"),
+            "CREATE ROLE r // don't\nWITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r-- 'don't\nWITH PASSWORD = 'secret';"),
+            "CREATE ROLE r-- 'don't\nWITH PASSWORD = '***';");
+
+    // A token equal to the password is not masked, however it is quoted: only
+    // the password's own literal is.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE 'secret' WITH PASSWORD = 'secret';"),
+            "CREATE ROLE 'secret' WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE secret WITH PASSWORD = 'secret';"),
+            "CREATE ROLE secret WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE \"secret\" WITH PASSWORD = 'secret';"),
+            "CREATE ROLE \"secret\" WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = '12345' AND OPTIONS = {12345:'x'};"),
+            "CREATE ROLE r WITH PASSWORD = '***' AND OPTIONS = {12345:'x'};");
+
+    // The keywords before a password may also be names, and a name is not a
+    // password.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE password WITH PASSWORD = 'x';"), "CREATE ROLE password WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE USER password WITH PASSWORD 'x';"), "CREATE USER password WITH PASSWORD '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE 'password' WITH PASSWORD = 'x';"), "CREATE ROLE 'password' WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE options WITH OPTIONS = {'x': 'y'};"), "CREATE ROLE options WITH OPTIONS = {'x': 'y'};");
+
+    // Every password of a repeated option is masked. The text is masked by
+    // a statement parsed from another text: mask_secrets() reads the text it
+    // is given, not the parsed options.
+    BOOST_REQUIRE_EQUAL(dynamic_cast<cql3::cql_statement&>(*test_valid("CREATE ROLE r WITH PASSWORD = 'a';"))
+            .mask_secrets("CREATE ROLE r WITH PASSWORD = 'a' AND LOGIN = true AND PASSWORD = 'b';"),
+            "CREATE ROLE r WITH PASSWORD = '***' AND LOGIN = true AND PASSWORD = '***';");
+
+    // The OPTIONS map: only the values of PASSWORD keys are secrets, however
+    // the key is written.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH OPTIONS = {'password': 'secret', 'x': 'y'};"),
+            "CREATE ROLE r WITH OPTIONS = {'password': '***', 'x': 'y'};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH OPTIONS = {$$PASSWORD$$: $$secret$$};"),
+            "ALTER ROLE r WITH OPTIONS = {$$PASSWORD$$: '***'};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH OPTIONS = {' Password ' /* c */ : 'secret'};"),
+            "ALTER ROLE r WITH OPTIONS = {' Password ' /* c */ : '***'};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH PASSWORD = 'secret' AND OPTIONS = {'x': 'other'};"),
+            "ALTER ROLE r WITH PASSWORD = '***' AND OPTIONS = {'x': 'other'};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH OPTIONS = {'x': 'password', 'password': 'y'};"),
+            "CREATE ROLE r WITH OPTIONS = {'x': 'password', 'password': '***'};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH OPTIONS = {'password': 'secret', 'x': 'secret'};"),
+            "CREATE ROLE r WITH OPTIONS = {'password': '***', 'x': 'secret'};");
+    // A value need not be quoted, and is masked as a bare token then.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH OPTIONS = {'password': 12345};"),
+            "CREATE ROLE r WITH OPTIONS = {'password': '***'};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = '12345' AND OPTIONS = {'x': 12345};"),
+            "CREATE ROLE r WITH PASSWORD = '***' AND OPTIONS = {'x': 12345};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH OPTIONS = {'password': P2020-01-01T12:34:56, 'x': 1.5e3};"),
+            "CREATE ROLE r WITH OPTIONS = {'password': '***', 'x': 1.5e3};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH OPTIONS = {'password': 123456789µs};"),
+            "CREATE ROLE r WITH OPTIONS = {'password': '***'};");
+    // The value runs to the `,` or `}` which ends it: a sign is a token of its own.
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH OPTIONS = {'password': - Infinity, 'x': - NaN};"),
+            "ALTER ROLE r WITH OPTIONS = {'password': '***', 'x': - NaN};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH OPTIONS = {'password': - /* c */ Infinity /* d */ , 'x': 1};"),
+            "ALTER ROLE r WITH OPTIONS = {'password': '***' /* d */ , 'x': 1};");
+
+    // Statements without credentials are returned as they are.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH LOGIN = true;"), "CREATE ROLE r WITH LOGIN = true;");
+    BOOST_REQUIRE_EQUAL(mask_secrets("DROP ROLE r;"), "DROP ROLE r;");
 }
