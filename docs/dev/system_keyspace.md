@@ -1336,6 +1336,10 @@ CREATE TABLE system.runtime_info (
 
 Implemented by `runtime_info_table` in `db/system_keyspace.cc`.
 
+The `cache` group describes the row cache. Its items do not all count the same thing:
+- `hits`, `misses`, `requests_total` and `hit_rate_total` count rows, since the node started.
+- `requests_recent` and `hit_rate_recent` count reads, in the last minute: the number of reads per second, and the share of them that were served from the cache alone.
+
 ---
 
 ## system.scylla_local

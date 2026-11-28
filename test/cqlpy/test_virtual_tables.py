@@ -193,6 +193,17 @@ def test_runtime_info_reduced_over_tables(scylla_only, cql, test_keyspace):
         nodetool.flush(cql, table)
         assert int(_runtime_info(cql)["generic"]["load"]) > 0
 
+# The items of the "cache" group of system.runtime_info. Tools and tests
+# outside this repository rely on the list, so an item must not disappear.
+# The recent hit rate is the share of the reads of the last minute that were
+# served from the cache alone, hence between 0 and 1.
+def test_runtime_info_cache_items(scylla_only, cql):
+    cache = _runtime_info(cql)["cache"]
+    assert set(cache) == {"memory_total", "memory_used", "memory_free", "entries", "hits", "misses",
+                          "hit_rate_total", "hit_rate_recent", "requests_total", "requests_recent"}
+    assert 0 <= float(cache["hit_rate_recent"]) <= 1
+    assert int(cache["requests_recent"]) >= 0
+
 def test_versions(scylla_only, cql):
     _check_exists(cql, "versions", ("key", "build_id", "build_mode", "version"))
 

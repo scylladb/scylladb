@@ -289,9 +289,9 @@ SEASTAR_TEST_CASE(test_obsolete_commitlog_cleanup_records_dropped_on_save) {
 
         auto save_record = [&] (int64_t token, db::replay_position rp) {
             auto tr = dht::token_range::make({dht::token::from_int64(token), false}, {dht::token::from_int64(token + 1), true});
-            const auto writes_before = t.get_stats().writes().count();
+            const auto writes_before = t.get_stats().writes.histogram().count();
             sys_ks.save_commitlog_cleanup_record(tableid, tr, rp).get();
-            BOOST_REQUIRE_EQUAL(t.get_stats().writes().count() - writes_before, 1);
+            BOOST_REQUIRE_EQUAL(t.get_stats().writes.histogram().count() - writes_before, 1);
         };
         auto get_num_records = [&] {
             auto res = e.execute_cql("select * from system.commitlog_cleanups;").get();
@@ -367,9 +367,9 @@ SEASTAR_TEST_CASE(test_invalid_replay_position_commitlog_cleanup_record) {
         auto& t = e.local_db().find_column_family(db::system_keyspace::NAME, db::system_keyspace::COMMITLOG_CLEANUPS);
 
         BOOST_REQUIRE_EQUAL(get_num_records(), 0);
-        const auto writes_before = t.get_stats().writes().count();
+        const auto writes_before = t.get_stats().writes.histogram().count();
         sys_ks.save_commitlog_cleanup_record(tableid, tr, db::replay_position()).get();
-        BOOST_REQUIRE_EQUAL(t.get_stats().writes().count(), writes_before);
+        BOOST_REQUIRE_EQUAL(t.get_stats().writes.histogram().count(), writes_before);
         BOOST_REQUIRE_EQUAL(get_num_records(), 0);
     });
 }
