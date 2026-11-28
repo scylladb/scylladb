@@ -268,6 +268,48 @@ class ResourceGatherOn(ResourceGatherRecord):
         return result
 
 
+def _read_file_or_reason(path: Path) -> str:
+    """Read *path* as text, or describe why it could not be read."""
+    try:
+        return path.read_text().strip()
+    except OSError as exc:
+        return f"<unavailable: {exc}>"
+
+
+def read_oom_kill(cgroup_dir: Path) -> int | None:
+    """Return the oom_kill counter of the memory.events in *cgroup_dir*, or None if it cannot be read."""
+    try:
+        for line in (cgroup_dir / "memory.events").read_text().splitlines():
+            name, _, value = line.partition(" ")
+            if name == "oom_kill":
+                return int(value)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def gather_oom_kill_evidence(worker_id: str, oom_kill_baseline: int | None) -> str:
+    """Collect circumstantial evidence that an external kill stopped a dead xdist worker.
+
+    Reads the cgroup v2 memory.events of the worker and of the whole test run. The
+    worker cgroup exists only with --gather-metrics. The counters of a cgroup also
+    include its child cgroups, for example the Scylla processes of a worker. So they
+    are a hint, not proof. The memory timeline before the death is in the metrics DB.
+    """
+    worker_cgroup = CGROUP_TESTS / worker_id
+    # The whole run, in both --gather-metrics and --no-gather-metrics modes.
+    run_cgroup = CGROUP_INITIAL.parent
+    oom_kill = read_oom_kill(worker_cgroup)
+    oom_kill_delta = oom_kill - oom_kill_baseline if oom_kill is not None and oom_kill_baseline is not None else "unknown"
+    return "\n".join([
+        f"--- {worker_id} worker cgroup (includes its Scylla processes) ---",
+        f"oom_kill delta since the worker started: {oom_kill_delta}",
+        f"memory.events:\n{_read_file_or_reason(worker_cgroup / 'memory.events')}",
+        "--- test run cgroup (run-wide, includes all workers and Scylla processes) ---",
+        f"memory.events:\n{_read_file_or_reason(run_cgroup / 'memory.events')}",
+    ])
+
+
 def _get_cpu_model() -> str:
     try:
         with open("/proc/cpuinfo") as f:
