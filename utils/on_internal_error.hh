@@ -29,6 +29,11 @@ namespace utils {
 /// this will either abort or throw a std::runtime_error.
 /// In both cases an error will be logged, containing \p reason and the
 /// current backtrace.
+///
+/// If called during stack unwinding (std::uncaught_exceptions() > 0),
+/// logs that on_internal_error was triggered during unwinding and the
+/// original exception (if available via std::current_exception()), then
+/// aborts instead of throwing (which would trigger std::terminate).
 [[noreturn]] void on_internal_error(std::string_view reason);
 
 /// Report an internal error and abort unconditionally
@@ -38,4 +43,4 @@ namespace utils {
 /// setting.
 [[noreturn]] void on_fatal_internal_error(std::string_view reason) noexcept;
 
-}
+} // namespace utils
