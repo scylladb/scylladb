@@ -47,8 +47,6 @@ struct write_target {
 
 // Writer for log records that handles serialization and size computation
 class log_record_writer {
-    using ostream = seastar::simple_memory_output_stream;
-
     log_record _record;
 
 public:
@@ -65,14 +63,12 @@ public:
     size_t record_size() const { return header_size() + value_size(); }
 
     // Write the record's frame - frame header, record header, value - to an output stream.
-    void write_frame(ostream& out) const;
+    void write_frame(seastar::simple_memory_output_stream& out) const;
 };
 
-// Writer for log records that stores pre-serialized bytes.
-// Used in compaction and separator rewriting to avoid deserialization.
+// A record writer for a record whose header and value are already serialized. The writer copies the
+// bytes as they are, so that a rewrite of a record does not decode the record.
 class log_record_bytes_writer {
-    using ostream = seastar::simple_memory_output_stream;
-
     record_header _header;
     bytes_view _header_bytes;
     bytes_view _value_bytes;
@@ -90,7 +86,7 @@ public:
     size_t value_size() const { return _value_bytes.size(); }
     size_t record_size() const { return header_size() + value_size(); }
 
-    void write_frame(ostream& out) const;
+    void write_frame(seastar::simple_memory_output_stream& out) const;
 };
 
 template <typename T>
@@ -102,17 +98,48 @@ concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_
     { w.write_frame(out) };
 };
 
+template <log_record_writer_concept Writer>
+size_t record_frame_size(const Writer& writer) noexcept {
+    return ondisk::record_frame_size(writer.header_size(), writer.value_size());
+}
+
 using record_location_with_holder = std::tuple<record_location, seastar::gate::holder>;
 
-// Where a record whose frame sits at `frame_offset` of a chunk ends up, once that chunk has been
-// written to a segment at `chunk_position`. A buffer learns where its chunk was written once, and
-// the location of every record in it follows from that.
-inline record_location locate_record(segment_position chunk_position, size_t frame_offset, size_t frame_size) noexcept {
+// Holds the offset of a record frame in a chunk and the frame_size of the frame, as record_location
+// does.
+struct frame_extent {
+    uint32_t offset;
+    uint32_t size;
+};
+
+// Returns the location of the record whose frame is at `frame` in a chunk that is written at
+// `chunk_position`.
+inline record_location locate_record(segment_position chunk_position, frame_extent frame) noexcept {
     return record_location {
         .segment = chunk_position.segment,
-        .offset = static_cast<uint32_t>(chunk_position.offset + frame_offset),
-        .size = static_cast<uint32_t>(frame_size),
+        .offset = chunk_position.offset + frame.offset,
+        .size = frame.size,
     };
+}
+
+namespace chunk_layout {
+
+// Returns the largest record_size that fits an empty chunk of `kind` in a buffer of `buffer_size`
+// bytes. The chunk header of a full segment is larger than the chunk header of a mixed segment, so
+// a record can fit a chunk of one kind and not a chunk of the other kind.
+constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
+    const size_t overhead = ondisk::chunk_header_size(kind) + ondisk::record_frame_header_size;
+    return buffer_size > overhead ? buffer_size - overhead : 0;
+}
+
+// Returns the largest record_size that fits an empty chunk of each kind in a buffer of
+// `buffer_size` bytes. The separator rewrites the records of a mixed segment into full segments, so
+// a record that logstor accepts must fit both kinds.
+constexpr size_t max_record_size_any_kind(size_t buffer_size) noexcept {
+    return std::min(max_record_size(buffer_size, segment_kind::mixed),
+                    max_record_size(buffer_size, segment_kind::full));
+}
+
 }
 
 struct buffered_write_result {
@@ -128,8 +155,8 @@ struct buffered_write_result {
 //                         |   record frame   |  each padded to record_alignment
 //                         |       ...        |
 //   + records_size        +------------------+
-//                         |   zero padding   |  seal(), to the alignment it is given
-//   serialized_size()     +------------------+
+//                         |   zero padding   |  finish(), to block_alignment
+//   chunk size            +------------------+
 //                         |      unused      |
 //   buffer_size()         +------------------+
 //
@@ -137,31 +164,67 @@ struct buffered_write_result {
 // The header of a full segment also holds the table and the token range of the records. The
 // record frames are the body of the chunk, which the body CRC covers.
 //
-// seal() pads the chunk and then writes the header, because it holds the size and the CRC of
-// the body, and the sequence number of the segment that receives the chunk.
-//
-// This type only serializes a chunk. Tests and write_buffer use it directly.
-class raw_write_buffer {
+// finish() computes the body CRC and pads the chunk, and the size that finish() returns does not
+// change after this. seal() then writes the chunk header, which holds the segment_seq of the
+// segment that receives the chunk. So a caller can reserve room for the chunk in a segment before
+// it knows the segment_seq.
+class chunk_builder {
 public:
+    chunk_builder(size_t buffer_size, segment_kind kind);
 
-    using ostream = seastar::simple_memory_output_stream;
+    chunk_builder(const chunk_builder&) = delete;
+    chunk_builder& operator=(const chunk_builder&) = delete;
 
-    // Where the appended record frame starts in the buffer, and how many bytes it takes
-    // without its padding - which is what record_location::size holds.
-    struct append_result {
-        size_t frame_offset;
-        size_t frame_size;
-    };
+    chunk_builder(chunk_builder&&) noexcept = default;
+    chunk_builder& operator=(chunk_builder&&) noexcept = default;
+
+    // Empties the buffer, to build a new chunk in it.
+    void reset();
+
+    // Appends the frame of the record of `writer`.
+    // Throws std::runtime_error when the record does not fit, see fits(). An append that throws
+    // leaves the builder unchanged.
+    template <log_record_writer_concept Writer>
+    frame_extent append(const Writer& writer);
+
+    // Ends the appends, pads the chunk to block_alignment and computes the body CRC. Returns the
+    // size of the chunk, which does not change after this.
+    size_t finish();
+
+    // Finishes the chunk if finish() was not called, writes the chunk header and returns the chunk.
+    // The first form seals a chunk of a mixed segment, and the second form seals a chunk of a full
+    // segment, whose chunk header holds `table`.
+    bytes_view seal(segment_sequence segment_seq);
+    bytes_view seal(segment_sequence segment_seq, table_id table);
+
+    template <log_record_writer_concept Writer>
+    bool fits(const Writer& writer) const noexcept {
+        return fits_frame(record_frame_size(writer));
+    }
+
+    bool has_data() const noexcept { return _record_count > 0; }
+
+    size_t buffer_size() const noexcept { return _buffer_size; }
+
+    size_t chunk_header_size() const noexcept {
+        return ondisk::chunk_header_size(_segment_kind);
+    }
+
+    size_t record_bytes() const noexcept { return _record_bytes; }
+    size_t record_count() const noexcept { return _record_count; }
+
+    // Returns the bytes of an appended record frame, without the padding after the frame.
+    bytes_view frame_bytes(frame_extent frame) const noexcept {
+        return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get() + frame.offset), frame.size);
+    }
 
 private:
-
-    using aligned_buffer_type = std::unique_ptr<char[], free_deleter>;
+    using ostream = seastar::simple_memory_output_stream;
 
     size_t _buffer_size;
-    aligned_buffer_type _buffer;
+    std::unique_ptr<char[], free_deleter> _buffer;
     segment_kind _segment_kind;
     ostream _stream;
-    ostream _header_stream;
 
     // The frame sizes of the appended records summed, their padding excluded.
     size_t _record_bytes{0};
@@ -169,198 +232,150 @@ private:
     std::optional<dht::token> _min_token;
     std::optional<dht::token> _max_token;
 
+    // Holds the values that finish() computes: the size of the chunk, and the size and the CRC of
+    // the chunk body for the chunk header.
+    struct finished_body {
+        size_t chunk_size;
+        uint32_t records_size;
+        uint32_t body_crc;
+    };
+    std::optional<finished_body> _finished_body;
     bool _sealed{false};
 
-public:
-
-    raw_write_buffer(size_t buffer_size, segment_kind kind);
-
-    void reset();
-
-    raw_write_buffer(const raw_write_buffer&) = delete;
-    raw_write_buffer& operator=(const raw_write_buffer&) = delete;
-
-    raw_write_buffer(raw_write_buffer&&) noexcept = default;
-    raw_write_buffer& operator=(raw_write_buffer&&) noexcept = default;
-
-    const char* data() const noexcept { return _buffer.get(); }
-
-    // The bytes written to the buffer so far, which after seal() is the whole chunk.
-    size_t serialized_size() const noexcept { return _buffer_size - _stream.size(); }
-
-    size_t buffer_size() const noexcept { return _buffer_size; }
-
-    bool can_fit(size_t record_size) const noexcept;
-
+    // Fails with an internal error if the chunk is finished, or if a record frame header cannot
+    // describe the record header of `writer`.
+    // Throws std::runtime_error if the buffer has no room for the record frame of `writer` and its
+    // padding.
     template <log_record_writer_concept Writer>
-    bool can_fit(const Writer& writer) const noexcept {
-        return can_fit(writer.record_size());
-    }
+    void validate_append(const Writer& writer) const;
 
-    bool has_data() const noexcept;
+    bool fits_frame(size_t frame_size) const noexcept;
 
-    // The largest record - record header and value, the frame header aside - that fits an
-    // empty buffer of this size and kind. The kinds differ in what they carry ahead of their
-    // records, so a record can fit a buffer of one kind and not of the other.
-    static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
-        const size_t overhead = ondisk::chunk_header_size(kind) + ondisk::record_frame_header_size;
-        return buffer_size > overhead ? buffer_size - overhead : 0;
-    }
+    // Returns the chunk offset at which the next record frame or padding goes.
+    size_t write_offset() const noexcept { return _buffer_size - _stream.size(); }
 
-    // The largest record that fits an empty buffer of this size whatever its kind. A record is
-    // written to a segment of one kind and can be rewritten into a segment of the other - the
-    // separator rewrites the records of a mixed segment into full segments of their compaction
-    // group - so a record that logstor accepts at all has to fit both.
-    static constexpr size_t max_record_size_any_kind(size_t buffer_size) noexcept {
-        return std::min(max_record_size(buffer_size, segment_kind::mixed),
-                        max_record_size(buffer_size, segment_kind::full));
-    }
-
-    size_t max_record_size() const noexcept {
-        return max_record_size(_buffer_size, _segment_kind);
-    }
-
-    size_t record_bytes() const noexcept { return _record_bytes; }
-    size_t record_count() const noexcept { return _record_count; }
-    segment_kind kind() const noexcept { return _segment_kind; }
-
-    template <log_record_writer_concept Writer>
-    append_result append(const Writer& writer);
-
-    // The size of the chunk that sealing the buffer at `alignment` would produce.
-    size_t chunk_size(size_t alignment) const noexcept;
-
-    // How many segments of this kind `record_count` records of `record_bytes` bytes take.
-    static size_t estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind);
-
-    size_t chunk_header_size() const noexcept {
-        return ondisk::chunk_header_size(_segment_kind);
-    }
-
-    // Completes the chunk: pads it to `alignment` and writes its header. `table` is set for
-    // segment_kind::full.
-    void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment);
-
-    // The chunk the buffer was sealed into, which is what is written to a segment.
-    bytes_view chunk() const;
-
-private:
-
-    // table is set for segment_kind::full
-    void write_header(segment_sequence segment_seq, std::optional<table_id> table, uint32_t records_size);
-
-    void pad_to_alignment(size_t alignment);
-
-    friend class write_buffer;
+    bytes_view do_seal(segment_sequence segment_seq, std::optional<table_id> table);
 };
 
-// Tracks asynchronous write completion on top of raw_write_buffer.
+// A record of a mixed buffer, which the separator rewrites after the buffer is flushed.
+struct separator_record {
+    log_record_writer writer;
+    frame_extent frame;
+    write_target target;
+
+    record_location location(segment_position chunk_position) const noexcept {
+        return locate_record(chunk_position, frame);
+    }
+};
+
+// A chunk builder that tracks the writes of its records. The write() of each subclass appends a
+// record and returns, through track(), a future of the location of the record, which resolves after
+// the chunk is written to a segment and complete_writes() is called. The gate holder that comes
+// with the location keeps the buffer open for the work that follows the write, such as an index
+// update.
 //
-// This is the buffer type used by the segment manager, buffered_writer,
-// compaction, and separator flows. write() appends a record to the underlying
-// raw buffer and returns a future that resolves to the final record_location once
-// the buffer is flushed. The returned gate holder keeps the buffer alive for
-// follow-up work such as index updates. For mixed buffers it also keeps copies
-// of appended records so separator rewriting can replay them after the flush.
+// mixed_write_buffer and full_write_buffer take different records and seal different headers, and
+// this class holds what they share.
 class write_buffer {
-public:
-    struct record_in_buffer {
-        log_record_writer writer;
-        // Where the record's frame sits in the buffer, rather than a future of where it ended up:
-        // the separator only ever looks at these once the buffer has been written, so a record can
-        // be located from the position of the chunk instead of waiting for one of its own.
-        size_t frame_offset;
-        size_t frame_size;
-        write_target target;
-
-        record_location location(segment_position chunk_position) const noexcept {
-            return locate_record(chunk_position, frame_offset, frame_size);
-        }
-    };
-
-private:
-    raw_write_buffer _raw;
+    chunk_builder _builder;
     shared_promise<segment_position> _written;
     seastar::gate _write_gate;
 
-    std::vector<record_in_buffer> _records_copy;
-
 public:
-
-    write_buffer(size_t buffer_size, segment_kind kind);
-
-    void reset();
-
     write_buffer(const write_buffer&) = delete;
     write_buffer& operator=(const write_buffer&) = delete;
+
+    // Ends the appends, see chunk_builder::finish().
+    size_t finish() { return _builder.finish(); }
+
+    // Completes the tracked writes once the chunk of the buffer is written at `chunk_position`, and
+    // waits for the holders of the written records.
+    future<> complete_writes(segment_position chunk_position);
+
+    // Waits for the holders of the written records.
+    future<> close();
+    bool is_closed() const noexcept;
+
+    template <log_record_writer_concept Writer>
+    bool fits(const Writer& writer) const noexcept { return _builder.fits(writer); }
+    bool has_data() const noexcept { return _builder.has_data(); }
+
+    size_t buffer_size() const noexcept { return _builder.buffer_size(); }
+    size_t record_bytes() const noexcept { return _builder.record_bytes(); }
+    size_t record_count() const noexcept { return _builder.record_count(); }
+
+protected:
+    write_buffer(size_t buffer_size, segment_kind kind);
+    ~write_buffer() = default;
 
     write_buffer(write_buffer&&) noexcept = default;
     write_buffer& operator=(write_buffer&&) noexcept = default;
 
-    future<> close();
-    bool is_closed() const noexcept;
+    // Returns the future of the location of the record whose frame is at `frame`. The future holds
+    // the write gate until the write of the record completes, and passes the holder to the caller.
+    future<record_location_with_holder> track(frame_extent frame);
 
-    size_t serialized_size() const noexcept { return _raw.serialized_size(); }
+    // Fails the tracked writes with `ex`, for a chunk that is not written, and closes the buffer.
+    future<> abort_writes(std::exception_ptr ex);
 
-    size_t buffer_size() const noexcept { return _raw.buffer_size(); }
+    // Empties the buffer for a new chunk.
+    // The caller must close the buffer first.
+    void reset();
 
-    bool can_fit(size_t record_size) const noexcept { return _raw.can_fit(record_size); }
-    template <log_record_writer_concept Writer>
-    bool can_fit(const Writer& writer) const noexcept { return _raw.can_fit(writer); }
-    bool has_data() const noexcept { return _raw.has_data(); }
-
-    size_t max_record_size() const noexcept { return _raw.max_record_size(); }
-    size_t record_bytes() const noexcept { return _raw.record_bytes(); }
-    size_t record_count() const noexcept { return _raw.record_count(); }
-
-    size_t chunk_size(size_t alignment) const noexcept {
-        return _raw.chunk_size(alignment);
-    }
-
-    void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment) {
-        _raw.seal(segment_seq, table, alignment);
-    }
-
-    bytes_view chunk() const { return _raw.chunk(); }
-
-    // Write a record to the buffer.
-    // Returns a future that will be resolved with the record location once flushed and a gate holder
-    // that keeps the write buffer open. The gate should be held for index updates after the write
-    // is done.
-    template <log_record_writer_concept Writer>
-    future<record_location_with_holder> write(Writer writer, write_target target = {});
-
-    // Complete all tracked writes with their locations once the buffer's chunk is written at chunk_position
-    future<> complete_writes(segment_position chunk_position);
-    future<> abort_writes(std::exception_ptr);
-
-private:
-    bool with_record_copy() const noexcept {
-        switch (_raw.kind()) {
-        case segment_kind::mixed:
-            return true;
-        case segment_kind::full:
-            return false;
-        }
-        std::unreachable();
-    }
-
-    std::vector<record_in_buffer> take_separator_records();
-
-    friend class buffered_writer;
-    friend class segment_manager_impl;
-    friend struct separator_buffer;
+    chunk_builder& builder() noexcept { return _builder; }
+    const chunk_builder& builder() const noexcept { return _builder; }
 };
 
-extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
-extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
+// The write buffer of a mixed segment, which takes the user writes. The buffer keeps the records
+// that it took until its chunk is written, so that the separator can rewrite them into full
+// segments.
+class mixed_write_buffer final : public write_buffer {
+    std::vector<separator_record> _separator_records;
 
-extern template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
-extern template future<record_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
+public:
+    explicit mixed_write_buffer(size_t buffer_size);
+
+    future<record_location_with_holder> write(log_record_writer writer, write_target target = {});
+
+    bytes_view seal(segment_sequence segment_seq) {
+        return builder().seal(segment_seq);
+    }
+
+    // Returns the records of the buffer for the separator, after the chunk of the buffer is
+    // written.
+    std::vector<separator_record> take_separator_records();
+
+    future<> abort_writes(std::exception_ptr ex);
+
+    void reset();
+};
+
+// The write buffer of a full segment, which takes the records of compaction and the separator.
+class full_write_buffer final : public write_buffer {
+public:
+    explicit full_write_buffer(size_t buffer_size)
+        : write_buffer(buffer_size, segment_kind::full)
+    {}
+
+    template <log_record_writer_concept Writer>
+    future<record_location_with_holder> write(const Writer& writer) {
+        return track(builder().append(writer));
+    }
+
+    bytes_view seal(segment_sequence segment_seq, table_id table) {
+        return builder().seal(segment_seq, table);
+    }
+
+    using write_buffer::abort_writes;
+    using write_buffer::reset;
+};
+
+extern template frame_extent chunk_builder::append<log_record_writer>(const log_record_writer&);
+extern template frame_extent chunk_builder::append<log_record_bytes_writer>(const log_record_bytes_writer&);
 
 class write_buffer_pool;
 
-// Gives a borrowed write_buffer back to its pool, along with the pool unit acquired for it.
+// Gives a borrowed full_write_buffer back to its pool, along with the pool unit acquired for it.
 class write_buffer_returner {
     write_buffer_pool* _pool = nullptr;
     seastar::semaphore_units<> _units;
@@ -370,15 +385,15 @@ public:
     write_buffer_returner(write_buffer_pool& pool, seastar::semaphore_units<> units) noexcept
         : _pool(&pool), _units(std::move(units)) {}
 
-    void operator()(write_buffer* wb) noexcept;
+    void operator()(full_write_buffer* wb) noexcept;
 };
 
-// A write_buffer borrowed from a write_buffer_pool. reset() gives it back, and so does destruction,
+// A full_write_buffer borrowed from a write_buffer_pool. reset() gives it back, and so does destruction,
 // which is what keeps the pool's accounting right on every path out of a compaction, including the
 // ones that throw.
-using owned_write_buffer = std::unique_ptr<write_buffer, write_buffer_returner>;
+using owned_write_buffer = std::unique_ptr<full_write_buffer, write_buffer_returner>;
 
-// Pool of write_buffer's for segment building, primarily for compaction output buffers.
+// Pool of full_write_buffer's for segment building, primarily for compaction output buffers.
 // Hands out at most `capacity` buffers concurrently, created on demand and reused up to `max_cached`.
 // Buffers must be closed before reuse; owners are responsible for closing before the owned_write_buffer
 // goes out of scope. stop() must be called after all users have stopped.
@@ -388,7 +403,6 @@ public:
         // The most buffers the pool may have out at once.
         size_t capacity{0};
         size_t buffer_size{0};
-        segment_kind kind{segment_kind::full};
         // Buffers built at construction rather than at the point of use. Must not exceed max_cached,
         // or they would not all be kept.
         size_t preallocate{0};
@@ -404,14 +418,13 @@ public:
 
 private:
     size_t _buffer_size;
-    segment_kind _kind;
     size_t _max_cached;
     size_t _capacity;
 
     // Buffers ready to be handed out. Never longer than _max_cached, and reserved for it up front,
     // so that returning a buffer to it never allocates - it has to be infallible, being the last
     // step of an owner's destructor.
-    std::vector<std::unique_ptr<write_buffer>> _free;
+    std::vector<std::unique_ptr<full_write_buffer>> _free;
     // Buffers that are currently out with an owner.
     size_t _in_use{0};
 
@@ -428,7 +441,7 @@ public:
     future<owned_write_buffer> allocate(abort_source& as);
     future<std::vector<owned_write_buffer>> allocate_many(size_t count, abort_source& as);
 
-    void return_buffer(write_buffer* wb, seastar::semaphore_units<> pool_units) noexcept;
+    void return_buffer(full_write_buffer* wb, seastar::semaphore_units<> pool_units) noexcept;
 
     // Changes the number of buffers the pool may have out at once. Lowering it does not take back
     // any of the buffers that are already out - it only makes the pool hand out that many fewer
@@ -458,32 +471,42 @@ private:
     }
 
     // Permanently removes a buffer from the pool after it could not be taken back.
-    void drop_buffer(std::unique_ptr<write_buffer> wb, seastar::semaphore_units<>& pool_units) noexcept;
+    void drop_buffer(std::unique_ptr<full_write_buffer> wb, seastar::semaphore_units<>& pool_units) noexcept;
 };
 
-// Configuration passed to buffered_writer constructor (excluding the flush function).
-struct buffered_writer_config {
+// Configuration passed to write_buffer_ring constructor (excluding the flush function).
+struct write_buffer_ring_config {
     size_t buffer_size;
-    size_t ring_size;
+    // The scheduling group that the ring runs its flushes in.
     seastar::scheduling_group flush_sg;
+    // The number of buffers in the ring, which allows at most `ring_size - 1` flushes in flight.
+    // With a sync period of 0, records collect in a buffer only while all flushes are in flight, so
+    // a larger ring writes more and smaller chunks, each padded to a block, and adds no throughput.
+    // The default allows four flushes in flight, which are sufficient to overlap the disk write with
+    // the index and separator work.
+    size_t ring_size{5};
+    // The time that the ring waits after the first record of a head buffer that is not full, before
+    // the head advances past the buffer. A longer period writes fewer and larger chunks at low load,
+    // but each write then waits up to the period. With the default of 0, records still collect in a
+    // buffer while all flushes are in flight, so the chunks are not small under load.
     std::chrono::milliseconds sync_period{0};
 };
 
-// Manages a circular ring of write_buffers.
+// Manages a circular ring of mixed write buffers.
 //
 // Writers append to the head buffer.  A single consumer coroutine drains the
 // tail.  The head advances when the current head buffer is full (can't fit the
-// next write) or when the consumer seals it.  Writers wait if the ring is full
-// (all buffers are pending flush).
-class buffered_writer {
+// next write) or when the consumer advances it to flush the head buffer.
+// Writers wait if the ring is full (all buffers are pending flush).
+class write_buffer_ring {
     seastar::scheduling_group _flush_sg;
     size_t _buffer_size;
     size_t _ring_size;
     std::chrono::milliseconds _sync_period;
-    seastar::noncopyable_function<future<>(write_buffer&)> _flush_func;
+    seastar::noncopyable_function<future<>(mixed_write_buffer&)> _flush_func;
 
     // The ring of buffers, indexed modulo _ring_size.
-    std::vector<write_buffer> _ring;
+    std::vector<mixed_write_buffer> _ring;
 
     // Monotonically increasing indices; the actual slot is idx % _ring_size.
     // _head: next slot writers append to.
@@ -527,7 +550,7 @@ class buffered_writer {
         seastar::promise<record_location_with_holder> persisted_pr; // written to a segment
         log_record_writer writer;
         write_target target;
-        // Keeps the writer from finishing its stop() while the record is on the queue. It is held
+        // Keeps the ring from finishing its stop() while the record is on the queue. It is held
         // by the request rather than by whoever waits for it, so that queueing a write needs no
         // coroutine of its own.
         seastar::gate::holder async_gate_holder;
@@ -547,7 +570,7 @@ class buffered_writer {
     };
 
     struct on_queued_write_expiry {
-        buffered_writer* owner{};
+        write_buffer_ring* owner{};
 
         void operator()(queued_write& w) noexcept {
             owner->on_queued_write_removed(w);
@@ -581,7 +604,7 @@ class buffered_writer {
 
     seastar::gate _async_gate;
 
-    // The single flush-consumer fiber, running for the lifetime of the writer.
+    // The single flush-consumer fiber, running for the lifetime of the ring.
     future<> _consumer{make_ready_future<>()};
 
     auto&& head_buf(this auto&& self) noexcept { return self._ring[self._head % self._ring_size]; }
@@ -623,11 +646,11 @@ class buffered_writer {
     future<> consumer_loop();
 
 public:
-    explicit buffered_writer(buffered_writer_config cfg,
-            seastar::noncopyable_function<future<>(write_buffer&)> flush_func);
+    explicit write_buffer_ring(write_buffer_ring_config cfg,
+            seastar::noncopyable_function<future<>(mixed_write_buffer&)> flush_func);
 
-    buffered_writer(const buffered_writer&) = delete;
-    buffered_writer& operator=(const buffered_writer&) = delete;
+    write_buffer_ring(const write_buffer_ring&) = delete;
+    write_buffer_ring& operator=(const write_buffer_ring&) = delete;
 
     future<> start();
     future<> stop();

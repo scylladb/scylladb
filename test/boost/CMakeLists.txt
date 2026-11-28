@@ -405,6 +405,7 @@ add_scylla_test(combined_tests
     logstor_compaction_driver_test.cc
     logstor_compaction_policy_test.cc
     logstor_index_test.cc
+    logstor_write_buffer_test.cc
     memtable_test.cc
     multishard_combining_reader_as_mutation_source_test.cc
     multishard_query_test.cc

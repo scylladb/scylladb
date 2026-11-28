@@ -36,7 +36,6 @@ extern seastar::logger logstor_logger;
 struct logstor_config {
     segment_manager_config segment_manager_cfg;
     seastar::scheduling_group flush_sg;
-    size_t write_buffer_ring_size{5};
 };
 
 // Thrown when the record found at the indexed location holds a different key than the one that was looked up.
@@ -56,7 +55,7 @@ class logstor {
     };
 
     segment_manager _segment_manager;
-    buffered_writer _write_buffer;
+    write_buffer_ring _write_buffer;
     cache_tracker _cache_tracker;
     seastar::metrics::metric_groups _metrics;
     stats _stats;

@@ -113,6 +113,8 @@ void chunk_records::iterator::read_next() {
         std::throw_with_nested(std::runtime_error(fmt::format("Cannot read the record at offset {} of {}", record_offset, segment_id)));
     }
     if (!record) {
+        logstor_logger.warn("Skipped the rest of a chunk of {}: the record frame at offset {} does not fit in the chunk body, which matches its CRC. "
+                "The segment is corrupt; the records from this offset to the end of the chunk are lost.", segment_id, record_offset);
         return;
     }
 

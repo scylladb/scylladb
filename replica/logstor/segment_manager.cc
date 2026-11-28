@@ -382,7 +382,7 @@ public:
 };
 
 struct separator_task {
-    std::vector<write_buffer::record_in_buffer> records;
+    std::vector<separator_record> records;
     // Where the chunk holding the records was written, which is what the records' own locations are
     // relative to.
     segment_position chunk_position{};
@@ -503,8 +503,8 @@ public:
     future<> start();
     future<> stop();
 
-    future<> write(write_buffer&);
-    future<> write_full_segment(write_buffer&, logstor_group&, write_source, abort_source* = nullptr);
+    future<> write(mixed_write_buffer&);
+    future<> write_full_segment(full_write_buffer&, logstor_group&, write_source, abort_source* = nullptr);
 
     future<log_record> read(record_location) noexcept;
 
@@ -701,7 +701,7 @@ private:
     }
     future<> run_separator_fiber();
 
-    future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, segment_position chunk_position, segment_ref, segment_sequence);
+    future<> write_to_separator(std::vector<separator_record>&, segment_position chunk_position, segment_ref, segment_sequence);
 
     // The segment info of the first chunk of the segment, or nothing if its headers are not valid.
     future<std::optional<segment_info>> read_segment_info(log_segment_id);
@@ -853,7 +853,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _compaction_buffer_pool(write_buffer_pool::config{
             .capacity = max_compaction_parallelism,
             .buffer_size = config.segment_size,
-            .kind = segment_kind::full,
             .preallocate = max_compaction_parallelism,
             .max_cached = max_compaction_parallelism,
       })
@@ -863,7 +862,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _separator_buffer_pool(write_buffer_pool::config{
             .capacity = separator_flush_reserve,
             .buffer_size = config.segment_size,
-            .kind = segment_kind::full,
             .preallocate = 0,
             .max_cached = separator_flush_reserve,
       })
@@ -1097,14 +1095,14 @@ future<> segment_manager_impl::run_separator_fiber() {
     }
 }
 
-future<> segment_manager_impl::write(write_buffer& wb) {
+future<> segment_manager_impl::write(mixed_write_buffer& wb) {
     write_source source = write_source::normal_write;
     auto holder = _async_gate.hold();
     auto write_op = _writes_phaser.start();
-    const auto chunk_size = wb.chunk_size(block_alignment);
+    const auto chunk_size = wb.finish();
 
     if (chunk_size > _cfg.segment_size) {
-        throw std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size));
+        co_await coroutine::return_exception(std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size)));
     }
 
     while (true) {
@@ -1126,11 +1124,10 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         auto seq_num = seg->seq_num();
 
-        wb.seal(seq_num, std::nullopt, block_alignment);
+        const auto chunk = wb.seal(seq_num);
 
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
-        const auto chunk = wb.chunk();
         auto append_result = co_await coroutine::as_future(std::move(*appender).append(chunk));
         if (append_result.failed()) {
             auto ex = append_result.get_exception();
@@ -1169,18 +1166,17 @@ future<> segment_manager_impl::write(write_buffer& wb) {
     }
 }
 
-future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_group& cg, write_source source, abort_source* as) {
-    const auto chunk_size = wb.chunk_size(block_alignment);
+future<> segment_manager_impl::write_full_segment(full_write_buffer& wb, logstor_group& cg, write_source source, abort_source* as) {
+    const auto chunk_size = wb.finish();
 
     if (chunk_size > _cfg.segment_size) {
-        throw std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size));
+        co_await coroutine::return_exception(std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size)));
     }
 
     auto seg = co_await get_segment(source, as);
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
-    wb.seal(seg->seq_num(), cg.table_id(), block_alignment);
-    const auto chunk = wb.chunk();
+    const auto chunk = wb.seal(seg->seq_num(), cg.table_id());
 
     auto append_result = co_await coroutine::as_future(seg->append(chunk));
     if (append_result.failed()) {
@@ -1779,7 +1775,7 @@ struct compaction_buffer {
 
         auto writer = log_record_bytes_writer(header, record_view);
 
-        if (!buf->can_fit(writer)) {
+        if (!buf->fits(writer)) {
             co_await flush();
         }
 
@@ -2002,13 +1998,13 @@ void separator_index_update::operator()(record_location new_location, seastar::g
     index->update_record_location(key, prev_location, new_location);
 }
 
-future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::record_in_buffer>& records, segment_position chunk_position,
+future<> segment_manager_impl::write_to_separator(std::vector<separator_record>& records, segment_position chunk_position,
         segment_ref seg_ref, segment_sequence segment_seq_num) {
     static constexpr size_t separator_group_write_concurrency = 4;
 
     struct separator_group_records {
         logstor_group* cg;
-        std::vector<write_buffer::record_in_buffer*> records;
+        std::vector<separator_record*> records;
     };
 
     std::vector<separator_group_records> groups;
@@ -2042,7 +2038,7 @@ future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::reco
 }
 
 future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, logstor_group& cg) {
-    logstor_logger.trace("Flushing separator buffer with {} bytes", buf.serialized_size());
+    logstor_logger.trace("Flushing separator buffer with {} bytes of records", buf.record_bytes());
 
     auto flush_result = co_await coroutine::as_future([this, &buf, &cg] () -> future<> {
         utils::get_local_injector().inject("fail_flush_separator_buffer", []() {
@@ -2468,7 +2464,7 @@ future<> segment_manager::stop() {
     return _impl->stop();
 }
 
-future<> segment_manager::write(write_buffer& wb) {
+future<> segment_manager::write(mixed_write_buffer& wb) {
     return _impl->write(wb);
 }
 
@@ -2718,7 +2714,7 @@ future<> logstor_group::allocate_active_separator_buffer() {
 
 template <log_record_writer_concept Writer>
 future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_index_update after_written) {
-    while (!_active_buffer.can_fit(writer)) {
+    while (!_active_buffer.fits(writer)) {
         if (!_separator_enabled) {
             break;
         }
@@ -2823,8 +2819,8 @@ future<> logstor_group::close_separator() {
             co_return;
         }
         if (!buf.empty()) {
-            logstor_logger.warn("Discarding a logstor separator buffer of table {} with {} bytes from {} segments,"
-                    " the segments will not be reclaimed", table_id(), buf.serialized_size(), buf.held_segments.size());
+            logstor_logger.warn("Discarding a separator buffer of table {} with {} bytes of records from {} segments,"
+                    " the segments will not be reclaimed", table_id(), buf.record_bytes(), buf.held_segments.size());
         }
         // A failed flush does the same teardown. abort() fails the writes of the buffer, which the
         // close in release() needs, and release() drops the guards, which keep the held segments.

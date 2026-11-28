@@ -359,20 +359,16 @@ struct separator_buffer {
     }
 
     template <log_record_writer_concept Writer>
-    bool can_fit(const Writer& writer) const noexcept {
-        return buf && buf->can_fit(writer);
-    }
-
-    bool can_fit(size_t write_size) const noexcept {
-        return buf && buf->can_fit(write_size);
+    bool fits(const Writer& writer) const noexcept {
+        return buf && buf->fits(writer);
     }
 
     bool empty() const noexcept {
         return !buf || !buf->has_data();
     }
 
-    size_t serialized_size() const noexcept {
-        return buf ? buf->serialized_size() : 0;
+    size_t record_bytes() const noexcept {
+        return buf ? buf->record_bytes() : 0;
     }
 
     future<> close() {
