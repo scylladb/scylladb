@@ -1568,6 +1568,10 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
             return std::make_unique<sstables::filesystem_storage>(loc.dir.native(), state);
         },
         [&] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstables::storage> {
+            if (os.bucket.empty()) {
+                throw std::runtime_error(fmt::format("No bucket for {}.{}: the keyspace names none and endpoint {} has none on this node",
+                        schema->ks_name(), schema->cf_name(), os.endpoint));
+            }
             if (s_opts.is_s3_type()) {
                 return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source);
             }

@@ -8,6 +8,7 @@
  */
  
 #include <string>
+#include <unordered_set>
 #include <variant>
 #include <yaml-cpp/yaml.h>
 
@@ -21,6 +22,10 @@ using namespace std::string_literals;
 
 static auto format_url(std::string_view host, unsigned port, bool use_https) {
     return fmt::format("{}://{}:{}", use_https ? "https" : "http", host, port);
+}
+
+static std::string bucket_member(const std::string& bucket) {
+    return bucket.empty() ? "" : fmt::format(", \"bucket\": \"{}\"", bucket);
 }
 
 db::object_storage_endpoint_param::object_storage_endpoint_param(s3_storage s)
@@ -37,15 +42,20 @@ db::object_storage_endpoint_param::object_storage_endpoint_param() = default;
 db::object_storage_endpoint_param::object_storage_endpoint_param(const object_storage_endpoint_param&) = default;
 
 std::string db::object_storage_endpoint_param::s3_storage::to_json_string() const {
+    if (!name.empty()) {
+        return fmt::format("{{ \"type\": \"s3\", \"uri\": \"{}\", \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\"{} }}",
+            endpoint, region, iam_role_arn, bucket_member(bucket)
+        );
+    }
     if (!legacy_format) {
-        return fmt::format("{{ \"type\": \"s3\", \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\" }}",
-            region, iam_role_arn
+        return fmt::format("{{ \"type\": \"s3\", \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\"{} }}",
+            region, iam_role_arn, bucket_member(bucket)
         );
     }
 
     auto url = utils::http::parse_simple_url(endpoint);
-    return fmt::format("{{ \"port\": {}, \"use_https\": {}, \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\" }}",
-        url.port, url.is_https(), region, iam_role_arn
+    return fmt::format("{{ \"port\": {}, \"use_https\": {}, \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\"{} }}",
+        url.port, url.is_https(), region, iam_role_arn, bucket_member(bucket)
     );
 }
 
@@ -54,6 +64,9 @@ std::string db::object_storage_endpoint_param::s3_storage::key() const {
     // if it wasn't configured "the old way". In the latter case, split the
     // URL and return its host part to mimic the old behavior.
 
+    if (!name.empty()) {
+        return name;
+    }
     if (!legacy_format) {
         return endpoint;
     }
@@ -63,13 +76,18 @@ std::string db::object_storage_endpoint_param::s3_storage::key() const {
 }
 
 std::string db::object_storage_endpoint_param::gs_storage::to_json_string() const {
-    return fmt::format("{{ \"type\": \"gs\", \"credentials_file\": \"{}\" }}",
-        credentials_file
+    if (!name.empty()) {
+        return fmt::format("{{ \"type\": \"gs\", \"uri\": \"{}\", \"credentials_file\": \"{}\"{} }}",
+            endpoint, credentials_file, bucket_member(bucket)
+        );
+    }
+    return fmt::format("{{ \"type\": \"gs\", \"credentials_file\": \"{}\"{} }}",
+        credentials_file, bucket_member(bucket)
     );
 }
 
 std::string db::object_storage_endpoint_param::gs_storage::key() const {
-    return endpoint;
+    return name.empty() ? endpoint : name;
 }
 
 bool db::object_storage_endpoint_param::is_s3_storage() const {
@@ -109,6 +127,10 @@ std::string db::object_storage_endpoint_param::key() const {
     return std::visit([](auto& o) { return o.key(); }, _data);
 }
 
+const std::string& db::object_storage_endpoint_param::bucket() const {
+    return std::visit([] (auto& o) -> const std::string& { return o.bucket; }, _data);
+}
+
 const std::string& db::object_storage_endpoint_param::type() const {
     if (is_s3_storage()) {
         return s3_type;
@@ -121,6 +143,7 @@ const std::string& db::object_storage_endpoint_param::type() const {
 db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(const YAML::Node& node) {
     auto name = node["name"];
     auto type = node["type"];
+    auto uri = node["uri"];
 
     auto get_opt = [](auto& node, const std::string& key, auto def) {
         auto tmp = node[key];
@@ -130,7 +153,14 @@ db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(cons
     if (!type || type.as<std::string>() == s3_type) {
         s3_storage ep;
         auto endpoint = name.as<std::string>();
+        if (uri) {
+            ep.name = std::move(endpoint);
+            endpoint = uri.as<std::string>();
+        }
         ep.legacy_format = (!endpoint.starts_with("http://") && !endpoint.starts_with("https://"));
+        if (uri && ep.legacy_format) {
+            throw std::invalid_argument(fmt::format("Endpoint {} has uri {}, expected an http:// or https:// URL", ep.name, endpoint));
+        }
 
         if (!ep.legacy_format) {
             ep.endpoint = std::move(endpoint);
@@ -148,6 +178,7 @@ db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(cons
             throw std::invalid_argument(fmt::format("Endpoint {} has no region, set aws_region or AWS_DEFAULT_REGION", ep.endpoint));
         }
         ep.iam_role_arn = get_opt(node, "iam_role_arn", ""s);
+        ep.bucket = get_opt(node, "bucket", ""s);
 
         return object_storage_endpoint_param{std::move(ep)};
     }
@@ -155,12 +186,42 @@ db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(cons
     if (type.as<std::string>() == gs_type) {
         gs_storage ep;
         ep.endpoint = name.as<std::string>();
+        if (uri) {
+            ep.name = std::move(ep.endpoint);
+            ep.endpoint = uri.as<std::string>();
+        }
         ep.credentials_file = get_opt(node, "credentials_file", ""s);
+        ep.bucket = get_opt(node, "bucket", ""s);
 
         return object_storage_endpoint_param(std::move(ep));
     }
     // TODO: other types
     throw std::invalid_argument(fmt::format("Could not decode object_storage_endpoint_param: {}", boost::lexical_cast<std::string>(node)));
+}
+
+std::vector<db::object_storage_endpoint_param> db::object_storage_endpoint_param::parse_list(std::string_view text) {
+    YAML::Node doc;
+    try {
+        doc = YAML::Load(std::string(text));
+    } catch (const YAML::Exception& e) {
+        throw std::invalid_argument(fmt::format("cannot parse the endpoint list: {}", e.what()));
+    }
+    if (!doc.IsSequence()) {
+        throw std::invalid_argument("the value is not a list");
+    }
+    std::vector<object_storage_endpoint_param> endpoints;
+    std::unordered_set<std::string> names;
+    for (size_t i = 0; i < doc.size(); ++i) {
+        try {
+            endpoints.push_back(decode(doc[i]));
+        } catch (const std::exception& e) {
+            throw std::invalid_argument(fmt::format("entry {}: {}", i, e.what()));
+        }
+        if (!names.insert(endpoints.back().key()).second) {
+            throw std::invalid_argument(fmt::format("entry {}: the name {} is used twice", i, endpoints.back().key()));
+        }
+    }
+    return endpoints;
 }
 
 const std::string db::object_storage_endpoint_param::s3_type = "s3";

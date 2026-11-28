@@ -2364,6 +2364,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             }
 
+            // A keyspace on object storage needs its endpoint to open its sstables, and the
+            // endpoint list can come from cluster config. The config tables are system tables,
+            // so what they held at shutdown can be applied before the user keyspaces load.
+            cluster_config_manager.local().refresh().get();
+
             checkpoint(stop_signal, "loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks, group0_client, stop_signal.as_local_abort_source()).get();
 

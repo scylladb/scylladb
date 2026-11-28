@@ -40,6 +40,34 @@ UPDATE system.config SET value = '[{"name": "http://127.0.0.1:9000", "aws_region
     WHERE name = 'object_storage_endpoints';
 ```
 
+An entry can have a `uri`. The client then connects to the `uri`, and the
+`name` is only the key that a keyspace refers to:
+```yaml
+object_storage_endpoints:
+  - name: primary
+    uri: https://s3.us-east-1.amazonaws.com:443
+    aws_region: us-east-1
+```
+The `storage_manager` keeps one client per address, and entries with the same
+`uri` share it. When the `uri` of an entry changes in a live configuration
+update, the entry resolves to the client of the new address from then on. An
+sstable that is already open keeps the client it was opened with. When no entry
+names the old address, the `storage_manager` drops its client from the map and
+closes it, so the sstables that are still open through it fail their requests
+until the node restarts.
+
+An entry can have a `bucket`. A keyspace whose storage options name no bucket
+takes the one of its endpoint. The table resolves it on first use and not when
+it is created, because a joining node creates the table before it applies the
+endpoint list that arrives with the same schema. Creating such a keyspace needs
+the `KEYSPACE_STORAGE_ENDPOINT_BUCKET` cluster feature: a node without it fails
+to load a keyspace that has no bucket.
+
+The endpoint list can also be stored in cluster config, as the option
+`object_storage_endpoints` (see `docs/dev/cluster_config.md`). Its value is the
+list as one line of JSON, and it replaces the `scylla.yaml` list of the nodes
+it applies to.
+
 ## Configuring GCP storage access
 
 Similarly to AWS, define endpoint details in `scylla.yaml` like:

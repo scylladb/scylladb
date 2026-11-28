@@ -106,11 +106,19 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     semaphore _object_storage_clients_memory;
     s3::group_connections _group_connections;
     std::unordered_map<sstring, object_storage_endpoint> _object_storage_endpoints;
+    // The clients that talk to the object storage, one per address. Endpoints that
+    // have the same address share one; the first of them in the configuration
+    // supplies its settings.
+    std::unordered_map<sstring, object_storage_endpoint> _address_clients;
+    named_gate _dropped_clients_gate;
     std::unique_ptr<config_updater_sync> _config_updater;
     std::unique_ptr<connections_updater_sync> _connections_updater;
     seastar::metrics::metric_groups metrics;
 
     object_storage_endpoint& get_endpoint(const sstring& ep);
+    void add_address(const db::object_storage_endpoint_param& ep);
+    void close_dropped_client(shared_ptr<object_storage_client> client);
+    shared_ptr<object_storage_client> get_address_client(const sstring& address);
     void reload_group_connections(const db::config& cfg, std::optional<unsigned> budget_override = std::nullopt);
 
 public:
@@ -124,6 +132,9 @@ public:
     // With no type (default), just checks that the endpoint is configured at all.
     // With a type ("s3"/"gs"), also checks that the endpoint is configured as that type.
     bool is_known_endpoint(sstring endpoint, sstring type = "") const;
+    // The bucket the endpoint gives to a keyspace that names none, empty if it has none
+    // or the endpoint is not configured.
+    sstring get_endpoint_bucket(const sstring& endpoint) const;
     sstring get_endpoint_type(sstring endpoint);
     future<> stop();
     std::vector<sstring> endpoints(sstring type = "") const noexcept;
@@ -249,6 +260,10 @@ public:
     bool is_known_endpoint(sstring endpoint, sstring type = "") const {
         SCYLLA_ASSERT(_storage != nullptr);
         return _storage->is_known_endpoint(std::move(endpoint), std::move(type));
+    }
+
+    sstring get_endpoint_bucket(const sstring& endpoint) const {
+        return _storage ? _storage->get_endpoint_bucket(endpoint) : sstring();
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;

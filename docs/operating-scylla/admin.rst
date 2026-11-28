@@ -183,6 +183,102 @@ is ignored when connecting, but it still forms part of the endpoint identifier,
 so ``https://s3.us-east-1.amazonaws.com/`` and
 ``https://s3.us-east-1.amazonaws.com`` are two different endpoints.
 
+To give an endpoint a name that is not its address, add ``uri``. ScyllaDB then
+connects to ``uri``, and ``name`` is only the identifier:
+
+.. code-block:: yaml
+
+   object_storage_endpoints:
+     - name: primary
+       uri: https://s3.us-east-1.amazonaws.com
+       type: s3
+       aws_region: us-east-1
+
+A keyspace created with ``'endpoint': 'primary'`` uses the address that the
+node configures for that name. The rules above for writing a URL apply to
+``uri``; an S3 ``uri`` must start with ``http://`` or ``https://``.
+
+Add entries with ``uri`` only after every node is upgraded to a version that
+supports it. An older node ignores such an entry, and a keyspace that uses the
+name does not work on that node.
+
+Several names can have the same ``uri``. They share the connections to that
+address, so they must have the same values in the other options of the entry
+(``aws_region``, ``iam_role_arn``, ``credentials_file``). If the values are
+different, ScyllaDB uses the first entry and logs an error.
+
+If you change the ``uri`` of a name, the sstables that ScyllaDB writes or opens
+after the change use the new address. If no other name has the old address,
+ScyllaDB closes the connections to it, and reads from the sstables that are
+already open fail until the node opens them again. Restart the node after you
+change a ``uri``. ScyllaDB does not move the data.
+
+The bucket of an endpoint
+=========================
+
+An endpoint entry can have a ``bucket``, for S3 and for GCS:
+
+.. code-block:: yaml
+
+   object_storage_endpoints:
+     - name: primary
+       type: s3
+       uri: https://s3.us-east-1.amazonaws.com
+       aws_region: us-east-1
+       bucket: my-bucket-us-east-1
+
+A keyspace that names no ``bucket`` in its ``STORAGE`` option keeps its data in
+the bucket of its endpoint. With a name that has a different ``uri`` and
+``bucket`` in each datacenter, the nodes of each datacenter keep the data of
+the keyspace in the store and the bucket of their own region.
+
+* A keyspace that names a ``bucket`` uses that bucket on every node, whatever
+  the endpoint says.
+* ScyllaDB rejects ``CREATE KEYSPACE`` with no ``bucket`` if the endpoint has
+  none on the node that receives the statement, and until every node of the
+  cluster is upgraded to a version that supports it.
+* A node reads the bucket of the endpoint when it first uses a table of the
+  keyspace. If you change the ``bucket`` of an endpoint, restart the node.
+  ScyllaDB does not move the data.
+
+.. _admin-object-storage-cql:
+
+Setting the endpoints with CQL
+==============================
+
+You can set the endpoint list with CQL, with no change to ``scylla.yaml``. The
+list is the :doc:`cluster configuration </cql/cluster-config>` option
+``object_storage_endpoints``. Its value is a JSON list with the same entries as
+in ``scylla.yaml``, on one line:
+
+.. code-block:: cql
+
+   ALTER CLUSTER WITH object_storage_endpoints =
+     '[{"name": "store", "type": "s3", "uri": "https://s3.us-east-1.amazonaws.com", "aws_region": "us-east-1"}]';
+
+You can set the option for the cluster only, so every node gets the same list.
+For a cluster in which each datacenter uses the storage of its own region, set
+the endpoints in the ``scylla.yaml`` of the nodes: use the same name with a
+different ``uri`` in each datacenter.
+
+Obey these rules:
+
+* The list replaces the ``object_storage_endpoints`` list of the
+  ``scylla.yaml`` of every node. ScyllaDB does not merge the two lists.
+* ScyllaDB rejects a value in which an entry is not valid. Give ``aws_region``
+  in each S3 entry: a node does not accept an S3 entry with no region unless
+  its own ``AWS_DEFAULT_REGION`` is set.
+* ``credentials_file`` is a path on each node.
+* An entry can have a ``bucket``; see the section above.
+* ``= NULL`` removes the list, and each node uses its ``scylla.yaml`` list
+  again. Do not remove an endpoint that a keyspace uses.
+
+To see the endpoints that a node uses, query ``system.config`` on that node:
+
+.. code-block:: cql
+
+   SELECT source, value FROM system.config WHERE name = 'object_storage_endpoints';
+
 S3 credentials
 ==============
 
@@ -489,7 +585,8 @@ Verifying keyspace storage
                ks |           S3 | {'bucket': 'my-bucket', 'endpoint': 'https://s3.us-east-1.amazonaws.com'}
 
 ``storage_type`` is set only for object-storage keyspaces, to ``S3`` or ``GS``,
-and ``storage_options`` then holds the bucket and endpoint. There is no
+and ``storage_options`` then holds the bucket and endpoint. A keyspace that
+takes the bucket of its endpoint has no ``bucket`` here. There is no
 ``LOCAL`` value: a keyspace that does not appear here, or appears with a null
 ``storage_type``, is not stored on object storage. This table is not a list of
 all keyspaces.

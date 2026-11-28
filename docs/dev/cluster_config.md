@@ -660,6 +660,10 @@ The baseline is per node, because yaml and command-line values differ per node. 
 
 The bindings are an explicit list in the bridge constructor (`bind(cfg.tablets_per_shard_goal)`), one line per option, which keeps each binding typed with its entry's native type. The constructor cross-checks the list against the registry: every `option_kind::db_config` entry must be bound, and every bound entry must be registered as `db_config` with a matching type (and, for an integral entry, a `valid_range` within the entry's type, where an option without one accepts any `int64_t`) and be live-updateable. A mismatch is an internal error at startup.
 
+An entry whose type is not a scalar needs a branch in the binding that converts the stored text to the entry's type. `object_storage_endpoints` is the first one: the registry declares it as text with a custom parser that accepts a JSON list of endpoints, and the binding decodes that list into the entry's `std::vector<object_storage_endpoint_param>`. An override replaces the node's list as a whole.
+
+`main()` runs one refresh before it loads the user keyspaces, in addition to the one after: a keyspace on object storage opens its sstables through an endpoint, and the endpoint list can be stored in cluster config only. The config tables are system tables, so the values they held at shutdown are available at that point.
+
 A consumer that decides once at boot which entry to follow (for example an updater that picks one of two entries depending on which is set) does not see an override applied to the entry it did not pick. Such a consumer has to be changed to recompute from both entries on either change before its option is migrated.
 
 ### Tests
@@ -675,7 +679,7 @@ The shared test areas are listed in [Tests](#tests) above. Category-specific are
 
 Cluster tests: an override is reported by `system.config` on every node with source `cluster_config` while a node-local `UPDATE system.config` is refused, removing it returns each node to its own yaml value and source, a restarted node re-applies the override, and a node that joins after the override was set applies it.
 
-The first migrated option, `tablets_per_shard_goal`, is covered in `test/boost/cluster_config_manager_test.cc` and `test/cluster/test_cluster_config.py`. The node-oriented chain itself is covered by the test-only node-oriented option in the same boost file.
+The first migrated option, `tablets_per_shard_goal`, is covered in `test/boost/cluster_config_manager_test.cc` and `test/cluster/test_cluster_config.py`. `object_storage_endpoints` is covered in the same boost file and in `test/cluster/object_store/test_cluster_config_endpoints.py`. The node-oriented chain itself is covered by the test-only node-oriented option in the same boost file.
 
 ### Extending the Feature: Migrating a `db::config` Option
 

@@ -24,6 +24,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
 
+#include "db/object_storage_endpoint_param.hh"
 #include "gms/feature_service.hh"
 #include "types/types.hh"
 #include "utils/chunked_string.hh"
@@ -62,6 +63,7 @@ constexpr bool is_single_domain(scope_set scopes) {
 // Defined below, with the other parsers and validators.
 // Declared here so that the automatic scrub period option may take their address.
 config_value parse_auto_scrub_period_seconds(std::string_view value);
+config_value parse_object_storage_endpoints(std::string_view value);
 
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
 // When no scope stores an override it falls back to the deprecated yaml options
@@ -108,6 +110,18 @@ constexpr std::array registry_options = {
         .default_value = int64_t(100),
         .kind = option_kind::db_config,
         .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
+    },
+    // Migrated from the db::config option of the same name. The value is the whole endpoint
+    // list as one line of JSON, and an override replaces the node's own list: entries are not
+    // merged with scylla.yaml. CLUSTER scope only, until the node-oriented scopes ship.
+    option{
+        .name = "object_storage_endpoints",
+        .description = "The object storage endpoints the node can use, as a JSON list of the entries that scylla.yaml takes. Replaces the list from scylla.yaml",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = std::string_view("[]"),
+        .custom_parser = parse_object_storage_endpoints,
+        .custom_expected_description = "a JSON list of object storage endpoints",
+        .kind = option_kind::db_config,
     },
     option{
         .name = option_name::repair_hints_batchlog_flush_timeout_in_seconds,
@@ -286,6 +300,20 @@ std::optional<seastar::sstring> validate_text(std::string_view value) {
         return seastar::sstring("must not contain '*/'");
     }
     return std::nullopt;
+}
+
+// A custom parser replaces validate_text(), so the limits a text value has to keep are
+// checked here as well.
+config_value parse_object_storage_endpoints(std::string_view value) {
+    if (auto error = validate_text(value)) {
+        throw marshal_exception(*error);
+    }
+    try {
+        db::object_storage_endpoint_param::parse_list(value);
+    } catch (const std::invalid_argument& e) {
+        throw marshal_exception(e.what());
+    }
+    return value;
 }
 
 template <typename T>

@@ -10,7 +10,9 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <variant>
+#include <vector>
 #include <compare>
 #include <fmt/core.h>
 #include "utils/s3/creds.hh"
@@ -28,6 +30,10 @@ public:
         std::string region;
         std::string iam_role_arn;
         bool legacy_format; // FIXME convert it to bool_class after seastar#3198
+        // Set when the entry gives its address in `uri`; the entry is then looked up by this name.
+        std::string name;
+        // Where a keyspace that names no bucket of its own keeps its data. Optional.
+        std::string bucket;
 
         std::strong_ordering operator<=>(const s3_storage&) const = default;
         std::string to_json_string() const;
@@ -36,6 +42,10 @@ public:
     struct gs_storage {
         std::string endpoint; // "default"/empty or an URI
         std::string credentials_file; // optional
+        // Set when the entry gives its address in `uri`; the entry is then looked up by this name.
+        std::string name;
+        // Where a keyspace that names no bucket of its own keeps its data. Optional.
+        std::string bucket;
 
         std::strong_ordering operator<=>(const gs_storage&) const = default;
         std::string to_json_string() const;
@@ -54,6 +64,7 @@ public:
     std::string to_json_string() const;
     std::string key() const;
     const std::string& type() const;
+    const std::string& bucket() const;
 
     bool is_s3_storage() const;
     bool is_gs_storage() const;
@@ -64,6 +75,10 @@ public:
     const gs_storage& get_gs_storage() const;
 
     static object_storage_endpoint_param decode(const YAML::Node&);
+    // Decodes a list of entries written as JSON (or YAML). Unlike the scylla.yaml path, which
+    // skips an entry it cannot decode, this throws std::invalid_argument for anything that is
+    // not a list of valid entries with distinct names.
+    static std::vector<object_storage_endpoint_param> parse_list(std::string_view text);
     static const std::string s3_type; // "s3"
     static const std::string gs_type; // "gs"
 private:

@@ -15,12 +15,14 @@
 #include <utility>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include <seastar/core/smp.hh>
 
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
 #include "db/config.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "utils/log.hh"
 #include "utils/on_internal_error.hh"
 
@@ -33,6 +35,7 @@ logging::logger bridge_logger("cluster_config_db_config_bridge");
 using config_source = utils::config_file::config_source;
 using registry_option = cluster_config_registry::option;
 using value_type = cluster_config_registry::value_type;
+using object_storage_endpoints = std::vector<object_storage_endpoint_param>;
 
 // The registry type a db::config entry of native type T is declared with.
 template <typename T>
@@ -44,7 +47,8 @@ constexpr value_type registry_type_for() {
     } else if constexpr (std::is_floating_point_v<T>) {
         return value_type::floating_point;
     } else {
-        static_assert(std::is_same_v<T, sstring>, "unsupported db::config entry type");
+        // An endpoint list is stored as the JSON text its option's parser accepts.
+        static_assert(std::is_same_v<T, sstring> || std::is_same_v<T, object_storage_endpoints>, "unsupported db::config entry type");
         return value_type::text;
     }
 }
@@ -73,6 +77,8 @@ class db_config_binding final : public cluster_config_db_config_bridge::binding 
             return static_cast<T>(cluster_config_registry::to_integer(_opt, value));
         } else if constexpr (std::is_floating_point_v<T>) {
             return static_cast<T>(cluster_config_registry::to_floating_point(_opt, value));
+        } else if constexpr (std::is_same_v<T, object_storage_endpoints>) {
+            return object_storage_endpoint_param::parse_list(cluster_config_registry::to_text(_opt, value));
         } else {
             return cluster_config_registry::to_text(_opt, value);
         }
@@ -181,6 +187,7 @@ cluster_config_db_config_bridge::cluster_config_db_config_bridge(sharded<cluster
     };
 
     bind_entry(cfg.tablets_per_shard_goal);
+    bind_entry(cfg.object_storage_endpoints);
 
     // Every db_config option needs a binding above, or an accepted ALTER would do nothing.
     for (const auto& opt : cluster_config_registry::options()) {

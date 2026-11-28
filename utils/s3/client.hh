@@ -358,6 +358,8 @@ public:
     // client keeps one http client per scheduling group and names the class
     // label after it, so the caller supplies only the type and the endpoint.
     void report_object_storage_metrics(utils::object_storage_metrics_labels labels);
+    // Releases every metric label of this client, for a client that replaces it.
+    void unregister_metrics();
 
     struct handle {
         std::string _host;

@@ -1015,6 +1015,81 @@ SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_region_empty) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_uri) {
+    // With `uri` the name is the lookup key and the uri is the address.
+    auto s3 = object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\nuri: https://s3.us-east-1.amazonaws.com\naws_region: us-east-1\n"));
+    BOOST_REQUIRE(s3.is_s3_storage());
+    BOOST_CHECK_EQUAL(s3.key(), "primary");
+    BOOST_CHECK_EQUAL(s3.get_s3_storage().endpoint, "https://s3.us-east-1.amazonaws.com");
+    BOOST_CHECK_NE(s3.to_json_string().find("\"uri\": \"https://s3.us-east-1.amazonaws.com\""), std::string::npos);
+
+    auto gs = object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\ntype: gs\nuri: https://storage.googleapis.com\n"));
+    BOOST_REQUIRE(gs.is_gs_storage());
+    BOOST_CHECK_EQUAL(gs.key(), "primary");
+    BOOST_CHECK_EQUAL(gs.get_gs_storage().endpoint, "https://storage.googleapis.com");
+    BOOST_CHECK_NE(gs.to_json_string().find("\"uri\": \"https://storage.googleapis.com\""), std::string::npos);
+
+    // Without `uri` the name stays the address, in both the URL and the host form.
+    auto url = object_storage_endpoint_param::decode(
+            YAML::Load("name: https://s3.us-east-1.amazonaws.com\naws_region: us-east-1\n"));
+    BOOST_CHECK_EQUAL(url.key(), "https://s3.us-east-1.amazonaws.com");
+    BOOST_CHECK_EQUAL(url.get_s3_storage().endpoint, "https://s3.us-east-1.amazonaws.com");
+    auto host = object_storage_endpoint_param::decode(
+            YAML::Load("name: s3.us-east-1.amazonaws.com\nport: 443\nhttps: true\naws_region: us-east-1\n"));
+    BOOST_CHECK_EQUAL(host.key(), "s3.us-east-1.amazonaws.com");
+    BOOST_CHECK_EQUAL(host.get_s3_storage().endpoint, "https://s3.us-east-1.amazonaws.com:443");
+
+    // An S3 uri is a URL; the host form belongs to an entry with no uri.
+    BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\nuri: s3.us-east-1.amazonaws.com\naws_region: us-east-1\n")),
+        std::invalid_argument);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_list_is_strict) {
+    tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+    auto parse = &object_storage_endpoint_param::parse_list;
+
+    auto endpoints = parse(R"([{"name": "store", "uri": "https://s3.us-east-1.amazonaws.com", "aws_region": "us-east-1"},)"
+                           R"( {"name": "archive", "type": "gs", "uri": "https://storage.googleapis.com"}])");
+    BOOST_REQUIRE_EQUAL(endpoints.size(), 2);
+    BOOST_CHECK_EQUAL(endpoints[0].key(), "store");
+    BOOST_CHECK(endpoints[0].is_s3_storage());
+    BOOST_CHECK_EQUAL(endpoints[1].key(), "archive");
+    BOOST_CHECK(endpoints[1].is_gs_storage());
+    BOOST_CHECK(parse("[]").empty());
+
+    // scylla.yaml skips an entry it cannot decode; here one bad entry fails the whole list.
+    for (auto bad : {
+            R"({"name": "store", "aws_region": "us-east-1"})",
+            R"("store")",
+            R"([{"name": "https://s3.us-east-1.amazonaws.com"}])",
+            R"([{"name": "store", "uri": "s3.us-east-1.amazonaws.com", "aws_region": "us-east-1"}])",
+            R"([{"aws_region": "us-east-1"}])",
+            R"([{"name": "store", "type": "gs"}, {"name": "store", "type": "gs"}])",
+            R"([{"name": "store", "type": "gs")"}) {
+        BOOST_CHECK_THROW(parse(bad), std::invalid_argument);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_bucket) {
+    auto s3 = object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\nuri: https://s3.us-east-1.amazonaws.com\naws_region: us-east-1\nbucket: ks-data-us\n"));
+    BOOST_CHECK_EQUAL(s3.get_s3_storage().bucket, "ks-data-us");
+    BOOST_CHECK_NE(s3.to_json_string().find("\"bucket\": \"ks-data-us\""), std::string::npos);
+
+    auto gs = object_storage_endpoint_param::decode(YAML::Load("name: default\ntype: gs\nbucket: ks-data-eu\n"));
+    BOOST_CHECK_EQUAL(gs.get_gs_storage().bucket, "ks-data-eu");
+    BOOST_CHECK_NE(gs.to_json_string().find("\"bucket\": \"ks-data-eu\""), std::string::npos);
+
+    // An entry with no bucket is printed as it was before the field existed.
+    auto none = object_storage_endpoint_param::decode(
+            YAML::Load("name: https://s3.us-east-1.amazonaws.com\naws_region: us-east-1\n"));
+    BOOST_CHECK(none.get_s3_storage().bucket.empty());
+    BOOST_CHECK_EQUAL(none.to_json_string(), "{ \"type\": \"s3\", \"aws_region\": \"us-east-1\", \"iam_role_arn\": \"\" }");
+}
+
 SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
     tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
     auto cfg_ptr = std::make_unique<config>();
