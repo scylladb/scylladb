@@ -65,6 +65,11 @@ partition_key pk_from_json(const rjson::value& item, schema_ptr schema);
 clustering_key ck_from_json(const rjson::value& item, schema_ptr schema);
 position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema);
 
+// Validate a number read from user input: that it has a valid numeric
+// format, and is in the allowed magnitude and precision ranges. Throws an
+// api_error::validation if the validation failed.
+void validate_number(std::string_view s);
+
 // If v encodes a number (i.e., it is a {"N": [...]}), returns an object representing it.  Otherwise,
 // raises ValidationException with diagnostic.
 big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic);
