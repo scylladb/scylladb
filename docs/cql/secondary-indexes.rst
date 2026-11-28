@@ -44,7 +44,7 @@ Creating a secondary index on a table uses the ``CREATE INDEX`` statement:
                          :     ON `table_name` '(' `index_identifier` ')'
                          :     [ USING `string` [ WITH `index_properties` ] ]
    index_identifier: `column_name`
-                   :| ( FULL ) '(' `column_name` ')'
+                   :| ( KEYS | VALUES | ENTRIES | FULL ) '(' `column_name` ')'
    index_properties: index_property (AND index_property)*
    index_property: OPTIONS = `map_literal`
                  :| view_property
@@ -119,12 +119,92 @@ More on :doc:`Local Secondary Indexes </features/local-secondary-indexes>`
 .. Attempting to create an already existing index will return an error unless the ``IF NOT EXISTS`` option is used. If it
 .. is used, the statement will be a no-op if the index already exists.
 
-.. Indexes on Map Keys (supported in ScyllaDB 2.2)
-.. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. _secondary-indexes-collections:
 
-.. When creating an index on a :ref:`maps <maps>`, you may index either the keys or the values. If the column identifier is
-.. placed within the ``keys()`` function, the index will be on the map keys, allowing you to use ``CONTAINS KEY`` in
-.. ``WHERE`` clauses. Otherwise, the index will be on the map values.
+Indexes on Collections
+^^^^^^^^^^^^^^^^^^^^^^
+
+You can create a global secondary index on a :ref:`collection <collections>` column (a
+:ref:`map <maps>`, :ref:`set <sets>`, or :ref:`list <lists>`). The way the column is
+written in ``CREATE INDEX`` selects what is indexed, and that determines which restrictions
+the index can serve in a ``SELECT`` statement.
+
+For a non-frozen collection, the following index targets are supported:
+
+.. list-table::
+   :widths: 25 20 55
+   :header-rows: 1
+
+   * - Index target
+     - Collection types
+     - Restriction served by the index
+   * - ``column_name`` or ``VALUES(column_name)``
+     - map, set, list
+     - ``column_name CONTAINS value`` - matches rows where the collection contains the value
+       (a map value, a set element, or a list element).
+   * - ``KEYS(column_name)``
+     - map
+     - ``column_name CONTAINS KEY key`` - matches rows where the map contains the key.
+   * - ``ENTRIES(column_name)``
+     - map
+     - ``column_name[key] = value`` - matches rows where the map contains the key with the given
+       value.
+
+For a frozen collection, only the ``FULL(column_name)`` target is supported. A frozen
+collection is stored as a single value, so the index serves only equality restrictions on
+the whole collection, for example ``column_name = [1, 2, 3]``. The index cannot serve
+``CONTAINS``, ``CONTAINS KEY`` or map-entry restrictions on a frozen collection.
+
+For example, given the following table:
+
+.. code-block:: cql
+
+   CREATE TABLE products (
+       id int PRIMARY KEY,
+       tags set<text>,
+       sizes list<int>,
+       attributes map<text, text>,
+       dimensions frozen<list<int>>
+   );
+
+You can create the following indexes:
+
+.. code-block:: cql
+
+   -- Index the elements of a set or list:
+   CREATE INDEX ON products (tags);
+   CREATE INDEX ON products (sizes);
+
+   SELECT * FROM products WHERE tags CONTAINS 'outdoor';
+   SELECT * FROM products WHERE sizes CONTAINS 42;
+
+   -- Index the values, keys, and entries of a map:
+   CREATE INDEX ON products (VALUES(attributes));
+   CREATE INDEX ON products (KEYS(attributes));
+   CREATE INDEX ON products (ENTRIES(attributes));
+
+   SELECT * FROM products WHERE attributes CONTAINS 'red';
+   SELECT * FROM products WHERE attributes CONTAINS KEY 'color';
+   SELECT * FROM products WHERE attributes['color'] = 'red';
+
+   -- Index a frozen collection as a whole:
+   CREATE INDEX ON products (FULL(dimensions));
+
+   SELECT * FROM products WHERE dimensions = [10, 20, 30];
+
+Note the following:
+
+* ``column_name`` and ``VALUES(column_name)`` create the same index, so you cannot create both on
+  the same column. On a map, you can create a values index, a ``KEYS`` index, and an ``ENTRIES``
+  index at the same time. Each of them serves only its own type of restriction; for example,
+  a ``KEYS`` index does not serve ``CONTAINS``.
+* ``KEYS`` and ``ENTRIES`` can only be used on a map, and ``FULL`` only on a frozen collection.
+  A non-frozen collection does not support ``FULL``, and a frozen collection does not support
+  ``KEYS``, ``VALUES``, or ``ENTRIES``.
+* If a row matches more than once - for example, when a list contains the same value twice, or
+  several map keys have the same value - the row is returned only once.
+* Local secondary indexes on collection columns are not supported.
+* Collections that contain the ``duration`` type cannot be indexed.
 
 
 .. _create-vector-index-statement:
