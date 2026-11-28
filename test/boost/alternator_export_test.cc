@@ -66,6 +66,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <zlib.h>
 #include "replica/database.hh"
 
 // Tests of the export (sink) and import (source) pipelines from alternator/export.hh.
@@ -124,6 +125,132 @@ SEASTAR_TEST_CASE(test_in_memory_line_without_newline) {
     BOOST_CHECK(storage->is_read_flushed());
     BOOST_REQUIRE_EQUAL(received.size(), 1u);
     BOOST_CHECK_EQUAL(rjson::print(received[0]), rjson::print(rjson::parse(line)));
+}
+
+// The source skips blank lines - DynamoDB's import skips empty lines and lines of spaces too - and
+// reports the number of uncompressed bytes it read, blank lines and newlines included: an import
+// is to report them as its ProcessedSizeBytes. With gzip, the count is of the decompressed bytes. It
+// also reports the number of the line of each item, blank lines included - also for the last line,
+// which has no newline and is parsed when the source is closed.
+SEASTAR_TEST_CASE(test_in_memory_blank_lines_and_processed_size_bytes) {
+    const std::string content = "{\"a\": 1}\n\n  \t\r\n{\"b\": 2}\n   \n{\"c\": 3}";
+    for (bool gzip : {false, true}) {
+        auto storage = std::make_shared<alternator::in_memory_test_storage>();
+        alternator::compression_type compression = alternator::no_compression{};
+        if (gzip) {
+            compression = alternator::gzip_compression{};
+            // A sink writes whole items only, each with a newline, so compress the content here.
+            z_stream zs = {};
+            BOOST_REQUIRE_EQUAL(deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY), Z_OK);
+            std::vector<unsigned char> out(1024);
+            zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(content.data()));
+            zs.avail_in = content.size();
+            zs.next_out = out.data();
+            zs.avail_out = out.size();
+            BOOST_REQUIRE_EQUAL(deflate(&zs, Z_FINISH), Z_STREAM_END);
+            out.resize(out.size() - zs.avail_out);
+            deflateEnd(&zs);
+            storage->append(std::as_bytes(std::span(out)));
+        } else {
+            storage->append(std::as_bytes(std::span(content)));
+        }
+
+        std::vector<rjson::value> received;
+        // processed_lines() and processed_size_bytes() of the source when each item was received.
+        std::vector<std::pair<uint64_t, uint64_t>> positions;
+        alternator::import_pipeline_interface* pipeline = nullptr;
+        auto source = co_await alternator::create_source_pipeline(alternator::in_memory_target_config{ storage }, [&](rjson::value v) -> seastar::future<> {
+            received.push_back(std::move(v));
+            positions.emplace_back(pipeline->processed_lines(), pipeline->processed_size_bytes());
+            co_return;
+        }, compression);
+        pipeline = source.get();
+        // Closed also when read_all() throws: a pipeline destroyed without close() asserts.
+        co_await source->read_all().finally([&source] { return source->close(); });
+
+        BOOST_REQUIRE_EQUAL(received.size(), 3u);
+        BOOST_CHECK_EQUAL(rjson::print(received[0]), "{\"a\":1}");
+        BOOST_CHECK_EQUAL(rjson::print(received[1]), "{\"b\":2}");
+        BOOST_CHECK_EQUAL(rjson::print(received[2]), "{\"c\":3}");
+        const std::vector<std::pair<uint64_t, uint64_t>> expected_positions{
+            {1, content.find('\n') + 1},
+            {4, content.find("   \n")},
+            {6, content.size()},
+        };
+        BOOST_CHECK(positions == expected_positions);
+        BOOST_CHECK_EQUAL(source->processed_size_bytes(), content.size());
+        BOOST_CHECK_EQUAL(source->processed_lines(), 6u);
+    }
+}
+
+// A last line of only whitespace, without a newline, is skipped as a blank line is, and counts in
+// processed_lines() and processed_size_bytes() as any last line does. Also when it is the only line
+// of the object.
+SEASTAR_TEST_CASE(test_in_memory_blank_last_line_without_newline) {
+    for (const std::string content : {"{\"a\": 1}\n \t\r", " \t "}) {
+        auto storage = std::make_shared<alternator::in_memory_test_storage>();
+        storage->append(std::as_bytes(std::span(content)));
+
+        std::vector<rjson::value> received;
+        auto source = co_await alternator::create_source_pipeline(alternator::in_memory_target_config{ storage }, [&](rjson::value v) -> seastar::future<> {
+            received.push_back(std::move(v));
+            co_return;
+        }, alternator::no_compression{});
+        // Closed also when read_all() throws: a pipeline destroyed without close() asserts.
+        co_await source->read_all().finally([&source] { return source->close(); });
+
+        const bool has_item = content.starts_with('{');
+        BOOST_REQUIRE_EQUAL(received.size(), has_item ? 1u : 0u);
+        if (has_item) {
+            BOOST_CHECK_EQUAL(rjson::print(received[0]), "{\"a\":1}");
+        }
+        BOOST_CHECK_EQUAL(source->processed_lines(), has_item ? 2u : 1u);
+        BOOST_CHECK_EQUAL(source->processed_size_bytes(), content.size());
+    }
+}
+
+// A line longer than 16 MB fails the reading with PayloadTooLarge. The bytes of it which the source
+// read count in processed_size_bytes(), as those of a line which fails to parse do, and the line
+// counts in processed_lines(), for its line number in the log. The content is gzipped, so that the
+// parser gets it in chunks of 4 KB, not in the 16-byte ones of the in-memory storage.
+SEASTAR_TEST_CASE(test_in_memory_too_long_line_processed_size_bytes) {
+    constexpr size_t maximum_line_size = 16 * 1024 * 1024;
+    const std::string first_line = "{\"a\": 1}\n";
+    const std::string content = first_line + std::string(maximum_line_size + 1, 'x') + "\n{\"b\": 2}\n";
+
+    z_stream zs = {};
+    BOOST_REQUIRE_EQUAL(deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY), Z_OK);
+    std::vector<unsigned char> out(deflateBound(&zs, content.size()));
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(content.data()));
+    zs.avail_in = content.size();
+    zs.next_out = out.data();
+    zs.avail_out = out.size();
+    BOOST_REQUIRE_EQUAL(deflate(&zs, Z_FINISH), Z_STREAM_END);
+    out.resize(out.size() - zs.avail_out);
+    deflateEnd(&zs);
+    auto storage = std::make_shared<alternator::in_memory_test_storage>();
+    storage->append(std::as_bytes(std::span(out)));
+
+    std::vector<rjson::value> received;
+    auto source = co_await alternator::create_source_pipeline(alternator::in_memory_target_config{ storage }, [&](rjson::value v) -> seastar::future<> {
+        received.push_back(std::move(v));
+        co_return;
+    }, alternator::gzip_compression{});
+    // Closed before the check, which ends the test if read_all() does not throw as expected: a
+    // pipeline destroyed without close() asserts.
+    BOOST_REQUIRE_EXCEPTION(co_await source->read_all().finally([&source] { return source->close(); }),
+            alternator::api_error, [](const alternator::api_error& e) {
+        return e._type == "PayloadTooLarge";
+    });
+
+    BOOST_REQUIRE_EQUAL(received.size(), 1u);
+    BOOST_CHECK_EQUAL(rjson::print(received[0]), "{\"a\":1}");
+    BOOST_CHECK_EQUAL(source->processed_lines(), 2u);
+    // The reading stops at the first chunk of the line which takes it past the limit; the bytes of
+    // that chunk count too.
+    BOOST_CHECK_GT(source->processed_size_bytes(), first_line.size() + maximum_line_size);
+    // At most the whole long line (maximum_line_size + 1 bytes) and its newline.
+    BOOST_CHECK_LE(source->processed_size_bytes(), first_line.size() + maximum_line_size + 1 + 1);
 }
 
 // Several items in one file: checks the JSON-lines framing, i.e. that consecutive items are

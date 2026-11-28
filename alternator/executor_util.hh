@@ -36,6 +36,7 @@
 #include "audit/audit.hh"
 #include "utils/managed_bytes.hh"
 #include "exceptions/coordinator_result.hh"
+#include "db_clock.hh"
 
 class index_metadata;
 
@@ -306,4 +307,8 @@ body_writer make_streamed(rjson::value&&);
 
 /// Convert an exception from the coordinator_exception_container to an api_error with proper error message.
 api_error create_api_error_from_coordinators_exception(const exceptions::coordinator_exception_container &exc);
+
+/// The time as seconds since the epoch, keeping the sub-second part, as DynamoDB reports the
+/// timestamps of exports and imports (e.g. StartTime, EndTime).
+double to_epoch_seconds(db_clock::time_point tp);
 } // namespace alternator

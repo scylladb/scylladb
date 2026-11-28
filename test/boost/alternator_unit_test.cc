@@ -7,6 +7,7 @@
  */
 
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/cql_test_env.hh"
 
 #include <seastar/util/defer.hh>
 #include <seastar/core/memory.hh>
@@ -21,11 +22,14 @@
 #include "dht/token-sharding.hh"
 #include "alternator/expressions.hh"
 #include "alternator/streams.hh"
+#include "alternator/node_incarnation.hh"
+#include "gms/gossiper.hh"
 #include "schema/schema_builder.hh"
 #include "types/types.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/abort_source.hh>
 
 namespace alternator {
     const cdc::stream_id& find_parent_shard_in_previous_generation(db_clock::time_point prev_timestamp, const utils::chunked_vector<cdc::stream_id>& prev_streams, const cdc::stream_id& child);
@@ -198,6 +202,99 @@ BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_empty) {
     std::string_view arn = "";
 
     BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", ""), alternator::api_error);
+}
+
+// A job row stores the incarnation of its node as "{host_id}:{gossip_generation}", which
+// from_string() reads back. A missing or incorrect value reads as "no node" (the default value).
+BOOST_AUTO_TEST_CASE(test_live_node_identifier_to_and_from_string) {
+    const alternator::live_node_identifier id{
+        .host_id = locator::host_id(utils::UUID("0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6")),
+        .gossip_generation = 1700000000,
+    };
+    BOOST_REQUIRE_EQUAL(id.to_string(), "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:1700000000");
+    BOOST_REQUIRE(alternator::live_node_identifier::from_string(id.to_string()) == id);
+    const alternator::live_node_identifier max_generation_id{ .host_id = id.host_id, .gossip_generation = 4294967295 };
+    BOOST_REQUIRE(alternator::live_node_identifier::from_string(max_generation_id.to_string()) == max_generation_id);
+
+    BOOST_REQUIRE_EQUAL(alternator::live_node_identifier{}.to_string(), "");
+    for (std::string_view invalid : {
+            "",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6",
+            ":1700000000",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:x",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:17x",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:-1",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:4294967296",
+            "not-a-host-id:1700000000"}) {
+        BOOST_REQUIRE_MESSAGE(alternator::live_node_identifier::from_string(invalid) == alternator::live_node_identifier{},
+                fmt::format("'{}' should read as no node", invalid));
+    }
+}
+
+// The incarnation of a job row may still run the job if its node is one of the running nodes, with
+// the generation of the row or a lower one: a lower one is old gossip state, or the 0 of an unknown
+// incarnation. A higher generation shows that the node restarted. A node which is not one of them
+// (unreachable for too long, or not a member any more) runs no job. A row without a node may be
+// running, as nobody can tell.
+BOOST_AUTO_TEST_CASE(test_running_node_ids_may_be_running) {
+    const locator::host_id node(utils::UUID("00000000-0000-0000-0000-000000000001"));
+    const locator::host_id unknown_incarnation_node(utils::UUID("00000000-0000-0000-0000-000000000002"));
+    const locator::host_id gone_node(utils::UUID("00000000-0000-0000-0000-000000000003"));
+    alternator::running_node_ids running;
+    running.generations.emplace(node, 10);
+    running.generations.emplace(unknown_incarnation_node, 0);
+
+    BOOST_REQUIRE(running.may_be_running({ .host_id = node, .gossip_generation = 10 }));
+    BOOST_REQUIRE(running.may_be_running({ .host_id = node, .gossip_generation = 11 }));
+    BOOST_REQUIRE(!running.may_be_running({ .host_id = node, .gossip_generation = 9 }));
+    BOOST_REQUIRE(running.may_be_running({ .host_id = unknown_incarnation_node, .gossip_generation = 5 }));
+    BOOST_REQUIRE(!running.may_be_running({ .host_id = gone_node, .gossip_generation = 10 }));
+    BOOST_REQUIRE(running.may_be_running(alternator::live_node_identifier{}));
+}
+
+static seastar::logger gc_round_scheduler_test_logger("alternator_unit_test_gc_round_scheduler");
+
+// A failed round is retried after the retry period, also when a round is asked for before that: the
+// requested round waits for the retry. Once a round succeeded, a requested round runs on time again,
+// long before the next periodic round.
+SEASTAR_TEST_CASE(test_gc_round_scheduler_requested_round_waits_for_retry) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        constexpr std::chrono::seconds retry_period{1};
+        alternator::gc_round_scheduler scheduler(e.gossiper().local(), alternator::gc_round_scheduler::config{
+            .name = "test",
+            // Long enough that only the retry and the requests start the rounds of this test.
+            .period = std::chrono::hours(1),
+            .retry_period = retry_period,
+            .wakeup_injection = "test_gc_round_scheduler_wakeup",
+            .finished_injection = "test_gc_round_scheduler_finished",
+        }, gc_round_scheduler_test_logger);
+        abort_source as;
+        std::vector<lowres_clock::time_point> round_starts;
+        auto rounds = scheduler.run(as, std::chrono::seconds(1), [&] () -> future<> {
+            round_starts.push_back(lowres_clock::now());
+            if (round_starts.size() <= 2) {
+                // The round requested by the failed first round must wait for the retry; the one
+                // requested by the successful second round runs at once.
+                scheduler.request_round(lowres_clock::duration::zero());
+            }
+            if (round_starts.size() == 1) {
+                throw std::runtime_error("injected failure of the first round");
+            }
+            co_return;
+        });
+        auto stop = defer([&] noexcept {
+            as.request_abort();
+            rounds.get();
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+        while (round_starts.size() < 3) {
+            BOOST_REQUIRE_MESSAGE(std::chrono::steady_clock::now() < deadline, "timed out waiting for 3 rounds");
+            seastar::sleep(std::chrono::milliseconds(10)).get();
+        }
+        const auto retry_delay = std::chrono::duration_cast<std::chrono::milliseconds>(round_starts[1] - round_starts[0]);
+        BOOST_REQUIRE_MESSAGE(retry_delay >= retry_period, fmt::format("the retry ran after {} ms", retry_delay.count()));
+    });
 }
 
 static std::map<std::string, std::string> strings {

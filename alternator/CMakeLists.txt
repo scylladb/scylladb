@@ -23,6 +23,7 @@ target_sources(alternator
     http_compression.cc
     export.cc
     import.cc
+    node_incarnation.cc
     ${cql_grammar_srcs})
 target_include_directories(alternator
   PUBLIC

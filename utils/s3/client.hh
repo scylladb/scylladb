@@ -374,23 +374,37 @@ public:
     };
 
     class bucket_lister final : public abstract_lister::impl {
+    public:
+        // A listed object: its key without the prefix, and its size in bytes.
+        struct entry {
+            sstring name;
+            uint64_t size;
+        };
+    private:
         shared_ptr<client> _client;
         sstring _bucket;
         sstring _prefix;
         sstring _max_keys;
+        seastar::abort_source* _as;
         std::optional<future<>> _opt_done_fut;
         lister::filter_type _filter;
-        seastar::queue<std::optional<directory_entry>> _queue;
+        seastar::queue<std::optional<entry>> _queue;
 
         future<> start_listing();
 
     public:
 
         // start_listing() buffers a page whole: 100 unescaped ~1KiB keys stay just under the 128KiB large-alloc threshold.
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        // An abort of `as` aborts the listing request in flight, and makes get() and get_entry() fail with the
+        // exception of the abort.
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<entry>),
+                seastar::abort_source* as = nullptr);
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<entry>),
+                seastar::abort_source* as = nullptr);
 
         future<std::optional<directory_entry>> get() override;
+        // As get(), with the size of the object.
+        future<std::optional<entry>> get_entry();
         future<> close() noexcept override;
     };
 
