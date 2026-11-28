@@ -3407,11 +3407,17 @@ public:
         dst_shard.tablet_count += tablet_count;
         dst_shard.tablet_count_per_table[table] += tablet_count;
         dst_shard.tablet_sizes_per_table[table] += tablet_sizes;
-        dst_shard.dusage->used += tablet_sizes;
+        // Like in decrease_node_load(), the node's capacity may be unknown, e.g. when it is
+        // a node being drained, whose load is restored after a skipped migration from it.
+        if (dst_shard.dusage) {
+            dst_shard.dusage->used += tablet_sizes;
+        }
         dst_node.tablet_count_per_table[table] += tablet_count;
         dst_node.tablet_sizes_per_table[table] += tablet_sizes;
         dst_node.tablet_count += tablet_count;
-        dst_node.dusage->used += tablet_sizes;
+        if (dst_node.dusage) {
+            dst_node.dusage->used += tablet_sizes;
+        }
         dst_node.update();
     }
 
@@ -4097,6 +4103,13 @@ public:
         auto batch_size = nodes[target].shard_count;
         const size_t max_skipped_migrations = nodes[target].shards.size() * 2;
         size_t skipped_migrations = 0;
+        // Migrations which were not included in the plan, but whose load was moved as if they were.
+        struct skipped_migration {
+            tablet_replica src;
+            tablet_replica dst;
+            migration_tablet_set tablets;
+        };
+        std::vector<skipped_migration> skipped;
         auto shuffle = in_shuffle_mode();
         while (plan.size() < batch_size) {
             co_await coroutine::maybe_yield();
@@ -4315,8 +4328,10 @@ public:
                 if (skipped_migrations >= max_skipped_migrations) {
                     lblogger.debug("Too many migrations skipped, aborting balancing");
                     _current_stats->stop_skip_limit++;
+                    unload(*_load_sketch, dst.host, dst.shard, source_tablets);
                     break;
                 }
+                skipped.push_back({src, dst, source_tablets});
             }
 
             erase_candidates(nodes, tmap, source_tablets);
@@ -4330,6 +4345,15 @@ public:
             if (lblogger.is_enabled(seastar::log_level::debug)) {
                 co_await log_table_load(nodes, source_tablets.table());
             }
+        }
+
+        // Undo the load changes of the skipped migrations, so that the plans made after this one,
+        // like the intra-node plan, see the true load of each shard. Otherwise a shard which had
+        // no streaming capacity for a migration would look less loaded by that migration's tablets,
+        // and the intra-node plan could move other tablets to it although it is not less loaded.
+        for (auto& s : skipped) {
+            update_node_load_on_migration(nodes, s.dst, s.src, s.tablets);
+            unload(*_load_sketch, s.dst.host, s.dst.shard, s.tablets);
         }
 
         if (plan.size() == batch_size) {

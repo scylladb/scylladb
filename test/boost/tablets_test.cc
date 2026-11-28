@@ -6708,6 +6708,113 @@ SEASTAR_THREAD_TEST_CASE(test_intranode_balance_threshold) {
     }, cfg).get();
 }
 
+// Reproduces SCYLLADB-6531: when an inter-node migration is not emitted
+// because its source shard has no free streaming capacity, the intra-node
+// plan must not act as if that migration took the tablet's load off the shard.
+SEASTAR_THREAD_TEST_CASE(test_no_intranode_migration_for_skipped_internode_migration) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablet_streaming_read_concurrency_per_shard.set(1);
+    cfg.db_config->tablet_streaming_write_concurrency_per_shard.set(1);
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        const unsigned shard_count = 2;
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+        auto host2 = topo.add_node(node_state::normal, shard_count);
+
+        const uint64_t gb = 1024UL * 1024UL * 1024UL;
+        auto& load_stats = topo.get_shared_load_stats();
+        load_stats.set_capacity(host1, 10000 * gb);
+        load_stats.set_capacity(host2, 10000 * gb);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table_x = add_table(e, ks_name).get();
+        auto table_y = add_table(e, ks_name).get();
+
+        struct placement {
+            tablet_replica replica;
+            uint64_t size; // in GB
+        };
+        // host1's shard 0 has 15 tablets of table x (1000GB), and is getting
+        // one more (50GB) from shard 1, so shard 1 has no free streaming read
+        // capacity. Most of table x is on host2 (1600GB), so moving more of
+        // it there is bad for the table's balance.
+        std::vector<placement> x_tablets;
+        for (int i = 0; i < 15; ++i) {
+            x_tablets.push_back({{host1, 0}, i == 0 ? 76 : 66});
+        }
+        const size_t migrating_x_tablet = x_tablets.size();
+        x_tablets.push_back({{host1, 1}, 50});
+        for (int i = 0; i < 16; ++i) {
+            x_tablets.push_back({{host2, shard_id(i % 2)}, 100});
+        }
+        // host1's shard 1 has all of table y (8 tablets, 1000GB), so moving
+        // a tablet of table y to host2 is good for the table's balance.
+        std::vector<placement> y_tablets;
+        for (int i = 0; i < 8; ++i) {
+            y_tablets.push_back({{host1, 1}, 125});
+        }
+
+        auto make_tmap = [&] (const std::vector<placement>& tablets, std::optional<size_t> migrating) {
+            tablet_map tmap(tablets.size());
+            auto tid = tmap.first_tablet();
+            for (size_t i = 0; i < tablets.size(); ++i) {
+                tmap.set_tablet(tid, tablet_info{tablet_replica_set{tablets[i].replica}});
+                if (migrating && i == *migrating) {
+                    tmap.set_tablet_transition_info(tid, tablet_transition_info{
+                        tablet_transition_stage::streaming,
+                        tablet_transition_kind::intranode_migration,
+                        tablet_replica_set{tablet_replica{host1, 0}},
+                        tablet_replica{host1, 0}
+                    });
+                }
+                if (i + 1 < tablets.size()) {
+                    tid = *tmap.next_tablet(tid);
+                }
+            }
+            return tmap;
+        };
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tmeta.set_tablet_map(table_x, make_tmap(x_tablets, migrating_x_tablet));
+            tmeta.set_tablet_map(table_y, make_tmap(y_tablets, std::nullopt));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        auto set_sizes = [&] (table_id table, const std::vector<placement>& tablets) {
+            auto& tmap = stm.get()->tablets().get_tablet_map(table);
+            uint64_t table_size = 0;
+            auto tid = tmap.first_tablet();
+            for (size_t i = 0; i < tablets.size(); ++i) {
+                locator::range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
+                load_stats.set_tablet_size(tablets[i].replica.host, rb_tid, tablets[i].size * gb);
+                table_size += tablets[i].size * gb;
+                if (i + 1 < tablets.size()) {
+                    tid = *tmap.next_tablet(tid);
+                }
+            }
+            load_stats.set_size(table, table_size);
+        };
+        set_sizes(table_x, x_tablets);
+        set_sizes(table_y, y_tablets);
+
+        // host1 (2050GB) is more loaded than host2 (1600GB), so the balancer
+        // wants to move a tablet of table y from host1's shard 1 to host2,
+        // but shard 1 has no free streaming read capacity. With the true
+        // shard loads (1050GB and 1000GB) no intra-node migration is
+        // justified. But if the skipped migration's 125GB were taken off
+        // shard 1, a tablet of table x would seem worth moving to it.
+        auto& talloc = e.get_tablet_allocator().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, load_stats.get()).get();
+        for (auto&& mig : plan.migrations()) {
+            testlog.info("planned migration: {}", mig);
+            BOOST_REQUIRE_MESSAGE(mig.kind != tablet_transition_kind::intranode_migration,
+                fmt::format("Unexpected intranode migration: {}", mig));
+        }
+    }, cfg).get();
+}
+
 // Without the feature, system.tablets has no column for a tablet's raft group.
 static cql_test_config strongly_consistent_tablet_cql_test_config() {
     cql_test_config cfg = tablet_cql_test_config();
