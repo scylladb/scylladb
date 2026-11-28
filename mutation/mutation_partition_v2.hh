@@ -267,7 +267,6 @@ public:
 private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
-    friend class counter_write_query_result_builder;
 
     void check_schema(const schema& s) const {
 #ifdef SEASTAR_DEBUG

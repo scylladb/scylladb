@@ -17,7 +17,7 @@
 #include <type_traits>
 #include "utils/log.hh"
 
-extern logging::logger mclog;
+inline logging::logger mclog("mutation_compactor");
 
 inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
     // Like PK range, an empty row range, should be considered an "exclude all" restriction

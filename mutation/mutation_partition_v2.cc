@@ -23,8 +23,6 @@
 #include "utils/assert.hh"
 #include "utils/unconst.hh"
 
-extern logging::logger mplog;
-
 mutation_partition_v2::mutation_partition_v2(const schema& s, const mutation_partition_v2& x)
         : _tombstone(x._tombstone)
         , _static_row(s, column_kind::static_column, x._static_row)

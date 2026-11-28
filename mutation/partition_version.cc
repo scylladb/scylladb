@@ -7,8 +7,10 @@
  */
 
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <seastar/core/with_scheduling_group.hh>
 
 #include "partition_version.hh"
+#include "mutation_cleaner.hh"
 #include "db/row_cache.hh"
 #include "db/partition_snapshot_row_cursor.hh"
 #include "utils/assert.hh"
@@ -794,4 +796,125 @@ void partition_snapshot::unlock() noexcept {
     SCYLLA_ASSERT(at_latest_version());
     _locked = false;
     touch(); // Make the entry evictable again in case it was fully unlinked by eviction attempt.
+}
+
+mutation_cleaner_impl::~mutation_cleaner_impl() {
+    _worker_state->done = true;
+    _worker_state->cv.signal();
+    _worker_state->snapshots.clear_and_dispose(typename lw_shared_ptr<partition_snapshot>::disposer());
+    with_allocator(_region.allocator(), [this] {
+        clear();
+    });
+}
+
+void mutation_cleaner_impl::clear() noexcept {
+    while (clear_gently() == stop_iteration::no) ;
+}
+
+stop_iteration mutation_cleaner_impl::clear_gently() noexcept {
+    while (clear_some() == memory::reclaiming_result::reclaimed_something) {
+        if (need_preempt()) {
+            return stop_iteration::no;
+        }
+    }
+    return stop_iteration::yes;
+}
+
+memory::reclaiming_result mutation_cleaner_impl::clear_some() noexcept {
+    if (_versions.empty()) {
+        return memory::reclaiming_result::reclaimed_nothing;
+    }
+    auto&& alloc = current_allocator();
+    partition_version& pv = _versions.front();
+    if (pv.clear_gently(_tracker) == stop_iteration::yes) {
+        _versions.pop_front();
+        alloc.destroy(&pv);
+    }
+    return memory::reclaiming_result::reclaimed_something;
+}
+
+void mutation_cleaner_impl::merge(mutation_cleaner_impl& r) noexcept {
+    _versions.splice(r._versions);
+    for (partition_snapshot& snp : r._worker_state->snapshots) {
+        snp.migrate(&_region, _cleaner);
+    }
+    _worker_state->snapshots.splice(_worker_state->snapshots.end(), r._worker_state->snapshots);
+    if (!_worker_state->snapshots.empty()) {
+        _worker_state->cv.signal();
+    }
+}
+
+void mutation_cleaner_impl::start_worker() {
+    auto f = repeat([w = _worker_state, this] () mutable noexcept {
+      if (w->done) {
+          return make_ready_future<stop_iteration>(stop_iteration::yes);
+      }
+      return with_scheduling_group(_scheduling_group, [w, this] {
+        return w->cv.wait([w] {
+            return (w->done || !w->snapshots.empty()) && !w->merging_paused;
+        }).then([this, w] () noexcept {
+            if (w->done) {
+                return stop_iteration::yes;
+            }
+            if (w->merging_paused) {
+                return stop_iteration::no;
+            }
+            merge_some();
+            return stop_iteration::no;
+        });
+      });
+    });
+    if (f.failed()) {
+        f.get();
+    }
+}
+
+stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexcept {
+    auto&& region = snp.region();
+    return with_allocator(region.allocator(), [&] {
+        {
+            // Allocating sections require the region to be reclaimable
+            // which means that they cannot be nested.
+            // It is, however, possible, that if the snapshot is taken
+            // inside an allocating section and then an exception is thrown
+            // this function will be called to clean up even though we
+            // still will be in the context of the allocating section.
+            if (!region.reclaiming_enabled()) {
+                return stop_iteration::no;
+            }
+            try {
+                auto dirty_guard = make_region_space_guard();
+                return _worker_state->alloc_section(region, [&] {
+                    return snp.merge_partition_versions(_app_stats);
+                });
+            } catch (...) {
+                // Merging failed, give up as there is no guarantee of forward progress.
+                return stop_iteration::yes;
+            }
+        }
+    });
+}
+
+stop_iteration mutation_cleaner_impl::merge_some() noexcept {
+    if (_worker_state->snapshots.empty()) {
+        return stop_iteration::yes;
+    }
+    partition_snapshot& snp = _worker_state->snapshots.front();
+    if (merge_some(snp) == stop_iteration::yes) {
+        _worker_state->snapshots.pop_front();
+        lw_shared_ptr<partition_snapshot>::dispose(&snp);
+    }
+    return stop_iteration::no;
+}
+
+future<> mutation_cleaner_impl::drain() {
+    return repeat([this] {
+        return merge_some();
+    }).then([this] {
+        return repeat([this] {
+            return with_allocator(_region.allocator(), [this] {
+                return clear_gently();
+            });
+        });
+    });
 }

@@ -7,7 +7,6 @@
  */
 
 #include <seastar/core/coroutine.hh>
-#include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "mutation_partition.hh"
@@ -17,15 +16,11 @@
 #include "partition_builder.hh"
 #include "query/query-result-writer.hh"
 #include "mutation_fragment.hh"
-#include "mutation_query.hh"
 #include "mutation_compactor.hh"
 #include "counters.hh"
 #include "db/row_cache.hh"
 #include "timestamp.hh"
 #include "view_info.hh"
-#include "mutation_cleaner.hh"
-#include <seastar/core/execution_stage.hh>
-#include "types/map.hh"
 #include "compaction/compaction_garbage_collector.hh"
 #include "keys/clustering_key_filter.hh"
 #include "frozen_mutation_consumer.hh"
@@ -35,7 +30,6 @@
 #include "utils/unconst.hh"
 #include "mutation/async_utils.hh"
 
-logging::logger mclog("mutation_compactor");
 logging::logger mplog("mutation_partition");
 
 void on_bad_row_key(const schema& s, position_in_partition_view pos, const char* reason) {
@@ -150,6 +144,8 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
     }
 }
 
+namespace {
+
 struct mutation_fragment_applier {
     const schema& _s;
     mutation_partition& _mp;
@@ -179,6 +175,8 @@ struct mutation_fragment_applier {
         dr.apply(_s, std::move(temp).as_deletable_row());
     }
 };
+
+} // anonymous namespace
 
 void
 mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
@@ -667,68 +665,6 @@ void mutation_partition::for_each_row(const schema& schema, const query::cluster
     }
 }
 
-template<typename RowWriter>
-void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
-    SCYLLA_ASSERT(c.is_live());
-    auto wr = w.add().write();
-    auto after_timestamp = [&, wr = std::move(wr)] () mutable {
-        if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
-            return std::move(wr).write_timestamp(c.timestamp());
-        } else {
-            return std::move(wr).skip_timestamp();
-        }
-    }();
-    auto after_value = [&, wr = std::move(after_timestamp)] () mutable {
-        if (slice.options.contains<query::partition_slice::option::send_expiry>() && c.is_live_and_has_ttl()) {
-            return std::move(wr).write_expiry(c.expiry());
-        } else {
-            return std::move(wr).skip_expiry();
-        }
-    }().write_fragmented_value(fragment_range(c.value()));
-    [&, wr = std::move(after_value)] () mutable {
-        if (slice.options.contains<query::partition_slice::option::send_ttl>() && c.is_live_and_has_ttl()) {
-            return std::move(wr).write_ttl(c.ttl());
-        } else {
-            return std::move(wr).skip_ttl();
-        }
-    }().end_qr_cell();
-}
-
-template<typename RowWriter>
-void write_cell(RowWriter& w, const query::partition_slice& slice, data_type type, collection_mutation_view v) {
-    if (type->is_collection() && slice.options.contains<query::partition_slice::option::collections_as_maps>()) {
-        auto& ctype = static_cast<const collection_type_impl&>(*type);
-        type = map_type_impl::get_instance(ctype.name_comparator(), ctype.value_comparator(), true);
-    }
-
-    bytes_ostream serialized = ((type->is_map() || type->is_set() || type->is_user_type()) && type->is_multi_cell()
-                && slice.options.contains<query::partition_slice::option::send_collection_timestamps>())
-            ? serialize_for_cql_with_timestamps(*type, std::move(v))
-            : serialize_for_cql(*type, std::move(v));
-    w.add().write().skip_timestamp()
-        .skip_expiry()
-        .write_fragmented_value(std::move(serialized))
-        .skip_ttl()
-        .end_qr_cell();
-}
-
-template<typename RowWriter>
-void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
-    SCYLLA_ASSERT(c.is_live());
-    auto ccv = counter_cell_view(c);
-    auto wr = w.add().write();
-    [&, wr = std::move(wr)] () mutable {
-        if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
-            return std::move(wr).write_timestamp(c.timestamp());
-        } else {
-            return std::move(wr).skip_timestamp();
-        }
-    }().skip_expiry()
-            .write_value(counter_cell_view::total_value_type()->decompose(ccv.total_value()))
-            .skip_ttl()
-            .end_qr_cell();
-}
-
 template<typename Hasher>
 void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
     for (auto id : columns) {
@@ -768,8 +704,9 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
         }
     }
 }
-// Instantiation for mutation_test.cc
+// Instantiations for query.cc (the hashers of query::digester) and mutation_test.cc
 template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
+template void appending_hash<row>::operator()<query::noop_hasher>(query::noop_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
 
 cell_hash_opt row::cell_hash_for(column_id id) const {
     const cell_and_hash* cah = _cells.get(id);
@@ -793,41 +730,6 @@ void row::clear_hash() const {
     });
 }
 
-template<typename RowWriter>
-static void get_compacted_row_slice(const schema& s,
-    const query::partition_slice& slice,
-    column_kind kind,
-    const row& cells,
-    const query::column_id_vector& columns,
-    RowWriter& writer)
-{
-    for (auto id : columns) {
-        const atomic_cell_or_collection* cell = cells.find_cell(id);
-        if (!cell) {
-            writer.add().skip();
-        } else {
-            auto&& def = s.column_at(kind, id);
-            if (def.is_atomic()) {
-                auto c = cell->as_atomic_cell(def);
-                if (!c.is_live()) {
-                    writer.add().skip();
-                } else if (def.is_counter()) {
-                    write_counter_cell(writer, slice, cell->as_atomic_cell(def));
-                } else {
-                    write_cell(writer, slice, cell->as_atomic_cell(def));
-                }
-            } else {
-                auto mut = cell->as_collection_mutation();
-                if (!mut.is_any_live(*def.type)) {
-                    writer.add().skip();
-                } else {
-                    write_cell(writer, slice, def.type, std::move(mut));
-                }
-            }
-        }
-    }
-}
-
 bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb, gc_clock::time_point now) {
     bool any_live = false;
     cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
@@ -848,12 +750,6 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
         return stop_iteration::no;
     });
     return any_live;
-}
-
-std::ostream&
-operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection::printer&>& c) {
-    fmt::print(os, "{{column: {} {}}}", c.first, c.second);
-    return os;
 }
 
 // Transforms given range of printable into a range of strings where each element
@@ -1900,340 +1796,6 @@ mutation_partition::upgrade(const schema& old_schema, const schema& new_schema) 
     *this = std::move(tmp);
 }
 
-mutation_querier::mutation_querier(const schema& s, query::result::partition_writer pw,
-                                   query::result_memory_accounter& memory_accounter)
-    : _schema(s)
-    , _memory_accounter(memory_accounter)
-    , _static_cells_wr(pw.start().start_static_row().start_cells())
-    , _pw(std::move(pw))
-{
-}
-
-void mutation_querier::query_static_row(const row& r, tombstone current_tombstone)
-{
-    const query::partition_slice& slice = _pw.slice();
-    if (!slice.static_columns.empty()) {
-        if (_pw.requested_result()) {
-            auto start = _static_cells_wr._out.size();
-            get_compacted_row_slice(_schema, slice, column_kind::static_column,
-                                    r, slice.static_columns, _static_cells_wr);
-            _memory_accounter.update(_static_cells_wr._out.size() - start);
-        } else {
-            seastar::measuring_output_stream stream;
-            ser::qr_partition__static_row__cells<seastar::measuring_output_stream> out(stream, { });
-            auto start = stream.size();
-            get_compacted_row_slice(_schema, slice, column_kind::static_column,
-                                    r, slice.static_columns, out);
-            _memory_accounter.update(stream.size() - start);
-        }
-        if (_pw.requested_digest()) {
-            max_timestamp max_ts{_pw.last_modified()};
-            _pw.digest().feed_hash(current_tombstone);
-            max_ts.update(current_tombstone.timestamp);
-            _pw.digest().feed_hash(r, _schema, column_kind::static_column, slice.static_columns, max_ts);
-            _pw.last_modified() = max_ts.max;
-        }
-    }
-    _rows_wr.emplace(std::move(_static_cells_wr).end_cells().end_static_row().start_rows());
-}
-
-stop_iteration mutation_querier::consume(static_row&& sr, tombstone current_tombstone) {
-    query_static_row(sr.cells(), current_tombstone);
-    _live_data_in_static_row = true;
-    return stop_iteration::no;
-}
-
-void mutation_querier::prepare_writers() {
-    if (!_rows_wr) {
-        row empty_row;
-        query_static_row(empty_row, { });
-        _live_data_in_static_row = false;
-    }
-}
-
-stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone current_tombstone) {
-    prepare_writers();
-
-    const query::partition_slice& slice = _pw.slice();
-
-    if (_pw.requested_digest()) {
-        _pw.digest().feed_hash(cr.key(), _schema);
-        _pw.digest().feed_hash(current_tombstone);
-        max_timestamp max_ts{_pw.last_modified()};
-        max_ts.update(current_tombstone.tomb().timestamp);
-        _pw.digest().feed_hash(cr.cells(), _schema, column_kind::regular_column, slice.regular_columns, max_ts);
-        _pw.last_modified() = max_ts.max;
-    }
-
-    auto write_row = [&] (auto& rows_writer) {
-        auto cells_wr = [&] {
-            if (slice.options.contains(query::partition_slice::option::send_clustering_key)) {
-                return rows_writer.add().write_key(cr.key()).start_cells().start_cells();
-            } else {
-                return rows_writer.add().skip_key().start_cells().start_cells();
-            }
-        }();
-        get_compacted_row_slice(_schema, slice, column_kind::regular_column, cr.cells(), slice.regular_columns, cells_wr);
-        std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
-    };
-
-    auto stop = stop_iteration::no;
-    if (_pw.requested_result()) {
-        auto start = _rows_wr->_out.size();
-        write_row(*_rows_wr);
-        stop = _memory_accounter.update_and_check(_rows_wr->_out.size() - start);
-    } else {
-        seastar::measuring_output_stream stream;
-        ser::qr_partition__rows<seastar::measuring_output_stream> out(stream, { });
-        auto start = stream.size();
-        write_row(out);
-        stop = _memory_accounter.update_and_check(stream.size() - start);
-    }
-
-    _live_clustering_rows++;
-    return stop;
-}
-
-uint64_t mutation_querier::consume_end_of_stream() {
-    prepare_writers();
-
-    // If we got no rows, but have live static columns, we should only
-    // give them back IFF we did not have any CK restrictions.
-    // #589
-    // If ck:s exist, and we do a restriction on them, we either have matching
-    // rows, or return nothing, since cql does not allow "is null".
-    bool return_static_content_on_partition_with_no_rows =
-        _pw.slice().options.contains(query::partition_slice::option::always_return_static_content) ||
-        !has_ck_selector(_pw.ranges());
-    if (!_live_clustering_rows && (!return_static_content_on_partition_with_no_rows || !_live_data_in_static_row)) {
-        _pw.retract();
-        return 0;
-    } else {
-        auto live_rows = std::max(_live_clustering_rows, uint64_t(1));
-        _pw.row_count() += live_rows;
-        _pw.partition_count() += 1;
-        std::move(*_rows_wr).end_rows().end_qr_partition();
-        return live_rows;
-    }
-}
-
-query_result_builder::query_result_builder(const schema& s, query::result::builder& rb) noexcept
-    : _schema(s), _rb(rb)
-{ }
-
-void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
-    _mutation_consumer.emplace(mutation_querier(_schema, _rb.add_partition(_schema, dk.key()), _rb.memory_accounter()));
-}
-
-void query_result_builder::consume(tombstone t) {
-    _mutation_consumer->consume(t);
-    _stop = _rb.bump_and_check_tombstone_limit();
-}
-stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool is_live) {
-    if (!is_live) {
-        _stop = _rb.bump_and_check_tombstone_limit();
-        return _stop;
-    }
-    _stop = _mutation_consumer->consume(std::move(sr), t);
-    return _stop;
-}
-stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone t,  bool is_live) {
-    if (!is_live) {
-        _stop = _rb.bump_and_check_tombstone_limit();
-        return _stop;
-    }
-    _stop = _mutation_consumer->consume(std::move(cr), t);
-    return _stop;
-}
-stop_iteration query_result_builder::consume(range_tombstone_change&& rtc) {
-    _stop = _rb.bump_and_check_tombstone_limit();
-    return _stop;
-}
-
-stop_iteration query_result_builder::consume_end_of_partition() {
-    auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
-    if (live_rows_in_partition > 0 && !_stop) {
-        _stop = _rb.memory_accounter().check();
-    }
-    if (_stop) {
-        _rb.mark_as_short_read();
-    }
-    return _stop;
-}
-
-void query_result_builder::consume_end_of_stream() {
-}
-
-stop_iteration query::result_memory_accounter::check_local_limit() const {
-    if (_short_read_allowed) {
-        return stop_iteration(_total_used_memory > _maximum_result_size.get_page_size());
-    } else {
-        if (_total_used_memory > _maximum_result_size.hard_limit) {
-            throw std::runtime_error(fmt::format(
-                    "Memory usage of unpaged query exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit)",
-                    _maximum_result_size.hard_limit));
-        }
-        if (_below_soft_limit && _total_used_memory > _maximum_result_size.soft_limit) {
-            mplog.warn(
-                    "Memory usage of unpaged query exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit)",
-                    _maximum_result_size.soft_limit);
-            _below_soft_limit = false;
-        }
-    }
-    return stop_iteration::no;
-}
-
-void reconcilable_result_builder::consume_new_partition(const dht::decorated_key& dk) {
-    _rt_assembler.reset();
-    _return_static_content_on_partition_with_no_rows =
-        _slice.options.contains(query::partition_slice::option::always_return_static_content) ||
-        !has_ck_selector(_slice.row_ranges(*_query_schema, dk.key()));
-    _static_row_is_alive = false;
-    _live_rows = 0;
-    _mutation_consumer.emplace(streamed_mutation_freezer(*_query_schema, dk.key()));
-    _used_at_entry = _memory_accounter.used_memory();
-}
-
-void reconcilable_result_builder::consume(tombstone t) {
-    _mutation_consumer->consume(t);
-}
-
-stop_iteration reconcilable_result_builder::consume(static_row&& sr, tombstone, bool is_alive) {
-    _static_row_is_alive = is_alive;
-    _memory_accounter.update(sr.memory_usage(*_query_schema));
-    return _mutation_consumer->consume(std::move(sr));
-}
-
-stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tombstone, bool is_alive) {
-    if (_rt_assembler.needs_flush()) {
-        if (auto rt_opt = _rt_assembler.flush(*_query_schema, position_in_partition::after_key(*_query_schema, cr.key()))) {
-            consume(std::move(*rt_opt));
-        }
-    }
-    _live_rows += is_alive;
-    auto stop = _memory_accounter.update_and_check(cr.memory_usage(*_query_schema));
-    if (is_alive || _slice.options.contains<query::partition_slice::option::allow_mutation_read_page_without_live_row>()) {
-        // We are considering finishing current read only after consuming a
-        // live clustering row. While sending a single live row is enough to
-        // guarantee progress, not ending the result on a live row would
-        // mean that the next page fetch will read all tombstones after the
-        // last live row again.
-        _stop = stop;
-    }
-    return _mutation_consumer->consume(std::move(cr)) || _stop;
-}
-
-stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
-    _memory_accounter.update(rt.memory_usage(*_query_schema));
-    return _mutation_consumer->consume(std::move(rt));
-}
-
-stop_iteration reconcilable_result_builder::consume(range_tombstone_change&& rtc) {
-    if (auto rt_opt = _rt_assembler.consume(*_query_schema, std::move(rtc))) {
-        return consume(std::move(*rt_opt));
-    }
-    return stop_iteration::no;
-}
-
-stop_iteration reconcilable_result_builder::consume_end_of_partition() {
-    _rt_assembler.on_end_of_stream();
-    if (_live_rows == 0 && _static_row_is_alive && _return_static_content_on_partition_with_no_rows) {
-        ++_live_rows;
-        // Normally we count only live clustering rows, to guarantee that
-        // the next page fetch won't ask for the same range. However,
-        // if we return just a single static row we can stop the result as
-        // well. Next page fetch will ask for the next partition and if we
-        // don't do that we could end up with an unbounded number of
-        // partitions with only a static row.
-        _stop = _stop || _memory_accounter.check();
-    }
-    _total_live_rows += _live_rows;
-    _result.emplace_back(partition { _live_rows, _mutation_consumer->consume_end_of_stream() });
-
-    auto accounted = _memory_accounter.used_memory() - _used_at_entry;
-    auto actually_used = sizeof(partition) + _result.back().mut().representation().size();
-    if (actually_used > accounted) {
-        _memory_accounter.update(actually_used - accounted);
-    }
-
-    if (_slice.options.contains<query::partition_slice::option::allow_mutation_read_page_without_live_row>()) {
-        _stop = _stop || _memory_accounter.check();
-    }
-
-    return _stop;
-}
-
-reconcilable_result reconcilable_result_builder::consume_end_of_stream() {
-    return reconcilable_result(_total_live_rows, std::move(_result),
-                               query::short_read(bool(_stop)),
-                               std::move(_memory_accounter).done());
-}
-
-future<query::result>
-to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint64_t max_rows, uint32_t max_partitions,
-        query::result_options opts) {
-    // This result was already built with a limit, don't apply another one.
-    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::max_tombstones);
-    auto consumer = compact_for_query<query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
-            max_partitions, tombstone_gc_state::no_gc(), query_result_builder(*s, builder));
-    auto compaction_state = consumer.get_state();
-    frozen_mutation_consumer_adaptor adaptor(s, consumer);
-    for (const partition& p : r.partitions()) {
-        const auto res = co_await p.mut().consume_gently(s, adaptor);
-        if (res.stop == stop_iteration::yes) {
-            break;
-        }
-    }
-    if (r.is_short_read()) {
-        builder.mark_as_short_read();
-    }
-    co_return builder.build(compaction_state->current_full_position());
-}
-
-query::result
-query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_limit, gc_clock::time_point now, query::result_options opts) {
-    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::max_tombstones);
-    auto consumer = compact_for_query<query_result_builder>(*m.schema(), now, slice, row_limit,
-            query::max_partitions, tombstone_gc_state::no_gc(), query_result_builder(*m.schema(), builder));
-    auto compaction_state = consumer.get_state();
-    std::move(m).consume(consumer, consume_in_reverse::no);
-    return builder.build(compaction_state->current_full_position());
-}
-
-class counter_write_query_result_builder {
-    const schema& _schema;
-    mutation_opt _mutation;
-public:
-    counter_write_query_result_builder(const schema& s) : _schema(s) { }
-    void consume_new_partition(const dht::decorated_key& dk) {
-        _mutation = mutation(_schema.shared_from_this(), dk);
-    }
-    void consume(tombstone) { }
-    stop_iteration consume(static_row&& sr, tombstone, bool is_live) {
-        if (!is_live) {
-            return stop_iteration::no;
-        }
-        _mutation->partition().static_row().maybe_create() = std::move(sr.cells());
-        return stop_iteration::no;
-    }
-    stop_iteration consume(clustering_row&& cr, row_tombstone,  bool is_live) {
-        if (!is_live) {
-            return stop_iteration::no;
-        }
-        _mutation->partition().insert_row(_schema, cr.key(), std::move(cr).as_deletable_row());
-        return stop_iteration::no;
-    }
-    stop_iteration consume(range_tombstone_change&& rtc) {
-        return stop_iteration::no;
-    }
-    stop_iteration consume_end_of_partition() {
-        return stop_iteration::no;
-    }
-    mutation_opt consume_end_of_stream() {
-        return std::move(_mutation);
-    }
-};
-
 mutation_partition::mutation_partition(mutation_partition::incomplete_tag, const schema& s, tombstone t)
     : _tombstone(t)
     , _static_row_continuous(!s.has_static_columns())
@@ -2395,160 +1957,3 @@ bool
 mutation_partition::fully_discontinuous(const schema& s, const position_range& r) {
     return check_continuity(s, r, is_continuous::no);
 }
-
-future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& source, reader_permit permit,
-                                         const dht::decorated_key& dk,
-                                         const query::partition_slice& slice,
-                                         tracing::trace_state_ptr trace_ptr)
-{
-    struct range_and_reader {
-        dht::partition_range range;
-        mutation_reader reader;
-
-        range_and_reader(range_and_reader&&) = delete;
-        range_and_reader(const range_and_reader&) = delete;
-
-        range_and_reader(schema_ptr s, const mutation_source& source, reader_permit permit,
-                         const dht::decorated_key& dk,
-                         const query::partition_slice& slice,
-                         tracing::trace_state_ptr trace_ptr)
-            : range(dht::partition_range::make_singular(dk))
-            , reader(source.make_mutation_reader(s, std::move(permit), range, slice,
-                                                      std::move(trace_ptr), streamed_mutation::forwarding::no,
-                                                      mutation_reader::forwarding::no))
-        { }
-    };
-
-    // do_with() doesn't support immovable objects
-    auto r_a_r = std::make_unique<range_and_reader>(s, source, std::move(permit), dk, slice, std::move(trace_ptr));
-    auto cwqrb = counter_write_query_result_builder(*s);
-    auto cfq = compact_for_query<counter_write_query_result_builder>(
-            *s, gc_clock::now(), slice, query::max_rows, query::max_partitions, tombstone_gc_state::no_gc(), std::move(cwqrb));
-    auto f = r_a_r->reader.consume(std::move(cfq));
-    return f.finally([r_a_r = std::move(r_a_r)] {
-        return r_a_r->reader.close();
-    });
-}
-
-mutation_cleaner_impl::~mutation_cleaner_impl() {
-    _worker_state->done = true;
-    _worker_state->cv.signal();
-    _worker_state->snapshots.clear_and_dispose(typename lw_shared_ptr<partition_snapshot>::disposer());
-    with_allocator(_region.allocator(), [this] {
-        clear();
-    });
-}
-
-void mutation_cleaner_impl::clear() noexcept {
-    while (clear_gently() == stop_iteration::no) ;
-}
-
-stop_iteration mutation_cleaner_impl::clear_gently() noexcept {
-    while (clear_some() == memory::reclaiming_result::reclaimed_something) {
-        if (need_preempt()) {
-            return stop_iteration::no;
-        }
-    }
-    return stop_iteration::yes;
-}
-
-memory::reclaiming_result mutation_cleaner_impl::clear_some() noexcept {
-    if (_versions.empty()) {
-        return memory::reclaiming_result::reclaimed_nothing;
-    }
-    auto&& alloc = current_allocator();
-    partition_version& pv = _versions.front();
-    if (pv.clear_gently(_tracker) == stop_iteration::yes) {
-        _versions.pop_front();
-        alloc.destroy(&pv);
-    }
-    return memory::reclaiming_result::reclaimed_something;
-}
-
-void mutation_cleaner_impl::merge(mutation_cleaner_impl& r) noexcept {
-    _versions.splice(r._versions);
-    for (partition_snapshot& snp : r._worker_state->snapshots) {
-        snp.migrate(&_region, _cleaner);
-    }
-    _worker_state->snapshots.splice(_worker_state->snapshots.end(), r._worker_state->snapshots);
-    if (!_worker_state->snapshots.empty()) {
-        _worker_state->cv.signal();
-    }
-}
-
-void mutation_cleaner_impl::start_worker() {
-    auto f = repeat([w = _worker_state, this] () mutable noexcept {
-      if (w->done) {
-          return make_ready_future<stop_iteration>(stop_iteration::yes);
-      }
-      return with_scheduling_group(_scheduling_group, [w, this] {
-        return w->cv.wait([w] {
-            return (w->done || !w->snapshots.empty()) && !w->merging_paused;
-        }).then([this, w] () noexcept {
-            if (w->done) {
-                return stop_iteration::yes;
-            }
-            if (w->merging_paused) {
-                return stop_iteration::no;
-            }
-            merge_some();
-            return stop_iteration::no;
-        });
-      });
-    });
-    if (f.failed()) {
-        f.get();
-    }
-}
-
-stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexcept {
-    auto&& region = snp.region();
-    return with_allocator(region.allocator(), [&] {
-        {
-            // Allocating sections require the region to be reclaimable
-            // which means that they cannot be nested.
-            // It is, however, possible, that if the snapshot is taken
-            // inside an allocating section and then an exception is thrown
-            // this function will be called to clean up even though we
-            // still will be in the context of the allocating section.
-            if (!region.reclaiming_enabled()) {
-                return stop_iteration::no;
-            }
-            try {
-                auto dirty_guard = make_region_space_guard();
-                return _worker_state->alloc_section(region, [&] {
-                    return snp.merge_partition_versions(_app_stats);
-                });
-            } catch (...) {
-                // Merging failed, give up as there is no guarantee of forward progress.
-                return stop_iteration::yes;
-            }
-        }
-    });
-}
-
-stop_iteration mutation_cleaner_impl::merge_some() noexcept {
-    if (_worker_state->snapshots.empty()) {
-        return stop_iteration::yes;
-    }
-    partition_snapshot& snp = _worker_state->snapshots.front();
-    if (merge_some(snp) == stop_iteration::yes) {
-        _worker_state->snapshots.pop_front();
-        lw_shared_ptr<partition_snapshot>::dispose(&snp);
-    }
-    return stop_iteration::no;
-}
-
-future<> mutation_cleaner_impl::drain() {
-    return repeat([this] {
-        return merge_some();
-    }).then([this] {
-        return repeat([this] {
-            return with_allocator(_region.allocator(), [this] {
-                return clear_gently();
-            });
-        });
-    });
-}
-
-logging::logger compound_logger("compound");

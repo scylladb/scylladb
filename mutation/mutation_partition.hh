@@ -29,10 +29,13 @@
 #include "utils/compact-radix-tree.hh"
 #include "utils/immutable-collection.hh"
 #include "mutation/compact_and_expire_result.hh"
+#include "utils/log.hh"
 
 #ifdef SEASTAR_DEBUG
 #include "utils/assert.hh"
 #endif
+
+extern logging::logger mplog;
 
 class mutation_fragment;
 class mutation_partition_view;
