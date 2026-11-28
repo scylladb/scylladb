@@ -86,7 +86,7 @@ import sys
 import time
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import AsyncIterator, Awaitable, Callable, Optional, Sequence
+from typing import AsyncIterator, Awaitable, Callable, Container, Optional, Sequence
 
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.query import PreparedStatement
@@ -251,7 +251,8 @@ class HistoryRecorder:
 
     def stats(self, *, reset_client_id: int,
               client_id: Optional[int] = None,
-              within_ns: Optional[tuple[int, int]] = None) -> "Stats":
+              within_ns: Optional[tuple[int, int]] = None,
+              keys: Optional[Container[int]] = None) -> "Stats":
         """Count what the clients did, from the events recorded so far.
 
         Derived rather than accumulated: see :class:`Stats` for why, and for
@@ -274,6 +275,8 @@ class HistoryRecorder:
         operation straddling an edge is left out on purpose: a write sent
         before an outage and acknowledged just after it began was committed
         before it, and must not count as "acknowledged during the outage".
+
+        ``keys`` narrows it to the operations on those keys.
         """
         counts = {f.name: 0 for f in fields(Stats)}
 
@@ -281,6 +284,8 @@ class HistoryRecorder:
             if call["client_id"] == reset_client_id:
                 return False
             if client_id is not None and call["client_id"] != client_id:
+                return False
+            if keys is not None and call["key"] not in keys:
                 return False
             if within_ns is None:
                 return True
@@ -603,11 +608,12 @@ class RegisterWorkload:
                 op_id, client_id, op, key, value, outcome, ctx.t_return_ns)
 
     def stats(self, client_id: Optional[int] = None,
-              within_ns: Optional[tuple[int, int]] = None) -> Stats:
+              within_ns: Optional[tuple[int, int]] = None,
+              keys: Optional[Container[int]] = None) -> Stats:
         """Like :meth:`HistoryRecorder.stats`, supplying the reset client id."""
         return self.history.stats(
             reset_client_id=self.reset_client_id, client_id=client_id,
-            within_ns=within_ns)
+            within_ns=within_ns, keys=keys)
 
     def _totals(self) -> Stats:
         assert self.totals is not None, "run_workload() has not finished yet"
@@ -707,7 +713,8 @@ async def run_workload(
     duration_s: float,
     disruptors: Sequence[tuple[str, DisruptorFactory]] = (),
 ) -> list[BaseException]:
-    """Run writers, readers and the given disruptors for ``duration_s``.
+    """Run writers, readers and the given disruptors for ``duration_s``, or until
+    the caller sets ``workload.stop_event``, whichever comes first.
 
     Returns the exceptions raised by the tasks; an empty list means every task
     finished cleanly.  Errors are returned rather than raised so that the
@@ -725,8 +732,12 @@ async def run_workload(
     try:
         async with asyncio.TaskGroup() as tg:
             async def stop_timer():
+                # The run's upper bound: a caller that sets stop_event itself
+                # ends the run sooner.
                 try:
-                    await asyncio.sleep(duration_s)
+                    await asyncio.wait_for(workload.stop_event.wait(), duration_s)
+                except TimeoutError:
+                    pass
                 finally:
                     workload.stop_event.set()
 
