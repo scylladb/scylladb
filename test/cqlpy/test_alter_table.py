@@ -10,7 +10,7 @@ import pytest
 from cassandra.protocol import ConfigurationException, InvalidRequest
 from .util import is_scylla, new_test_table, unique_name
 from . import nodetool
-from .nodetool import flush
+from .nodetool import flush, compact
 
 # Test checks only case of preparing `ALTER TABLE ... DROP ... USING TIMESTAMP ?` statement.
 # It is `scylla_only` because Cassandra doesn't allow to prepare the statement with ? as the timestamp.
@@ -71,6 +71,18 @@ def testDropColumnWithTimestampPreparedNonExistingSchema(scylla_only, cql, test_
         ])
     finally:
         cql.execute(f"DROP TABLE {table}")
+
+# A regular column dropped and added back as static keeps its name. A read of an
+# sstable written before the drop must skip the old cells, not apply them to the
+# regular column that now has the old id. The row cache upgrades its copy of the
+# data correctly and hides the bug until a restart, so the read bypasses it.
+def test_drop_and_readd_regular_column_as_static(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, r1 int, r2 int, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, r1, r2) VALUES (1, 5, 7, 2)")
+        flush(cql, table)
+        cql.execute(f"ALTER TABLE {table} DROP r1")
+        cql.execute(f"ALTER TABLE {table} ADD r1 int static")
+        assert list(cql.execute(f"SELECT pk, ck, r1, r2 FROM {table} BYPASS CACHE")) == [(1, 5, None, 2)]
 
 def test_valid_percentile_speculative_retry_values(cql, test_keyspace):
     """
@@ -169,6 +181,76 @@ def test_prepared_alter_table_options_validated_on_every_execute(cql, test_keysp
         for _ in range(2):
             with pytest.raises(ConfigurationException, match="min_index_interval"):
                 cql.execute(alter)
+
+# The following tests check what happens when a dropped column is re-added
+# with a different kind - static instead of regular, or vice versa (issue
+# #9930) - while an sstable still holds cells written to the old column
+# before it was dropped. Those cells belong to the old column, so they
+# should be ignored, and must not corrupt other columns or break reads.
+# The tests read with BYPASS CACHE, because the row cache converts its data
+# to the new schema correctly, so only reading the sstable shows the
+# problem. This is also why they are scylla_only.
+
+# Re-adding a dropped static column as a regular column must not attribute
+# the old static column's value to another static column. Reproduces #9930,
+# where s2 was read as 700 instead of 70. The test then writes the new
+# regular column s to a second sstable, checks that it is read correctly,
+# and runs a major compaction, which merges the two sstables into a new one
+# written with the new schema, and checks that this doesn't write the wrong
+# value - with #9930, the new sstable stored s2=700, making the corruption
+# permanent.
+def test_readd_static_column_as_regular(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, s int static, s2 int static, v int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c, s, s2, v) VALUES (1, 1, 700, 70, 8)')
+        flush(cql, table)
+        cql.execute(f'ALTER TABLE {table} DROP s')
+        cql.execute(f'ALTER TABLE {table} ADD s int')
+        assert list(cql.execute(f'SELECT p, c, s, s2, v FROM {table} WHERE p = 1 BYPASS CACHE')) == [(1, 1, None, 70, 8)]
+        cql.execute(f'INSERT INTO {table} (p, c, s) VALUES (1, 2, 5)')
+        flush(cql, table)
+        expected = [(1, 1, None, 70, 8), (1, 2, 5, 70, None)]
+        assert list(cql.execute(f'SELECT p, c, s, s2, v FROM {table} WHERE p = 1 BYPASS CACHE')) == expected
+        compact(cql, table)
+        assert list(cql.execute(f'SELECT p, c, s, s2, v FROM {table} WHERE p = 1 BYPASS CACHE')) == expected
+
+# Re-adding a dropped regular column as a static column must not break
+# reading the old sstable. Reproduces #9930, where every read of the
+# partition failed with an internal error ("column id 5 >= 5"). The test
+# then writes the new static column v to a second sstable, checks that it
+# is read correctly, and also after a major compaction.
+def test_readd_regular_column_as_static(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, s int static, v int, v2 int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c, s, v, v2) VALUES (1, 1, 7, 800, 80)')
+        flush(cql, table)
+        cql.execute(f'ALTER TABLE {table} DROP v')
+        cql.execute(f'ALTER TABLE {table} ADD v int static')
+        assert list(cql.execute(f'SELECT p, c, s, v, v2 FROM {table} BYPASS CACHE')) == [(1, 1, 7, None, 80)]
+        cql.execute(f'INSERT INTO {table} (p, v) VALUES (1, 6)')
+        flush(cql, table)
+        expected = [(1, 1, 7, 6, 80)]
+        assert list(cql.execute(f'SELECT p, c, s, v, v2 FROM {table} BYPASS CACHE')) == expected
+        compact(cql, table)
+        assert list(cql.execute(f'SELECT p, c, s, v, v2 FROM {table} BYPASS CACHE')) == expected
+
+# Renaming a primary key column to the name of a dropped regular column must
+# not attribute the dropped column's old values to another column - the
+# same problem as in the tests above, with a renamed key column instead of a
+# re-added column. The sstable written before the DROP has a regular column
+# v, which the reader matched by name to the key column v, and the old value
+# of v was read as the value of v2: 800 instead of 80. Reproduces #9930.
+@pytest.mark.parametrize('key', ['p', 'c'])
+def test_rename_key_column_to_dropped_column(cql, test_keyspace, key, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, v2 int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c, v, v2) VALUES (1, 1, 800, 80)')
+        flush(cql, table)
+        cql.execute(f'ALTER TABLE {table} DROP v')
+        cql.execute(f'ALTER TABLE {table} RENAME {key} TO v')
+        assert list(cql.execute(f'SELECT v2 FROM {table} BYPASS CACHE')) == [(80,)]
+        columns = 'v, c, v2' if key == 'p' else 'p, v, v2'
+        cql.execute(f'INSERT INTO {table} ({columns}) VALUES (2, 1, 9)')
+        flush(cql, table)
+        compact(cql, table)
+        assert sorted(cql.execute(f'SELECT v2 FROM {table} BYPASS CACHE')) == [(9,), (80,)]
 
 # The following tests were translated from scylla-dtest's schema_test.py.
 

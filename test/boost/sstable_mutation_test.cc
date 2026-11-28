@@ -1484,6 +1484,45 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
     });
 }
 
+// A column dropped and added again as the other kind keeps its name. The data's
+// column has no definition in the new schema, so its cells are skipped like those
+// of any dropped column, instead of landing on the column that now has the old id.
+SEASTAR_TEST_CASE(test_cells_of_column_readded_as_other_kind_are_skipped) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto v1 = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("s1", int32_type, column_kind::static_column)
+                .with_column("r1", int32_type)
+                .with_column("r2", int32_type)
+                .build();
+        // r1 is dropped at 10 and added back static; s1 is dropped at 10 and added
+        // back regular. r2 takes r1's regular id 0.
+        auto v2 = schema_builder(v1)
+                .remove_column("r1", 10)
+                .with_column("r1", int32_type, column_kind::static_column)
+                .remove_column("s1", 10)
+                .with_column("s1", int32_type)
+                .build();
+
+        auto pk = partition_key::from_single_value(*v1, serialized(int32_t(1)));
+        auto ck = clustering_key::from_single_value(*v1, serialized(int32_t(1)));
+        mutation m(v1, pk);
+        m.set_static_cell("s1", data_value(int32_t(7)), 6);
+        m.set_clustered_cell(ck, "r1", data_value(int32_t(7)), 6);
+        m.set_clustered_cell(ck, "r2", data_value(int32_t(2)), 5);
+        mutation expected(v2, pk);
+        expected.set_clustered_cell(ck, "r2", data_value(int32_t(2)), 5);
+
+        for (const auto version : writable_sstable_versions) {
+            auto ms = make_sstable_mutation_source(env, v1, {m}, version);
+            assert_that(ms.make_mutation_reader(v2, env.make_reader_permit()))
+                .produces(expected)
+                .produces_end_of_stream();
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tombstones) {
     // This test exposes a problem of a peculiar setup of tombstones that trigger
     // a mutation fragment stream validation exception if stream is compacted.
