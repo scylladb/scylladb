@@ -309,7 +309,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     BOOST_CHECK(log.empty());
     BOOST_CHECK_EQUAL(log.next_idx(), log.get_snapshot().idx + index_t{1});
     add_entry(log, log_entry::dummy{});
-    BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 1u);
     add_entry(log, log_entry::dummy{});
     BOOST_CHECK_EQUAL(log.in_memory_size(), 2);
     // Set trailing longer than the length of the log.
@@ -324,7 +324,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     add_entry(log, log_entry::dummy{});
     // Set trailing shorter than the length of the log
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 1, std::numeric_limits<size_t>::max());
-    BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 1u);
     // check that configuration from snapshot is used and not config entries from a trailing
     add_entry(log, cfg);
     add_entry(log, cfg);
@@ -3069,6 +3069,50 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_local_lease_read) {
     output = fsm1.get_output();
     BOOST_CHECK(!output.max_read_id_with_quorum);
     BOOST_CHECK(has_read_quorum(output));
+}
+
+// A snapshot at the commit index that keeps trailing entries leaves the newest
+// committed entry in the log, so the leader keeps its lease: it serves reads
+// locally and does not renew the lease with a no-op.
+BOOST_AUTO_TEST_CASE(test_leaseguard_lease_read_after_snapshot_with_trailing_entries) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+
+    server_id id1 = id(), id2 = id();
+    raft::configuration cfg = config_from_ids({id1, id2});
+    fsm_debug fsm1(id1, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+            trivial_failure_detector, make_lease_cfg(clock));
+    fsm_debug fsm2(id2, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+            trivial_failure_detector, make_lease_cfg(clock));
+
+    // Elect fsm1 and commit its dummy entry, establishing a lease.
+    election_timeout(fsm1);
+    communicate(fsm1, fsm2);
+    BOOST_REQUIRE(fsm1.is_leader());
+    (void)fsm1.get_output();
+
+    // Snapshot at the commit index, keeping the newest entry as a trailing one.
+    const auto last_idx = fsm1.log_last_idx();
+    BOOST_REQUIRE_EQUAL(fsm1.commit_idx(), last_idx);
+    raft::snapshot_descriptor snp{.idx = last_idx, .term = fsm1.log_last_term(), .config = cfg};
+    BOOST_REQUIRE(fsm1.apply_snapshot(snp, 1, std::numeric_limits<size_t>::max(), true));
+    (void)fsm1.get_output();
+    BOOST_REQUIRE_EQUAL(fsm1.get_log().get_snapshot().idx, last_idx);
+    BOOST_REQUIRE_EQUAL(fsm1.get_log().in_memory_size(), 1u);
+
+    // The read is served from the lease, with no read_quorum round-trip.
+    auto rid = fsm1.start_read_barrier(id1);
+    BOOST_REQUIRE(rid);
+    auto output = fsm1.get_output();
+    BOOST_REQUIRE(output.max_read_id_with_quorum);
+    BOOST_CHECK_EQUAL(*output.max_read_id_with_quorum, rid->first);
+    BOOST_CHECK(std::ranges::none_of(output.messages, [](const auto& m) {
+        return std::holds_alternative<raft::read_quorum>(m.second);
+    }));
+
+    // The lease is fresh, so the read does not make the next tick renew it.
+    fsm1.tick();
+    BOOST_CHECK_EQUAL(fsm1.log_last_idx(), last_idx);
 }
 
 // A leader whose clock never synchronizes still commits. It cannot bound the

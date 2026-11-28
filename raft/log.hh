@@ -117,6 +117,11 @@ public:
     // Used in elections to not vote for a candidate with
     // a less recent term.
     term_t last_term() const;
+    // Return true if the entry at `idx` is in the in-memory log, the trailing
+    // entries a snapshot left in it included.
+    bool in_memory(index_t idx) const {
+        return !_log.empty() && idx >= _first_idx && idx <= last_idx();
+    }
     // Return the number of log entries in memory
     size_t in_memory_size() const {
         return _log.size();
