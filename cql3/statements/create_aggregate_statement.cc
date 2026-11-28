@@ -69,8 +69,22 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
     managed_bytes_opt initcond = std::nullopt;
     if (_ival) {
         auto dummy_ident = ::make_shared<column_identifier>("", true);
-        auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
-        auto initcond_expr = prepare_expression(_ival.value(), db, _name.keyspace, nullptr, {column_spec});
+        // Prepare INITCOND as a frozen value, so an empty collection literal
+        // is an empty collection rather than null (as it would be for a
+        // non-frozen collection column).
+        auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type->freeze());
+        auto ival = *_ival;
+        // INITCOND may have a type hint naming the declared STYPE, e.g.
+        // "(list<text>)[]". Freeze the hint too, so that it matches the
+        // frozen receiver, and the empty collection isn't turned into null.
+        if (auto c = expr::as_if<expr::cast>(&ival); c && c->style == expr::cast::cast_style::c) {
+            if (auto raw = std::get_if<shared_ptr<cql3_type::raw>>(&c->type)) {
+                if ((*raw)->prepare(db, _name.keyspace).get_type() == state_type) {
+                    c->type = state_type->freeze();
+                }
+            }
+        }
+        auto initcond_expr = prepare_expression(ival, db, _name.keyspace, nullptr, {column_spec});
         expr::verify_no_aggregate_functions(initcond_expr, "INITCOND clause");
         auto initcond_term = expr::evaluate(initcond_expr, query_options::DEFAULT);
         initcond = std::move(initcond_term).to_managed_bytes_opt();
