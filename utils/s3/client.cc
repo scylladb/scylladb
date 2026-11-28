@@ -657,7 +657,11 @@ future<> client::make_request(http::request req,
     // dispatch fresh; a stale one there is caught by the REQUEST_TIME_TOO_SKEWED path.
     co_await authorize(request);
 
-    co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
+    // should_retry() takes no abort_source, so bind one into a request-scoped copy.
+    std::optional<aws::default_aws_retry_strategy> opt_rs;
+    const auto* drs = dynamic_cast<const aws::default_aws_retry_strategy*>(&rs);
+    const auto& effective_rs = drs ? opt_rs.emplace(*drs, as) : rs;
+    co_await gc.http.make_request(request, handler, effective_rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
     });
 }
@@ -1981,7 +1985,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
         // drives the strategy itself: should_retry() reports the outcome to the send
         // brake, backs off, waits on it, and answers whether to dispatch again.
         seastar::http::no_retry_strategy no_retry;
-        aws::default_aws_retry_strategy retry_strategy{aws::default_aws_retry_strategy::default_max_retries, *_client->_request_limiter};
+        aws::default_aws_retry_strategy retry_strategy{aws::default_aws_retry_strategy::default_max_retries, *_client->_request_limiter, _as};
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         auto units = try_get_units(_client->_buffered_dl_sem, 1);
         // Retries already made for the request in flight, reset by one that completes.
@@ -2120,7 +2124,14 @@ class client::chunked_download_source final : public seastar::data_source_impl {
             // Out here because a catch block cannot co_await. should_retry() answers
             // false both for an error worth no second attempt and for a budget that is
             // spent, and reports either to the brake on the way.
-            if (!co_await retry_strategy.should_retry(failure, retries++)) {
+            bool retry = false;
+            try {
+                retry = co_await retry_strategy.should_retry(failure, retries++);
+            } catch (...) {
+                // Aborted during the backoff: fail the reader instead of leaving it parked.
+                failure = std::current_exception();
+            }
+            if (!retry) {
                 s3l.info("Fiber for object '{}' gives up after {} failed requests, last error: {}", _object_name, retries, failure);
                 // Leaving through _get_cv.broken() rather than through the loop
                 // condition: a fiber that just stops parks its reader in _get_cv.wait()
