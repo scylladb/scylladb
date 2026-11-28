@@ -26,8 +26,9 @@ from test.alternator.test_gsi import assert_index_query
 # file: test_ttl.py::test_update_ttl_errors.
 
 # Attribute length test 1: non-key attribute names below 64KB are usable in
-# PutItem, UpdateItem, GetItem, and also in various expressions (condition,
-# update and projection) and their archaic pre-expression alternatives.
+# PutItem, UpdateItem, GetItem, BatchWriteItem, BatchGetItem, and also in
+# various expressions (condition, update and projection) and their archaic
+# pre-expression alternatives.
 def test_limit_attribute_length_nonkey_good(test_table_s):
     p = random_string()
     too_long_name = random_string(64)*1024
@@ -57,6 +58,17 @@ def test_limit_attribute_length_nonkey_good(test_table_s):
         ExpressionAttributeValues={':val': 1, ':oldval': 4})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, long_name: 5, 'another': 2 }
 
+    client = test_table_s.meta.client
+    client.batch_write_item(RequestItems={test_table_s.name: [
+        {'PutRequest': {'Item': {'p': p, long_name: 6, 'another': 2}}}]})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, long_name: 6, 'another': 2 }
+    assert client.batch_get_item(RequestItems={test_table_s.name: {'Keys': [{'p': p}],
+        'ProjectionExpression': '#name', 'ExpressionAttributeNames': {'#name': long_name},
+        'ConsistentRead': True}})['Responses'][test_table_s.name] == [{long_name: 6}]
+    assert client.batch_get_item(RequestItems={test_table_s.name: {'Keys': [{'p': p}],
+        'AttributesToGet': [long_name],
+        'ConsistentRead': True}})['Responses'][test_table_s.name] == [{long_name: 6}]
+
 # Attribute length test 2: attribute names 64KB or above generate an error
 # in the aforementioned cases. Note that contrary to what the DynamoDB
 # documentation suggests, the length 64KB itself is not allowed - 65535
@@ -83,6 +95,16 @@ def test_limit_attribute_length_nonkey_bad(test_table_s):
             ConditionExpression='#name = :val',
             ExpressionAttributeNames={'#name': too_long_name},
             ExpressionAttributeValues={':val': 1})
+    client = test_table_s.meta.client
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
+        client.batch_write_item(RequestItems={test_table_s.name: [
+            {'PutRequest': {'Item': {'p': p, too_long_name: 1}}}]})
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
+        client.batch_get_item(RequestItems={test_table_s.name: {'Keys': [{'p': p}],
+            'ProjectionExpression': '#name', 'ExpressionAttributeNames': {'#name': too_long_name}}})
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
+        client.batch_get_item(RequestItems={test_table_s.name: {'Keys': [{'p': p}],
+            'AttributesToGet': [too_long_name]}})
 
 # Empty attribute name is also not allowed. Reproduces SCYLLADB-1069.
 # We have similar tests for empty keys in test_item.py::test_{put,update}_item_empty_key.
@@ -106,6 +128,16 @@ def test_limit_attribute_length_nonkey_empty(test_table_s):
             ConditionExpression='#name = :val',
             ExpressionAttributeNames={'#name': ''},
             ExpressionAttributeValues={':val': 1})
+    client = test_table_s.meta.client
+    with pytest.raises(ClientError, match='ValidationException.*Empty attribute name'):
+        client.batch_write_item(RequestItems={test_table_s.name: [
+            {'PutRequest': {'Item': {'p': p, '': 1}}}]})
+    with pytest.raises(ClientError, match='ValidationException.*Empty attribute name'):
+        client.batch_get_item(RequestItems={test_table_s.name: {'Keys': [{'p': p}],
+            'ProjectionExpression': '#name', 'ExpressionAttributeNames': {'#name': ''}}})
+    with pytest.raises(ClientError, match='ValidationException.*Empty attribute name'):
+        client.batch_get_item(RequestItems={test_table_s.name: {'Keys': [{'p': p}],
+            'AttributesToGet': ['']}})
 
 # Attribute length test 3: Test that *key* (hash and range) attribute names
 # up to 255 characters are allowed. In the test below we'll see that larger
@@ -121,6 +153,14 @@ def test_limit_attribute_length_key_good(dynamodb):
                  { 'AttributeName': long_name2, 'AttributeType': 'S' }]) as table:
         table.put_item(Item={long_name1: 'hi', long_name2: 'ho', 'another': 2 })
         assert table.get_item(Key={long_name1: 'hi', long_name2: 'ho'}, ConsistentRead=True)['Item'] == {long_name1: 'hi', long_name2: 'ho', 'another': 2 }
+        client = table.meta.client
+        client.batch_write_item(RequestItems={table.name: [
+            {'PutRequest': {'Item': {long_name1: 'hi', long_name2: 'hey', 'another': 3}}}]})
+        assert client.batch_get_item(RequestItems={table.name: {'Keys': [{long_name1: 'hi', long_name2: 'hey'}],
+            'ConsistentRead': True}})['Responses'][table.name] == [{long_name1: 'hi', long_name2: 'hey', 'another': 3}]
+        client.batch_write_item(RequestItems={table.name: [
+            {'DeleteRequest': {'Key': {long_name1: 'hi', long_name2: 'hey'}}}]})
+        assert 'Item' not in table.get_item(Key={long_name1: 'hi', long_name2: 'hey'}, ConsistentRead=True)
 
 # Attribute length test 4: Test that *key* attribute names more than 255
 # characters are not allowed - not for hash key and not for range key.
