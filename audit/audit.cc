@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/future-util.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "audit/audit.hh"
 #include "audit/audit_rule.hh"
@@ -88,6 +89,16 @@ static audit_sink_set parse_audit_sinks(const sstring& data) {
     return result;
 }
 
+static std::string_view sink_to_string(audit_sink sink) {
+    switch (sink) {
+    case audit_sink::table:
+        return "table";
+    case audit_sink::syslog:
+        return "syslog";
+    }
+    std::unreachable();
+}
+
 bool table_sink_configured(const db::config& cfg) {
     return parse_audit_sinks(cfg.audit()).contains(audit_sink::table);
 }
@@ -104,6 +115,16 @@ static void warn_on_sink_mismatch(const std::vector<audit_rule>& rules, audit_si
             }
         }
     }
+}
+
+static std::vector<audit_rule> drop_disabled_sinks(std::vector<audit_rule> rules, audit_sink_set enabled_sinks) {
+    for (auto& rule : rules) {
+        std::erase_if(rule.sinks, [enabled_sinks] (const sstring& name) {
+            return std::ranges::none_of(enabled_sinks, [&name] (audit_sink sink) { return sink_to_string(sink) == name; });
+        });
+    }
+    std::erase_if(rules, [] (const audit_rule& rule) { return rule.sinks.empty(); });
+    return rules;
 }
 
 static std::unique_ptr<storage_helper> create_storage_helper(audit_sink_set audit_sinks, cql3::query_processor& qp, service::migration_manager& mm) {
@@ -220,6 +241,34 @@ audit::audit(locator::shared_token_metadata& token_metadata,
 {
     _cfg_rules_observer.emplace(cfg.audit_rules.observe(_rules_rebuild_action.make_observer()));
     _storage_helper_ptr = create_storage_helper(audit_sinks, qp, mm);
+
+    namespace sm = seastar::metrics;
+    _metrics.add_group("audit", {
+        sm::make_counter("entries", _entries,
+                sm::description("Number of audit entries generated. An entry that goes to several sinks is counted once, "
+                        "except for an Alternator batch request, which generates a separate entry for each sink.")),
+        sm::make_counter("write_failures", _write_failures,
+                sm::description("Number of audit entries that failed to be written to one or more of their sinks.")),
+    });
+    // The audit configuration is the same on all shards.
+    if (this_shard_id() == 0) {
+        sm::label sink_label("sink");
+        for (auto sink : audit_sink_set::full()) {
+            _metrics.add_group("audit", {
+                sm::make_gauge("sink_enabled", [this, sink] { return _audit_sinks.contains(sink) ? 1 : 0; },
+                        sm::description("1 if this audit sink is enabled, 0 otherwise."), {sink_label(sink_to_string(sink))}),
+            });
+        }
+        sm::label category_label("category");
+        for (auto category : category_set::full()) {
+            _metrics.add_group("audit", {
+                sm::make_gauge("category_enabled", [this, category] { return category_enabled(category) ? 1 : 0; },
+                        sm::description("1 if this statement category is enabled in audit_categories or in an audit rule "
+                                "that names an enabled sink, 0 otherwise."),
+                        {category_label(category_to_string(category))}),
+            });
+        }
+    }
 }
 
 audit::~audit() = default;
@@ -228,7 +277,7 @@ future<> audit::rebuild_rules() {
     auto new_rules = _cfg.audit_rules();
     logger.info("Updating audit rules: {} rules configured.", new_rules.size());
     warn_on_sink_mismatch(new_rules, _audit_sinks);
-    co_await _preprocessed_rules.refresh_rules(std::move(new_rules));
+    co_await _preprocessed_rules.refresh_rules(drop_disabled_sinks(std::move(new_rules), _audit_sinks));
     logger.info("Audit rules updated: {} rules configured.", _preprocessed_rules.rules().size());
 }
 
@@ -252,6 +301,7 @@ future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token
                 cfg.audit(), cfg.audit_categories(), cfg.audit_keyspaces(), cfg.audit_tables(), audit_rules.size());
 
     warn_on_sink_mismatch(audit_rules, audit_sinks);
+    audit_rules = drop_disabled_sinks(std::move(audit_rules), audit_sinks);
 
     return audit_instance().start(std::ref(stm),
                                   std::ref(qp),
@@ -283,7 +333,7 @@ future<> audit::stop_storage() {
     }
     return audit_instance().invoke_on_all([] (audit& local_audit) -> future<> {
         // Closing the gate is the single shutdown signal: in-flight writes are
-        // drained and any write entering afterwards is rejected by try_with_gate.
+        // drained and any write entering afterwards is rejected by try_hold().
         // The storage-ready flag is not cleared here; it only guards startup.
         co_await local_audit._pending_writes.close();
         co_await local_audit._storage_helper_ptr->stop();
@@ -321,7 +371,7 @@ future<> audit::write_to_storage(audit_sink_set sinks,
                                  std::optional<db::consistency_level> cl,
                                  const sstring& username,
                                  bool error) {
-    return try_with_gate(_pending_writes, [this, sinks, &audit_info, node_ip, client_ip, cl, &username, error] {
+    return futurize_invoke([this, sinks, &audit_info, node_ip, client_ip, cl, &username, error] {
         return _storage_helper_ptr->write(sinks, &audit_info, node_ip, client_ip, cl, username, error);
     });
 }
@@ -331,7 +381,7 @@ future<> audit::write_login_to_storage(audit_sink_set sinks,
                                        socket_address node_ip,
                                        socket_address client_ip,
                                        bool error) {
-    return try_with_gate(_pending_writes, [this, sinks, &username, node_ip, client_ip, error] {
+    return futurize_invoke([this, sinks, &username, node_ip, client_ip, error] {
         return _storage_helper_ptr->write_login(sinks, username, node_ip, client_ip, error);
     });
 }
@@ -360,8 +410,20 @@ future<> audit::log_with_sinks(audit_sink_set sinks, const audit_info& audit_inf
     if (!sinks) {
         return make_ready_future<>();
     }
+    ++_entries;
     if (!_storage_started) {
+        ++_write_failures;
         on_internal_error_noexcept(logger, fmt::format("Audit log dropped (storage not ready): node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {}",
+            node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
+            audit_info.query(), client_ip, audit_info.table(), username));
+        return make_ready_future<>();
+    }
+    auto pending_write = _pending_writes.try_hold();
+    if (!pending_write) {
+        ++_write_failures;
+        // The write raced with stop_storage() closing the gate. No audit
+        // generating request should be in flight once storage stops.
+        on_internal_error_noexcept(logger, fmt::format("Audit log dropped (storage stopped): node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {}",
             node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
             audit_info.query(), client_ip, audit_info.table(), username));
         return make_ready_future<>();
@@ -371,21 +433,13 @@ future<> audit::log_with_sinks(audit_sink_set sinks, const audit_info& audit_inf
             node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
             audit_info.query(), client_ip, audit_info.table(), username);
     }
+    // The handler holds the gate, so stop_storage() waits for the handler too.
     return write_to_storage(sinks, audit_info, node_ip, client_ip, cl, username, error)
-        .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (std::exception_ptr ep) {
-            try {
-                std::rethrow_exception(ep);
-            } catch (const seastar::gate_closed_exception&) {
-                // The write raced with stop_storage() closing the gate. No audit
-                // generating request should be in flight once storage stops.
-                on_internal_error_noexcept(logger, fmt::format("Audit log dropped (storage stopped): node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {}",
-                    node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
-                    audit_info.query(), client_ip, audit_info.table(), username));
-            } catch (...) {
-                logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
-                    node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
-                    audit_info.query(), client_ip, audit_info.table(), username, ep);
-            }
+        .handle_exception([this, audit_info, node_ip, client_ip, cl, username, error, pending_write = std::move(*pending_write)] (std::exception_ptr ep) {
+            ++_write_failures;
+            logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
+                node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
+                audit_info.query(), client_ip, audit_info.table(), username, ep);
     });
 }
 
@@ -504,8 +558,19 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
         return make_ready_future<>();
     }
     socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
+    ++_entries;
     if (!_storage_started) {
+        ++_write_failures;
         on_internal_error_noexcept(logger, fmt::format("Audit login log dropped (storage not ready): node_ip {} client_ip {} username {} error {}",
+            node_ip, client_ip, username, error ? "true" : "false"));
+        return make_ready_future<>();
+    }
+    auto pending_write = _pending_writes.try_hold();
+    if (!pending_write) {
+        ++_write_failures;
+        // The write raced with stop_storage() closing the gate. No audit
+        // generating request should be in flight once storage stops.
+        on_internal_error_noexcept(logger, fmt::format("Audit login log dropped (storage stopped): node_ip {} client_ip {} username {} error {}",
             node_ip, client_ip, username, error ? "true" : "false"));
         return make_ready_future<>();
     }
@@ -513,19 +578,12 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
         logger.debug("Login log written: node_ip {}, client_ip {}, username {}, error {}",
             node_ip, client_ip, username, error ? "true" : "false");
     }
+    // The handler holds the gate, so stop_storage() waits for the handler too.
     return write_login_to_storage(sinks, username, node_ip, client_ip, error)
-        .handle_exception([username, node_ip, client_ip, error] (std::exception_ptr ep) {
-            try {
-                std::rethrow_exception(ep);
-            } catch (const seastar::gate_closed_exception&) {
-                // The write raced with stop_storage() closing the gate. No audit
-                // generating request should be in flight once storage stops.
-                on_internal_error_noexcept(logger, fmt::format("Audit login log dropped (storage stopped): node_ip {} client_ip {} username {} error {}",
-                    node_ip, client_ip, username, error ? "true" : "false"));
-            } catch (...) {
-                logger.error("Unexpected exception when writing login log with: node_ip {} client_ip {} username {} error {} exception {}",
-                    node_ip, client_ip, username, error, ep);
-            }
+        .handle_exception([this, username, node_ip, client_ip, error, pending_write = std::move(*pending_write)] (std::exception_ptr ep) {
+            ++_write_failures;
+            logger.error("Unexpected exception when writing login log with: node_ip {} client_ip {} username {} error {} exception {}",
+                node_ip, client_ip, username, error, ep);
     });
 }
 
@@ -613,6 +671,13 @@ bool audit::rules_may_log(statement_category cat, std::string_view keyspace, std
         }
     }
     return false;
+}
+
+bool audit::category_enabled(statement_category category) const {
+    return _audited_categories.contains(category)
+        || std::ranges::any_of(_preprocessed_rules.rules(), [category] (const audit_rule& rule) {
+            return matches_category(rule, category);
+        });
 }
 
 bool audit::will_log(statement_category cat, std::string_view keyspace, std::string_view table) const {

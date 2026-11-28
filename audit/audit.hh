@@ -17,6 +17,7 @@
 #include "audit/preprocessed_audit_rules.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/util/log.hh>
 
 #include "enum_set.hh"
@@ -160,6 +161,9 @@ private:
     // storage helper before it is started.
     bool _storage_started = false;
     seastar::named_gate _pending_writes;
+    uint64_t _entries = 0;
+    uint64_t _write_failures = 0;
+    seastar::metrics::metric_groups _metrics;
     std::unique_ptr<audit_schema_listener> _schema_listener;
     service::migration_notifier& _migration_notifier;
 
@@ -175,6 +179,7 @@ private:
 
     bool should_log_table(std::string_view keyspace, std::string_view name) const;
     bool rules_may_log(statement_category cat, std::string_view keyspace, std::string_view table) const;
+    bool category_enabled(statement_category category) const;
     audit_sink_set sinks_for_table(statement_category category, std::string_view keyspace, std::string_view table, std::string_view role) const;
     audit_sink_set sinks_for(const audit_info& audit_info, std::string_view role) const;
     audit_sink_set sinks_for_login(const sstring& username) const;

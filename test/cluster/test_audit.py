@@ -2700,6 +2700,125 @@ async def test_audit_write_timeout_follows_write_request_timeout(manager: Scylla
     assert await write_timeouts() == timeouts_before
 
 
+async def test_audit_entry_metrics(manager: ScyllaClusterManager):
+    """The audit metrics count generated entries and the entries that a sink failed to take."""
+    socket_path = tempfile.mktemp(prefix="/tmp/scylla-audit-", suffix=".socket")
+    syslog_listeners[socket_path] = UnixSockerListener(socket_path)
+    batch_table_name = unique_table_name()
+    login_rule = {"sinks": ["table", "syslog"], "categories": ["AUTH"], "qualified_table_names": [], "roles": ["wrong_user"]}
+    [server] = await manager.servers_add(1, config=alternator_config | AUTH_CONFIG | {
+        "audit": "table,syslog",
+        "audit_unix_socket_path": socket_path,
+        "audit_categories": "DML",
+        "audit_keyspaces": f"ks,alternator_{batch_table_name}",
+        "audit_rules": [login_rule],
+    }, driver_connect_opts={"auth_provider": PlainTextAuthProvider(username="cassandra", password="cassandra")})
+    cql, _ = await manager.get_ready_cql([server])
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    cql.execute("CREATE TABLE ks.t (pk int PRIMARY KEY)")
+    alternator = get_alternator(server.ip_addr)
+    alternator.create_table(
+        TableName=batch_table_name,
+        BillingMode="PAY_PER_REQUEST",
+        KeySchema=[{"AttributeName": "p", "KeyType": "HASH"}],
+        AttributeDefinitions=[{"AttributeName": "p", "AttributeType": "S"}],
+    )
+
+    async def audit_metrics() -> tuple[float, float]:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return metrics.get("scylla_audit_entries") or 0, metrics.get("scylla_audit_write_failures") or 0
+
+    def audited_logins() -> int:
+        query = SimpleStatement("SELECT count(*) FROM audit.audit_log WHERE username = 'wrong_user' ALLOW FILTERING",
+                                consistency_level=ConsistencyLevel.ONE)
+        return cql.execute(query).one()[0]
+
+    async def failed_login() -> int:
+        logins = audited_logins()
+        with pytest.raises(NoHostAvailable):
+            await manager.get_cql_exclusive(server, auth_provider=PlainTextAuthProvider(username="wrong_user", password="wrong_password"))
+        # The driver may try to log in more than once, so count the attempts the node audited.
+        return audited_logins() - logins
+
+    logger.info("Running an INSERT, which is audited to both sinks")
+    entries, failures = await audit_metrics()
+    cql.execute("INSERT INTO ks.t (pk) VALUES (0)")
+    assert await audit_metrics() == (entries + 1, failures)
+
+    logger.info("Running a SELECT outside the audited categories")
+    entries, failures = await audit_metrics()
+    cql.execute("SELECT * FROM ks.t")
+    assert await audit_metrics() == (entries, failures)
+
+    logger.info("Failing to log in as the role that the audit rule names")
+    entries, failures = await audit_metrics()
+    logins = await failed_login()
+    assert logins > 0
+    assert await audit_metrics() == (entries + logins, failures)
+
+    logger.info("Running an Alternator BatchWriteItem, which makes an entry for each sink")
+    entries, failures = await audit_metrics()
+    alternator.meta.client.batch_write_item(RequestItems={
+        batch_table_name: [{"PutRequest": {"Item": {"p": "pk0"}}}],
+    })
+    assert await audit_metrics() == (entries + 2, failures)
+
+    logger.info("Removing the syslog socket")
+    os.remove(socket_path)
+    entries, failures = await audit_metrics()
+    cql.execute("INSERT INTO ks.t (pk) VALUES (1)")
+    assert await audit_metrics() == (entries + 1, failures + 1)
+
+    logger.info("Failing to log in while the syslog socket is gone")
+    entries, failures = await audit_metrics()
+    logins = await failed_login()
+    assert logins > 0
+    assert await audit_metrics() == (entries + logins, failures + logins)
+
+
+async def test_audit_sink_and_category_metrics(manager: ScyllaClusterManager):
+    """The audit metrics show the enabled sinks and categories, and follow live changes of the configuration."""
+    ddl_rule = {"sinks": ["table"], "categories": ["DDL"], "qualified_table_names": ["ks.*"], "roles": ["*"]}
+    disabled_sink_rule = {"sinks": ["syslog"], "categories": ["QUERY"], "qualified_table_names": ["ks.*"], "roles": ["*"]}
+    server = await manager.server_add(config={
+        "audit": "table",
+        "audit_categories": "DML",
+        "audit_keyspaces": "ks",
+        "audit_rules": [ddl_rule, disabled_sink_rule],
+    })
+    cql, _ = await manager.get_ready_cql([server])
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    cql.execute("CREATE TABLE ks.t (pk int PRIMARY KEY)")
+    categories = ["QUERY", "DML", "DDL", "DCL", "AUTH", "ADMIN"]
+
+    async def enabled(metric: str, label: str, values: list[str]) -> set[str]:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return {v for v in values if metrics.get(metric, {label: v})}
+
+    async def wait_for_categories(expected: set[str]) -> None:
+        async def reached():
+            return await enabled("scylla_audit_category_enabled", "category", categories) == expected or None
+        await wait_for_async(reached, time.time() + 60)
+
+    assert await enabled("scylla_audit_sink_enabled", "sink", ["table", "syslog"]) == {"table"}
+    assert await enabled("scylla_audit_category_enabled", "category", categories) == {"DML", "DDL"}
+
+    logger.info("Running a SELECT that only the audit rule with the disabled sink matches")
+    metrics = await manager.metrics.query(server.ip_addr)
+    entries = metrics.get("scylla_audit_entries")
+    cql.execute("SELECT * FROM ks.t")
+    metrics = await manager.metrics.query(server.ip_addr)
+    assert metrics.get("scylla_audit_entries") == entries
+
+    logger.info("Dropping the DDL audit rule, which leaves only the rule with the disabled sink")
+    await manager.server_update_config(server.server_id, "audit_rules", [disabled_sink_rule])
+    await wait_for_categories({"DML"})
+
+    logger.info("Adding QUERY to audit_categories")
+    await manager.server_update_config(server.server_id, "audit_categories", "DML,QUERY")
+    await wait_for_categories({"DML", "QUERY"})
+
+
 @verify_legacy_and_rules
 async def test_service_level_statements_standalone(manager: ScyllaClusterManager, rules_mode: bool):
     """audit=table, auth, cmdline=--smp 1 — standalone due to special cmdline."""
