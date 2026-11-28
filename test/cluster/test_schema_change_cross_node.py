@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 """
-A schema change is committed shard by shard on every node (see schema_applier::commit()), so a
+A schema change is committed shard by shard on every node (see schema_and_topology_applier::commit()), so a
 request built on a node which has already committed it may reach a node - and a shard of that
 node - which has not. It has to wait for the commit there instead of failing with
 no_such_column_family.

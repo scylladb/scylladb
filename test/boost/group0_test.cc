@@ -703,6 +703,62 @@ SEASTAR_TEST_CASE(test_request_completes_after_local_apply) {
     });
 }
 
+// A topology change must make the new topology state and the token metadata
+// built from it visible together: while the change is applied, the node must
+// never see the new topology state with the old token metadata, or the other
+// way around.
+SEASTAR_TEST_CASE(test_topology_state_and_token_metadata_commit_together) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        static constexpr std::string_view commit_pause = "schema_applier_pause_before_commit";
+        auto& injector = utils::get_local_injector();
+        auto& ss = env.get_storage_service().local();
+        const auto& topology = env.get_topology_state_machine().local()._topology;
+        auto check_consistent = [&] {
+            auto tm = ss.get_token_metadata_ptr();
+            BOOST_REQUIRE(topology.version == tm->get_version());
+            BOOST_REQUIRE(topology.tablet_balancing_enabled == tm->tablets().balancing_enabled());
+        };
+        BOOST_REQUIRE(topology.tablet_balancing_enabled);
+        check_consistent();
+
+        injector.enable(commit_pause, false);
+        auto release = defer([&] () noexcept {
+            injector.disable(commit_pause);
+        });
+
+        testlog.info("Disabling tablet balancing");
+        auto request = ss.set_tablet_balancing_enabled(false);
+
+        // The request is awaited on every path, so the environment is not torn
+        // down while it still runs.
+        std::exception_ptr ex;
+        try {
+            // The command which disables balancing is held after the new state is
+            // built from the persisted one, before it is committed.
+            wait_for_injection_enter(commit_pause).get();
+            BOOST_REQUIRE(topology.tablet_balancing_enabled);
+            check_consistent();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        testlog.info("Releasing the apply");
+        injector.disable(commit_pause);
+        try {
+            request.get();
+        } catch (...) {
+            if (!ex) {
+                ex = std::current_exception();
+            }
+        }
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        BOOST_REQUIRE(!topology.tablet_balancing_enabled);
+        check_consistent();
+    });
+}
+
 #endif // SCYLLA_ENABLE_ERROR_INJECTION
 
 BOOST_AUTO_TEST_SUITE_END()

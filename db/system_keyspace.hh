@@ -767,6 +767,9 @@ public:
 
 // Classifies how much of system.topology the mutations change; see service::topology_change_hint::scope.
 future<service::topology_change_hint> get_topology_change_hint(const utils::chunked_vector<canonical_mutation>& mutations);
+// Widens the hint by the change that the mutation makes to system.topology.
+// Mutations of other tables leave it unchanged.
+void update_topology_change_hint(service::topology_change_hint& hint, const mutation& m);
 
 } // namespace db
 

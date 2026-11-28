@@ -10,7 +10,7 @@ target_sources(db
     virtual_tables.cc
     system_distributed_keyspace.cc
     size_estimates_virtual_reader.cc
-    schema_applier.cc
+    schema_and_topology_applier.cc
     schema_tables.cc
     cql_type_parser.cc
     commitlog/commitlog.cc
