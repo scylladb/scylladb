@@ -20,6 +20,7 @@ import requests
 from test.pylib.skip_types import skip_env
 
 from . import nodetool
+from .test_logs import logfile, logfile_path, wait_for_log  # noqa: F401 - logfile and logfile_path are fixtures
 from .test_snapshot import restore_with_refresh, save_snapshot, snapshot_tables, table_dir
 from .util import new_test_table, unique_name
 
@@ -128,3 +129,29 @@ def test_refresh_snapshot_into_ics_table(cql, test_keyspace, scylla_data_dir, te
 @pytest.mark.parametrize('test_keyspace', ['tablets', 'vnodes'], indirect=True)
 def test_refresh_snapshot_into_ics_table_without_truncate(cql, test_keyspace, scylla_data_dir, temp_workdir, scylla_only):
     check_refresh_snapshot_into_ics_table(cql, test_keyspace, scylla_data_dir, temp_workdir, 'IncrementalCompactionStrategy', truncate=False)
+
+# Test loading sstables copied into the upload directory with and without
+# the load_and_stream option (which "nodetool refresh --load-and-stream"
+# sets): The node logs which kind of load it does, and loads the rows. Like
+# the dtest, the test uses a keyspace with vnodes, where a load without the
+# option loads the sstables as they are.
+# Translated from scylla-dtest's nodetool_additional_test.py::TestNodetool::test_nodetool_refresh_with_load_and_stream,
+# which only checked the log message, on an empty table.
+@pytest.mark.parametrize('test_keyspace', ['vnodes'], indirect=True)
+@pytest.mark.parametrize('load_and_stream', [False, True], ids=['plain', 'load_and_stream'])
+def test_refresh_load_and_stream_option(cql, test_keyspace, scylla_data_dir, temp_workdir, logfile, scylla_only, load_and_stream):
+    with new_test_table(cql, test_keyspace, 'pk text, ck int, s int static, v int, PRIMARY KEY (pk, ck)') as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, s, v) VALUES ('a', 1, 2, 3)")
+        tag = unique_name()
+        snapshot_tables(cql, [table], tag)
+        try:
+            saved = save_snapshot(cql, scylla_data_dir, table, tag, temp_workdir)
+        finally:
+            nodetool.del_snapshot(cql, tag)
+        cql.execute(f'TRUNCATE {table}')
+        las = 'true' if load_and_stream else 'false'
+        restore_with_refresh(cql, scylla_data_dir, saved, table, load_and_stream=las)
+        ks, cf = table.split('.')
+        wait_for_log(logfile, f'Loading new SSTables for keyspace={ks}, table={cf}, '
+                              f'load_and_stream={las}, primary_replica_only=false')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [('a', 1, 2, 3)]

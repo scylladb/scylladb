@@ -702,11 +702,15 @@ def testSelectWithAlias(cql, test_keyspace):
         assert rs.one()._asdict() == {"id_blob": bytearray([0,0,0,0])}
 
         # test that select throws a meaningful exception for aliases in where clause
-        assert_invalid_message(cql, table, "user_id",
+        # Cassandra's message only names the column ("Undefined column name
+        # user_id"), Scylla's says that aliases aren't allowed there.
+        assert_invalid_message(cql, table,
+                             "Aliases aren't allowed in the WHERE clause (name: 'user_id')" if is_scylla(cql) else "user_id",
                              "SELECT id AS user_id, name AS user_name FROM %s WHERE user_id = 0")
 
         # test that select throws a meaningful exception for aliases in order by clause
-        assert_invalid_message(cql, table, "user_name",
+        assert_invalid_message(cql, table,
+                             "Aliases are not allowed in order by clause ('user_name')" if is_scylla(cql) else "user_name",
                              "SELECT id AS user_id, name AS user_name FROM %s WHERE id IN (0) ORDER BY user_name")
 
 # Migrated from cql_tests.py:TestCQL.select_distinct_test()

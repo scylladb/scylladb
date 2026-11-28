@@ -12,6 +12,7 @@ from contextlib import ExitStack, contextmanager
 
 import pytest
 import requests
+from cassandra.concurrent import execute_concurrent_with_args
 
 from . import nodetool, rest_api
 from .util import new_test_keyspace, new_test_table, unique_name
@@ -236,14 +237,14 @@ def save_snapshot(cql, data_dir, table, tag, workdir):
 
 # Load the sstables of a saved snapshot into the given table: Copy them into
 # the table's "upload" directory, and ask Scylla to load them, like
-# "nodetool refresh" does.
-def restore_with_refresh(cql, data_dir, saved, table):
+# "nodetool refresh" does, with the given options of the request.
+def restore_with_refresh(cql, data_dir, saved, table, **params):
     upload_dir = os.path.join(table_dir(cql, data_dir, table), 'upload')
     for f in os.listdir(saved):
         if f not in ['manifest.json', 'schema.cql']:
             shutil.copy(os.path.join(saved, f), upload_dir)
     ks, cf = split_table(table)
-    rest_request(cql, 'POST', f'storage_service/sstables/{ks}', cf=cf)
+    rest_request(cql, 'POST', f'storage_service/sstables/{ks}', cf=cf, **params)
 
 # Test restoring tables from a snapshot: Take a snapshot of a keyspace with
 # two tables, write more rows, drop the tables and create them again, and
@@ -261,28 +262,43 @@ def restore_with_refresh(cql, data_dir, saved, table):
 # test_storage_service_snapshot. The test also checks that loading again
 # (another "nodetool refresh") doesn't change the data, as scylla-dtest's
 # backup_restore_tests.py::TestBackupRestore::test_replay_restore_no_additional_data
-# checked.
-def test_snapshot_restore_with_refresh(cql, scylla_data_dir, temp_workdir, scylla_only):
+# checked. Like the dtests, the test takes the snapshot of the keyspace or of
+# the list of its tables, writes 100 rows into each table with a prepared
+# statement before the snapshot and 100 after it, and counts the rows with
+# "SELECT COUNT(*)".
+@pytest.mark.parametrize('by_tables', [False, True], ids=['keyspace', 'tables'])
+def test_snapshot_restore_with_refresh(cql, scylla_data_dir, temp_workdir, scylla_only, by_tables):
     with keyspaces_with_tables(cql, 1, 2) as tables:
         [(ks, ks_tables)] = tables.items()
+        def insert_rows(start, end):
+            for table in ks_tables:
+                insert = cql.prepare(f"INSERT INTO {table} (key, val) VALUES (?, 'asdf')")
+                execute_concurrent_with_args(cql, insert, [(k,) for k in range(start, end)], concurrency=20)
+        def count(table):
+            return cql.execute(f'SELECT COUNT(*) FROM {table}').one().count
+        insert_rows(0, 100)
         tag = unique_name()
-        rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag, kn=ks)
+        if by_tables:
+            snapshot_tables(cql, ks_tables, tag)
+        else:
+            rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag, kn=ks)
         try:
             saved = [save_snapshot(cql, scylla_data_dir, table, tag, temp_workdir) for table in ks_tables]
         finally:
             nodetool.del_snapshot(cql, tag)
-        # Write another row after the snapshot. The restore should not have it.
-        for table in ks_tables:
-            cql.execute(f"INSERT INTO {table} (key, val) VALUES (2, 'asdf')")
+        # Write more rows after the snapshot. The restore should not have them.
+        insert_rows(100, 200)
         for table, saved_dir in zip(ks_tables, saved):
+            assert count(table) == 200
             cql.execute(f'DROP TABLE {table}')
             cql.execute(f'CREATE TABLE {table} (key int PRIMARY KEY, val text)')
-            assert list(cql.execute(f'SELECT * FROM {table}')) == []
+            assert count(table) == 0
             restore_with_refresh(cql, scylla_data_dir, saved_dir, table)
-            assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 'asdf')]
+            assert count(table) == 100
+            assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(k, 'asdf') for k in range(100)]
             ks, cf = split_table(table)
             rest_request(cql, 'POST', f'storage_service/sstables/{ks}', cf=cf)
-            assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 'asdf')]
+            assert count(table) == 100
 
 # Test that a snapshot request may not list tables together with more than
 # one keyspace.
@@ -549,22 +565,31 @@ def test_snapshot_restore_cdc(cql, scylla_data_dir, temp_workdir, scylla_only, c
         assert list(cql.execute(f'SELECT * FROM {log}')) == log_rows
 
 # Test that a snapshot request which doesn't list keyspaces takes a snapshot
-# of every keyspace which has tables, including the system keyspaces, and
-# that each table's snapshot has a manifest file. The test then deletes the
+# of every table (which has a directory) of every keyspace, including the
+# system keyspaces, and that each table's snapshot has a manifest file. The test then deletes the
 # snapshot, and checks that a second snapshot of all keyspaces works too.
 # Translated from scylla-dtest's snapshot_test.py::TestSnapshotOptions::test_snapshot_defaults_to_all_keyspaces,
 # and from scylla-dtest's nodetool_additional_test.py::TestNodetool tests
 # test_global_snapshot, test_snapshot_tag and test_global_create_after_clean.
 def test_snapshot_all_keyspaces(cql, test_keyspace, scylla_data_dir, scylla_only):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val text') as table:
-        keyspaces = {row.keyspace_name for row in cql.execute('SELECT keyspace_name FROM system_schema.tables')}
+        rows = list(cql.execute('SELECT keyspace_name, table_name, id FROM system_schema.tables'))
+        keyspaces = {row.keyspace_name for row in rows}
+        # The directory of each table which has one. Virtual tables, like
+        # system.config, have none, and no snapshot.
+        table_dirs = {(row.keyspace_name, row.table_name): os.path.join(scylla_data_dir, row.keyspace_name, f'{row.table_name}-{row.id.hex}')
+                      for row in rows}
+        table_dirs = {t: d for t, d in table_dirs.items() if os.path.isdir(d)}
         for _ in range(2):
             tag = unique_name()
             rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag)
             try:
                 entries = has_snapshot(nodetool.list_snapshots(cql), tag)
                 assert {e['ks'] for e in entries} == keyspaces
-                assert split_table(table) in {(e['ks'], e['cf']) for e in entries}
+                assert split_table(table) in table_dirs
+                assert set(table_dirs) <= {(e['ks'], e['cf']) for e in entries}
+                for d in table_dirs.values():
+                    assert os.path.isdir(os.path.join(d, 'snapshots', tag))
                 for e in entries:
                     [snapshot_dir] = glob.glob(os.path.join(scylla_data_dir, e['ks'], f"{e['cf']}-*", 'snapshots', tag))
                     assert os.path.isfile(os.path.join(snapshot_dir, 'manifest.json'))
@@ -589,6 +614,41 @@ def test_snapshot_some_keyspaces(cql, scylla_only):
         finally:
             nodetool.del_snapshot(cql, tag)
         assert sorted(f"{e['ks']}.{e['cf']}" for e in entries) == sorted(tables[ks1] + tables[ks2])
+
+# Test deleting the snapshot of one table, of a snapshot of a keyspace or of
+# a list of tables: The snapshot of the other table, with its sstables,
+# stays. As in the dtests, the tables have rows flushed to sstables (by a
+# flush of all keyspaces) before the snapshot. As in the dtests, the other
+# table's name is the deleted one's with a suffix, which checks that the
+# deletion picks the table's directories by its whole name, not a prefix.
+# Translated from scylla-dtest's snapshot_test.py::TestSnapshot tests
+# test_cleaning_snapshot_created_by_ks and
+# test_cleaning_snapshot_created_by_multiple_cf.
+@pytest.mark.parametrize('by_tables', [False, True], ids=['keyspace', 'tables'])
+def test_snapshot_delete_one_table(cql, scylla_data_dir, scylla_only, by_tables):
+    with keyspaces_with_tables(cql, 1, 1) as tables:
+        [(ks, [table1])] = tables.items()
+        table2 = table1 + '1'
+        # Not dropped by the test: the keyspace's drop drops it
+        cql.execute(f'CREATE TABLE {table2} (key int PRIMARY KEY, val text)')
+        for table in [table1, table2]:
+            insert = cql.prepare(f"INSERT INTO {table} (key, val) VALUES (?, 'asdf')")
+            execute_concurrent_with_args(cql, insert, [(k,) for k in range(100)], concurrency=20)
+        nodetool.flush_all(cql)
+        tag = unique_name()
+        if by_tables:
+            snapshot_tables(cql, [table1, table2], tag)
+        else:
+            rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag, kn=ks)
+        def snapshot_data_files(table):
+            return glob.glob(os.path.join(table_dir(cql, scylla_data_dir, table), 'snapshots', tag, '*-Data.db'))
+        try:
+            assert snapshot_data_files(table1) and snapshot_data_files(table2)
+            rest_request(cql, 'DELETE', 'storage_service/snapshots', tag=tag, kn=ks, cf=split_table(table1)[1])
+            assert not os.path.exists(os.path.join(table_dir(cql, scylla_data_dir, table1), 'snapshots', tag))
+            assert snapshot_data_files(table2)
+        finally:
+            nodetool.del_snapshot(cql, tag)
 
 # Test that a snapshot with the "skip flush" option doesn't flush the
 # memtable, so it doesn't have the data which is only in the memtable, while

@@ -186,6 +186,7 @@ UDT_TYPES = [
     },
 ]
 NON_FROZEN_UDT_TYPES = [u for u in UDT_TYPES if not u['frozen']]
+FROZEN_UDT_TYPES = [u for u in UDT_TYPES if u['frozen']]
 
 # A column-name suffix for a type, like "frozen_map_text_text"
 def ident(cl_type):
@@ -604,21 +605,26 @@ def check_udt_log_rows(rows, operation, udts, preimage_enabled, postimage_enable
     assert len(rows) == (postimage_index if postimage_enabled else delta_index) + 1
 
 # Test the CDC log rows of two INSERTs (or two UPDATEs) of the same row:
-# the first creates the row, and the second changes its values.
+# the first creates the row, and the second changes its values. The writes
+# are of all the user-defined types, or of only the frozen ones: CDC splits
+# a write of a non-frozen one into several log rows, so only the latter
+# checks the logging of writes which aren't split, as the dtests, which
+# wrote each type separately, did.
+@pytest.mark.parametrize('udts', [UDT_TYPES, FROZEN_UDT_TYPES], ids=['all_udts', 'frozen_udts'])
 @pytest.mark.parametrize('operation', [INSERT, UPDATE], ids=['insert', 'update'])
 @pytest.mark.parametrize('mode', IMAGE_MODES)
-def test_cdc_udt_insert_update(cql, cdc_tables, mode, operation):
+def test_cdc_udt_insert_update(cql, cdc_tables, mode, operation, udts):
     table, (pre, post) = cdc_tables[mode], IMAGE_MODES[mode]
     s = new_scenario()
     for first_record, value in [(True, 'ins'), (False, 'upd')]:
         timestamp = next_timestamp()
         if operation == INSERT:
-            insert(cql, table, udt_dataset(s, UDT_TYPES, value), timestamp)
+            insert(cql, table, udt_dataset(s, udts, value), timestamp)
         else:
-            update(cql, table, s, udt_dataset(s, UDT_TYPES, value), timestamp)
+            update(cql, table, s, udt_dataset(s, udts, value), timestamp)
         rows = log_rows_by_timestamp(cql, table, timestamp)
         # The first write to the row has no preimage
-        check_udt_log_rows(rows, operation, UDT_TYPES, False if first_record else pre, post, 'ins', value, value)
+        check_udt_log_rows(rows, operation, udts, False if first_record else pre, post, 'ins', value, value)
 
 # Test the CDC log rows of an UPDATE of individual fields of non-frozen
 # user-defined types: setting some of their fields to new values, or

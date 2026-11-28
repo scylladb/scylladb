@@ -26,7 +26,7 @@ import pytest
 import requests
 from cassandra import ConsistencyLevel, ReadFailure, ReadTimeout, Unauthorized, Unavailable
 from cassandra.concurrent import execute_concurrent_with_args
-from cassandra.protocol import AlreadyExists, InvalidRequest
+from cassandra.protocol import AlreadyExists, InvalidRequest, SyntaxException
 from cassandra.query import SimpleStatement, UNSET_VALUE
 
 from . import nodetool
@@ -51,6 +51,34 @@ def test_select_duplicate_column(cql, test_keyspace):
         # Check that a regular column can be selected three times, mixed
         # with other columns
         assert list(cql.execute(f'SELECT v, c, v, v FROM {table}')) == [(42, 'a', 42, 42), (24, 'b', 24, 24)]
+
+# Test that unquoted uuid and timeuuid literals can be used in the WHERE
+# clause of an UPDATE, a SELECT and a DELETE.
+# Added to the translations of scylla-dtest's cql_additional_tests.py::TestCQL
+# tests test_timeuuid, test_select_key_in, test_static_cf and others, which
+# had such literals in WHERE, while their translations bind the values.
+def test_uuid_literals_in_where(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k uuid, t timeuuid, v int, PRIMARY KEY (k, t)') as table:
+        k, t = uuid.uuid4(), uuid.uuid1()
+        cql.execute(f'UPDATE {table} SET v = 1 WHERE k = {k} AND t = {t}')
+        assert list(cql.execute(f'SELECT k, t, v FROM {table} WHERE k = {k} AND t = {t}')) == [(k, t, 1)]
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = {k} AND t >= {t}')) == [(1,)]
+        cql.execute(f'DELETE FROM {table} WHERE k = {k} AND t = {t}')
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = {k}')) == []
+
+# Test that a full scan of a table which has only primary-key columns
+# returns the partitions in token order. With the Murmur3 partitioner,
+# which both Scylla and Cassandra use by default, partition 1 comes before
+# partition 0.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_only_pk,
+# whose other translation, cassandra_tests' testPrimaryKeyOnly, ignores the
+# order.
+def test_only_pk_scan_order(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, c int, PRIMARY KEY (k, c)') as table:
+        for k in range(2):
+            for c in range(2):
+                cql.execute(f'INSERT INTO {table} (k, c) VALUES ({k}, {c})')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 0), (1, 1), (0, 0), (0, 1)]
 
 # Test LIMIT on a range scan - a SELECT whose WHERE restricts only the
 # token of the partition key - when partitions have more than one row.
@@ -269,21 +297,33 @@ def test_in_clause_wide_rows(cql, test_keyspace):
 # Cassandra refuses "= null" restrictions, so allowing them is a deliberate
 # Scylla extension and this is a scylla_only test - see more in
 # test_null.py::test_filtering_eq_null.
+# Like the dtests, the test first writes nulls and values into v1 and into a
+# set column v2, and then overwrites the values with nulls - with an index
+# on v1, these writes update the index - and checks that a set literal with
+# a null element is rejected. (Cassandra's null_support_test, translated in
+# cassandra_tests as testNullSupport, has these checks too.)
 # Translated from scylla-dtest's
 # cql_additional_tests.py::TestCQL::test_null_support and
-# test_null_support_index. The rest of those dtests, writing nulls and
-# reading them back, is the same as Cassandra's null_support_test, which
-# is already translated in cassandra_tests as testNullSupport.
+# test_null_support_index.
 @pytest.mark.parametrize('use_index', [False, True], ids=['filtering', 'index'])
 def test_eq_null_matches_nothing(cql, test_keyspace, use_index, scylla_only):
-    with new_test_table(cql, test_keyspace, 'k int, c int, v1 int, PRIMARY KEY (k, c)') as table:
+    with new_test_table(cql, test_keyspace, 'k int, c int, v1 int, v2 set<text>, PRIMARY KEY (k, c)') as table:
         if use_index:
             cql.execute(f'CREATE INDEX ON {table}(v1)')
             allow_filtering = ''
         else:
             allow_filtering = 'ALLOW FILTERING'
-        cql.execute(f'INSERT INTO {table} (k, c) VALUES (0, 0)')
-        cql.execute(f'INSERT INTO {table} (k, c) VALUES (0, 1)')
+        cql.execute(f"INSERT INTO {table} (k, c, v1, v2) VALUES (0, 0, null, {{'1', '2'}})")
+        cql.execute(f'INSERT INTO {table} (k, c, v1) VALUES (0, 1, 1)')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, 0, None, {'1', '2'}), (0, 1, 1, None)]
+        cql.execute(f'INSERT INTO {table} (k, c, v1) VALUES (0, 1, null)')
+        cql.execute(f'INSERT INTO {table} (k, c, v2) VALUES (0, 0, null)')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, 0, None, None), (0, 1, None, None)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k = 0')) == [(0, 0, None, None), (0, 1, None, None)]
+        # Check that a set with a null element cannot be written
+        for v2 in ['{1, null}', "{'foo', 'bar', null}"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f'INSERT INTO {table} (k, c, v2) VALUES (0, 2, {v2})')
         # Check that "k = null" matches nothing
         assert list(cql.execute(f'SELECT * FROM {table} WHERE k = null')) == []
         # Check that "v1 = null" matches nothing, with or without a
@@ -906,6 +946,35 @@ def test_lwt_list_with_null_element(cql, test_keyspace, scylla_only, frozen):
         with pytest.raises(InvalidRequest, match='NULL'):
             cql.execute(f"UPDATE {table} SET l = ['foo', null] WHERE k = 0 IF l != [null]")
         assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
+
+# Test LWT conditions on a whole list - comparisons, IN and several conditions
+# together - which apply, which don't, and which are invalid.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_whole_list_conditional,
+# whose conditions these are. Some of them, such as "l IN (null, ...)", are
+# Scylla extensions, so the test is scylla_only.
+@pytest.mark.parametrize('frozen', [False, True], ids=['unfrozen', 'frozen'])
+def test_lwt_whole_list_conditions(cql, test_keyspace, scylla_only, frozen):
+    list_type = 'frozen<list<text>>' if frozen else 'list<text>'
+    with new_test_table(cql, test_keyspace, f'k int PRIMARY KEY, l {list_type}') as table:
+        l = ['foo', 'bar', 'foobar']
+        cql.execute(f"INSERT INTO {table} (k, l) VALUES (0, ['foo', 'bar', 'foobar'])")
+        def update(condition):
+            return list(cql.execute(f"UPDATE {table} SET l = ['foo', 'bar', 'foobar'] WHERE k = 0 IF {condition}"))
+        for condition in ["l = ['foo', 'bar', 'foobar']", "l != ['baz']", "l > ['a']", "l >= ['a']",
+                          "l < ['z']", "l <= ['z']", "l IN (null, ['foo', 'bar', 'foobar'], ['a'])",
+                          "l > ['aaa', 'bbb'] AND l > ['aaa']", "l != null AND l IN (['foo', 'bar', 'foobar'])"]:
+            assert update(condition) == [(True, l)], condition
+            assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
+        for condition in ["l = ['baz']", "l != ['foo', 'bar', 'foobar']", "l > ['z']", "l >= ['z']",
+                          "l < ['a']", "l <= ['a']", "l IN (['a'], null)", "l IN ()",
+                          "l IN () AND l IN (['foo', 'bar', 'foobar'])", "l > ['zzz'] AND l < ['zzz']", "l = [null]"]:
+            assert update(condition) == [(False, l)], condition
+            assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
+        for condition, error in [('l < null', InvalidRequest), ('l <= null', InvalidRequest), ('l > null', InvalidRequest),
+                                 ('l >= null', InvalidRequest), ('l IN null', SyntaxException), ('l IN 367', SyntaxException)]:
+            with pytest.raises(error):
+                update(condition)
+            assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
 
 # Test LIMIT on a slice of the clustering key - in one partition and in
 # several partitions selected with IN - in a COMPACT STORAGE table whose only

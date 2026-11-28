@@ -1251,12 +1251,14 @@ def testCompactStorage(cql, test_keyspace):
         # As explained in docs/kb/lwt-differences.rst, Scylla deliberately
         # differs from Cassandra in that it always returns the tested column's
         # value, even in True (successful) conditional writes.
-        assert_rows2(execute(cql, table, "UPDATE %s SET owner='z' WHERE partition='a' AND key='b' IF owner=null"), [row(True)], [row(True, None)])
+        def applied(*scylla_row):
+            return row(*scylla_row) if is_scylla(cql) else row(True)
+        assert_rows(execute(cql, table, "UPDATE %s SET owner='z' WHERE partition='a' AND key='b' IF owner=null"), applied(True, None))
 
         assert_rows(execute(cql, table, "UPDATE %s SET owner='b' WHERE partition='a' AND key='b' IF owner='a'"), row(False, "z"))
-        assert_rows2(execute(cql, table, "UPDATE %s SET owner='b' WHERE partition='a' AND key='b' IF owner='z'"), [row(True)], [row(True, 'z')])
+        assert_rows(execute(cql, table, "UPDATE %s SET owner='b' WHERE partition='a' AND key='b' IF owner='z'"), applied(True, 'z'))
 
-        assert_rows2(execute(cql, table, "INSERT INTO %s (partition, key, owner) VALUES ('a', 'c', 'x') IF NOT EXISTS"), [row(True)], [row(True,None,None,None)])
+        assert_rows(execute(cql, table, "INSERT INTO %s (partition, key, owner) VALUES ('a', 'c', 'x') IF NOT EXISTS"), applied(True, None, None, None))
 
 # SelectGroupByTest
 @pytest.mark.xfail(reason="issue #4244")
