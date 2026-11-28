@@ -50,16 +50,9 @@ public:
             if (i > 0) {
                 encoded_row.write(", ", 2);
             }
-            bool has_any_upper = std::ranges::any_of(_selector_names[i], [](unsigned char c) { return std::isupper(c); });
-            encoded_row.write("\"", 1);
-            if (has_any_upper) {
-                encoded_row.write("\\\"", 2);
-            }
-            encoded_row.write(_selector_names[i].c_str(), _selector_names[i].size());
-            if (has_any_upper) {
-                encoded_row.write("\\\"", 2);
-            }
-            encoded_row.write("\": ", 3);
+            sstring key = json_key_for_name(_selector_names[i]);
+            encoded_row.write(key.c_str(), key.size());
+            encoded_row.write(": ", 2);
             sstring row_sstring = parameters[i]
                     ? to_json_string(*_selector_types[i], managed_bytes_view(*parameters[i]))
                     : "null";
