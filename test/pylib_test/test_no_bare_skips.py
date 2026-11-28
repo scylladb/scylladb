@@ -13,8 +13,11 @@ Any new skip must use the typed markers or the typed skip() helper.
 
 import ast
 import os
+import re
 import subprocess
 import sys
+
+import pytest
 
 from test import TEST_DIR
 from test.pylib_test._scan_py_files import iter_test_py_files, parse_python_file
@@ -59,7 +62,7 @@ def test_no_bare_skip_markers_in_collection():
            if not k.startswith("PYTEST_XDIST")}
     result = subprocess.run(
         [sys.executable, "-m", "pytest",
-         "--collect-only",
+         "--collect-only", "-qq",
          "--ignore=boost", "--ignore=raft",
          "--ignore=ldap", "--ignore=vector_search",
          "--ignore=unit",
@@ -68,8 +71,17 @@ def test_no_bare_skip_markers_in_collection():
         cwd=str(TEST_DIR),
         env=env,
     )
-    # If a bare skip exists, plugin raises UsageError → non-zero exit.
+    # If a bare skip exists, the plugin raises UsageError, and pytest exits
+    # with USAGE_ERROR. Any other error, such as a test file which fails to
+    # import, also fails the collection, with a different exit code - so say
+    # which it was, and show the errors without the "file: count" lines which
+    # -qq prints for each of the thousands of test files.
+    if result.returncode == pytest.ExitCode.USAGE_ERROR:
+        problem = "a bare @pytest.mark.skip was found"
+    else:
+        problem = "a test file could not be collected"
+    output = "\n".join(line for line in result.stdout.splitlines()
+                       if not re.fullmatch(r"\S+: \d+", line))
     assert result.returncode == 0, (
-            "Collection failed — a bare @pytest.mark.skip was found.\n"
-            + result.stdout + result.stderr
+            f"Collection failed - {problem}:\n" + result.stderr + output
     )
