@@ -106,6 +106,17 @@ static data_value castas_fctn_simple(data_value from) {
     }
 }
 
+// A finite value converts exactly. NaN and infinities have no integer value:
+// give Cassandra's result, which converts through a long (JLS 5.1.3).
+template<std::floating_point FromType>
+static data_value castas_fctn_from_floating_to_varint(data_value from) {
+    auto val_from = value_cast<FromType>(from);
+    if (!std::isfinite(val_from)) {
+        return utils::multiprecision_int(java_floating_to_integral<int64_t>(val_from));
+    }
+    return utils::multiprecision_int(val_from);
+}
+
 template<typename ToType>
 static data_value castas_fctn_from_decimal_to_float(data_value from) {
     auto val_from = value_cast<big_decimal>(from);
@@ -143,6 +154,9 @@ static data_value castas_fctn_from_integer_to_decimal(data_value from) {
 template<typename FromType>
 static data_value castas_fctn_from_float_to_decimal(data_value from) {
     auto val_from = value_cast<FromType>(from);
+    if (!std::isfinite(val_from)) {
+        throw exceptions::invalid_request_exception(format("{} cannot be cast to decimal", val_from));
+    }
     return big_decimal(fmt::to_string(val_from));
 }
 
@@ -322,9 +336,9 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::varint, kind::long_kind):
         return castas_fctn_simple<utils::multiprecision_int, int64_t>;
     case cast_switch_case_val(kind::varint, kind::float_kind):
-        return castas_fctn_simple<utils::multiprecision_int, float>;
+        return castas_fctn_from_floating_to_varint<float>;
     case cast_switch_case_val(kind::varint, kind::double_kind):
-        return castas_fctn_simple<utils::multiprecision_int, double>;
+        return castas_fctn_from_floating_to_varint<double>;
     case cast_switch_case_val(kind::varint, kind::decimal):
         return castas_fctn_from_decimal_to_varint;
 
