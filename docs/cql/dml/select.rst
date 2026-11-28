@@ -37,7 +37,7 @@ Querying data from data is done using a ``SELECT`` statement:
            : '(' `column_name` ( ',' `column_name` )* ')' `operator` `tuple_literal`
            : TOKEN '(' `column_name` ( ',' `column_name` )* ')' `operator` `term`
            : `column_name` IS [ NOT ] NULL
-   operator: '=' | '<' | '>' | '<=' | '>=' | IN | NOT IN | CONTAINS | CONTAINS KEY
+   operator: '=' | '<' | '>' | '<=' | '>=' | IN | NOT IN | CONTAINS | CONTAINS KEY | LIKE
    ordering_clause: `column_name` [ ASC | DESC ] ( ',' `column_name` [ ASC | DESC ] )*
    timeout: `duration`
    literal: number | 'string' | boolean | NULL | tuple_literal | list_literal | map_literal
@@ -315,6 +315,8 @@ the results client-side.
 The ``CONTAINS`` operator may only be used on collection columns (lists, sets, and maps). In the case of maps,
 ``CONTAINS`` applies to the map values. The ``CONTAINS KEY`` operator may only be used on map columns and applies to the
 map keys.
+
+The ``LIKE`` operator matches a text column against a pattern. See :ref:`LIKE Operator <like-operator>` for details.
 
 .. _group-by-clause:
 
