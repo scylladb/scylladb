@@ -5,14 +5,17 @@
 # Tests for accessing Scylla-only system tables. All tests are marked
 # "scylla_only" so are skipped on DynamoDB.
 
+import boto3
+import botocore.client
 import pytest
 import requests
+from urllib.parse import urlparse
 
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
 from test.pylib.skip_types import skip_env
-from .util import full_scan, scylla_config_read, scylla_config_temporary
+from .util import full_scan, random_string, scylla_config_read, scylla_config_temporary
 
 internal_prefix = '.scylla.alternator.'
 
@@ -150,6 +153,39 @@ def test_system_clients(scylla_only, dynamodb):
             assert 'username' in client
             assert 'scheduling_group' in client
     assert success
+
+# Test that Alternator processes a request in the scheduling group
+# "sl:default" until it applies the service level of the user. The test does
+# this check over HTTP and over HTTPS. Service levels do not control the work
+# in Seastar's group "main".
+# The Scan below finds its own entry in system.clients by a unique User-Agent.
+# This entry shows the scheduling group of the request before Alternator
+# applies the service level.
+# Reproduces SCYLLADB-6686.
+@pytest.mark.parametrize('scheme', ['http', 'https'])
+def test_system_clients_scheduling_group(scylla_only, dynamodb, get_valid_alternator_role, scheme):
+    url = urlparse(dynamodb.meta.client._endpoint.host)
+    port = url.port if url.scheme == scheme else int(scylla_config_read(
+        dynamodb, 'alternator_https_port' if scheme == 'https' else 'alternator_port') or 0)
+    if not port:
+        skip_env(f'Alternator has no {scheme} port')
+    endpoint = f'{scheme}://{url.hostname}:{port}'
+    user, secret = get_valid_alternator_role(endpoint)
+    agent = random_string()
+    resource = boto3.resource('dynamodb', endpoint_url=endpoint, verify=False,
+        region_name=dynamodb.meta.client.meta.region_name,
+        aws_access_key_id=user, aws_secret_access_key=secret,
+        config=dynamodb.meta.client._client_config.merge(
+            botocore.client.Config(user_agent_extra=agent)))
+    try:
+        clients = full_scan(resource.Table(internal_prefix + 'system.clients'))
+    finally:
+        resource.meta.client.close()
+    mine = [c for c in clients if agent in c.get('driver_name', '')]
+    is_ssl = scheme == 'https'
+    # Alternator can return ssl_enabled as a string (see test_system_clients).
+    assert {c['ssl_enabled'] for c in mine} <= {is_ssl, str(is_ssl).lower()}
+    assert {c['scheduling_group'] for c in mine} == {'sl:default'}
 
 # Test writing to a system table, such as the configuration.
 # Since writing to a system table is only optionally allowed in Scylla,

@@ -1155,9 +1155,11 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
             auto https_accept_sg = _sl_controller.get_driver_scheduling_group().value_or(default_scheduling_group());
             // Run the HTTPS accept loop in sl:driver. This covers connection setup,
             // including TLS handshakes, but not HTTP request processing.
-            // Request processing starts in the default scheduling group; Alternator
-            // applies the authenticated user's service level after signature verification.
-            _https_server.set_request_scheduling_group(default_scheduling_group());
+            // The HTTPS server processes requests in the scheduling group in which
+            // init() runs. This group is sl:default. The HTTP server also uses it.
+            // Do not use default_scheduling_group(). It returns "main", which is
+            // outside the service levels.
+            _https_server.set_request_scheduling_group(current_scheduling_group());
 
             if (this_shard_id() == 0) {
                 _credentials = creds->build_reloadable_server_credentials([this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
