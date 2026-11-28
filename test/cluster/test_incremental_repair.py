@@ -1065,6 +1065,32 @@ async def test_tablet_incremental_repair_table_drop_compaction_group_gone(manage
 
     await drop_future
 
+# Reproducer for https://scylladb.atlassian.net/browse/SCYLLADB-6655
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_incremental_repair_table_drop_while_taking_repair_lock(manager: ScyllaClusterManager):
+    """
+    Check that DROP TABLE completes when a replica takes the incremental repair
+    lock after the drop has erased the table's repair locks.
+
+    1. Pause the repair on one node after it took the lock, before it stores it.
+    2. Drop the table and wait until that node has truncated it.
+    3. Resume the repair and check that the drop completes.
+    """
+    servers, cql, hosts, ks, table_id, logs, _, _, _, _ = await prepare_cluster_for_incremental_repair(manager)
+    server, host, log = servers[0], hosts[0], logs[0]
+    injection = "incremental_repair_prepare_wait_after_lock"
+
+    await manager.api.enable_injection(server.ip_addr, injection, one_shot=True)
+    await manager.api.tablet_repair(server.ip_addr, ks, "test", token=-1, await_completion=False, incremental_mode='incremental')
+    await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+
+    mark = await log.mark()
+    drop_future = cql.run_async(f"DROP TABLE {ks}.test;", host=host)
+    await log.wait_for(f'Truncated {ks}.test', from_mark=mark)
+
+    await manager.api.message_injection(server.ip_addr, injection)
+    await asyncio.wait_for(drop_future, timeout=60)
+
 # Reproducer for the race window bug in incremental repair where minor compaction
 # promotes unrepaired data into the repaired sstable set.
 #
