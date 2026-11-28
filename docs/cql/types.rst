@@ -207,7 +207,8 @@ A duration can be input as:
    * ``ms``: milliseconds (1,000,000 nanoseconds)
    * ``us`` or ``µs`` : microseconds (1000 nanoseconds)
    * ``ns``: nanoseconds (1 nanosecond)
-#. ISO 8601 format:  ``P[n]Y[n]M[n]DT[n]H[n]M[n]S or P[n]W``
+#. ISO 8601 format:  ``P[n]Y[n]M[n]DT[n]H[n]M[n]S or P[n]W``, where any of the components
+   may be omitted, but at least one must be given (a bare ``P`` or ``PT`` is not a duration)
 #. ISO 8601 alternative format: ``P[YYYY]-[MM]-[DD]T[hh]:[mm]:[ss]``
 
 For example::
