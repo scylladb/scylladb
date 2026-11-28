@@ -34,7 +34,8 @@ const column_definition& indexed_column(const schema& schema, const secondary_in
 
 secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column) {
     for (const auto& index : db.find_column_family(schema).get_index_manager().list_indexes()) {
-        if (index.supports_bm25_expression(column)) {
+        // Vector Store cannot search a local index yet, as no partition is sent with the query.
+        if (index.supports_bm25_expression(column) && !index.metadata().local()) {
             return index;
         }
     }

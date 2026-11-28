@@ -25,6 +25,9 @@ public:
     std::string_view index_type_name() const override {
         return INDEX_TYPE_NAME;
     }
+    bool supports_local_index() const override {
+        return true;
+    }
 
     fulltext_index() = default;
     ~fulltext_index() override = default;
