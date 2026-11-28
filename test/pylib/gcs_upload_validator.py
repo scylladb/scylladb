@@ -38,7 +38,7 @@ import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 
 # "bytes <first>-<last>/<total>", "bytes */<total>" or "bytes */*"
 CONTENT_RANGE_RE = re.compile(r"^bytes (?:(\d+)-(\d+)|\*)/(?:(\d+)|\*)$")
@@ -87,7 +87,10 @@ SESSIONS = registry()
 THREAD_STATE = threading.local()
 
 
-FAULTS = ("unacknowledged_chunks", "failed_chunks", "failed_cancels", "cancelled_uploads")
+FAULTS = ("unacknowledged_chunks", "failed_chunks", "failed_cancels", "cancelled_uploads", "empty_list_pages", "list_page_size", "paged_listings")
+
+# nextPageToken of an injected empty page; it means nothing upstream, so it is dropped on the way
+EMPTY_PAGE_TOKEN = "empty-page"
 
 
 STATUS_ANSWERS = "status_answers"
@@ -161,6 +164,17 @@ class injector:
 
     def take_cancelled_upload(self):
         return self._take("cancelled_uploads")
+
+    def take_empty_list_page(self):
+        return self._take("empty_list_pages")
+
+    def list_page_size(self):
+        with self._lock:
+            return self._counts["list_page_size"]
+
+    def count_paged_listing(self):
+        with self._lock:
+            self._counts["paged_listings"] += 1
 
 
 INJECTED = injector()
@@ -381,6 +395,10 @@ class handler(BaseHTTPRequestHandler):
         failed_chunks         -- answer a chunk with 400
         failed_cancels        -- answer a session DELETE with 403
         cancelled_uploads     -- answer a session DELETE with 499, the way real GCS does
+        empty_list_pages      -- answer an object listing with an empty page that has a next one
+        list_page_size        -- limit the page of every object listing that sets no maxResults to
+                                 this many objects, until reset; 0 is off. paged_listings counts
+                                 the listings it limited
 
         status_answers=<v>[,<v>...] scripts the next status queries instead of answering
         them from the session. Each <v> is a byte count, or "none"/0 for a Range-less
@@ -524,6 +542,27 @@ class handler(BaseHTTPRequestHandler):
                 held = INJECTED.take_status_answer()
                 self._status(s.received if held is UNSET else held)
                 return
+
+        if self.command == "GET" and re.fullmatch(r"/storage/v1/b/[^/]+/o", urlparse(self.path).path):
+            # A listing. GCS may answer one with an empty page that still names a next one.
+            query = parse_qs(urlparse(self.path).query)
+            if INJECTED.take_empty_list_page():
+                self._note("answering a listing with an empty page")
+                payload = json.dumps({"kind": "storage#objects", "nextPageToken": EMPTY_PAGE_TOKEN}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if query.get("pageToken") == [EMPTY_PAGE_TOKEN]:
+                del query["pageToken"]
+                self.path = urlparse(self.path)._replace(query=urlencode(query, doseq=True)).geturl()
+            page_size = INJECTED.list_page_size()
+            if page_size and "maxResults" not in query:
+                query["maxResults"] = [str(page_size)]
+                INJECTED.count_paged_listing()
+                self.path = urlparse(self.path)._replace(query=urlencode(query, doseq=True)).geturl()
 
         if self.command == "DELETE" and upload_id and INJECTED.take_cancelled_upload():
             # Real GCS reports a cancelled resumable upload with 499. fake-gcs-server

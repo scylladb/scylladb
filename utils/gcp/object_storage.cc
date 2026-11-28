@@ -1420,79 +1420,103 @@ static utils::gcp::storage::object_info create_info(const rjson::value& item) {
 // read all data from network, etc. Thus there is not all that much
 // point in it. Return chunked_vector to avoid large alloc, but keep it
 // in one object... for now...
-future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix, bucket_paging& pager, seastar::abort_source* as) {
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix_in, bucket_paging& pager, seastar::abort_source* as) {
     utils::chunked_vector<utils::gcp::storage::object_info> result;
 
     if (pager.done) {
         co_return result;
     }
 
-    std::string bucket(bucket_in);
+    // Own them: the views may not outlive the first suspension.
+    std::string bucket(bucket_in), prefix(prefix_in);
 
-    gcp_storage.debug("List bucket {} (prefix={}, max_results={})", bucket, prefix, pager.max_results);
-
-    auto path = fmt::format("/storage/v1/b/{}/o", bucket);
-    auto psep = "?";
-    if (!prefix.empty()) {
-        path += fmt::format("{}prefix={}", psep, prefix);
-        psep = "&";
-    }
-    if (pager.max_results != 0) {
-        path += fmt::format("{}maxResults={}", psep, pager.max_results);
-        psep = "&";
-    }
-    if (!pager.token.empty()) {
-        path += fmt::format("{}pageToken={}", psep, pager.token);
-        psep = "&";
-    }
-
-    co_await _impl->send_with_retry(path
-        , GCP_OBJECT_SCOPE_READ_ONLY
-        , ""s
-        , ""s
-        , [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
-            if (rep._status != status_type::ok) {
-                throw failed_operation(fmt::format("Could not list bucket {}: {} ({})", bucket, rep._status
-                    , co_await get_gcp_error_message(in)
-                ));
-            }
-
-            // ensure these are on our coroutine frame.
-            auto bufs = co_await util::read_entire_stream(in);
-            auto root = rjson::parse(std::move(bufs));
-
-            if (rjson::get<std::string>(root, "kind") != "storage#objects"s) {
-                throw failed_operation("Malformed list object reply");
-            }
-
-            auto items = rjson::find(root, "items");
-            if (!items) {
-                co_return;
-            }
-            if (!items->IsArray()) {
-                throw failed_operation("Malformed list object items");
-            }
-
-            pager.token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
-            pager.done = pager.token.empty();
-
-            for (auto& item : items->GetArray()) {
-                object_info info = create_info(item);
-                result.emplace_back(std::move(info));
-            }
-
+    // Callers take an empty page for the end of the listing, and a page can be empty and still
+    // have a next one, so go on until a page has objects or the listing is done.
+    constexpr unsigned max_empty_pages = 100;
+    unsigned empty_pages = 0;
+    do {
+        if (as) {
+            as->check();
         }
-        , httpclient::method_type::GET
-        , {}
-        , as
-    );
+        gcp_storage.debug("List bucket {} (prefix={}, max_results={})", bucket, prefix, pager.max_results);
+
+        auto path = fmt::format("/storage/v1/b/{}/o", bucket);
+        auto psep = "?";
+        if (!prefix.empty()) {
+            path += fmt::format("{}prefix={}", psep, seastar::http::internal::url_encode(prefix));
+            psep = "&";
+        }
+        if (pager.max_results != 0) {
+            path += fmt::format("{}maxResults={}", psep, pager.max_results);
+            psep = "&";
+        }
+        if (!pager.token.empty()) {
+            path += fmt::format("{}pageToken={}", psep, seastar::http::internal::url_encode(pager.token));
+            psep = "&";
+        }
+
+        co_await _impl->send_with_retry(path
+            , GCP_OBJECT_SCOPE_READ_ONLY
+            , ""s
+            , ""s
+            , [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
+                if (rep._status != status_type::ok) {
+                    throw failed_operation(fmt::format("Could not list bucket {}: {} ({})", bucket, rep._status
+                        , co_await get_gcp_error_message(in)
+                    ));
+                }
+
+                // ensure these are on our coroutine frame.
+                auto bufs = co_await util::read_entire_stream(in);
+                auto root = rjson::parse(std::move(bufs));
+
+                if (rjson::get<std::string>(root, "kind") != "storage#objects"s) {
+                    throw failed_operation("Malformed list object reply");
+                }
+
+                auto items = rjson::find(root, "items");
+                if (items && !items->IsArray()) {
+                    throw failed_operation("Malformed list object items");
+                }
+
+                // Parse the whole page first: only a valid one advances the pager.
+                utils::chunked_vector<object_info> page;
+                if (items) {
+                    for (auto& item : items->GetArray()) {
+                        page.emplace_back(create_info(item));
+                    }
+                }
+                pager.token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
+                pager.done = pager.token.empty();
+                for (auto& info : page) {
+                    result.emplace_back(std::move(info));
+                }
+            }
+            , httpclient::method_type::GET
+            , {}
+            , as
+        );
+        // Fail rather than return an empty page, which callers take for the end of the listing.
+        if (result.empty() && !pager.done && ++empty_pages >= max_empty_pages) {
+            throw failed_operation(fmt::format("Listing bucket {} (prefix={}) got {} empty pages in a row", bucket, prefix, empty_pages));
+        }
+    } while (result.empty() && !pager.done);
 
     co_return result;
 }
 
-future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix, seastar::abort_source* as) {
-    bucket_paging dummy(0);
-    co_return co_await list_objects(bucket, prefix, dummy, as);
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix_in, seastar::abort_source* as) {
+    // Own them: the views may not outlive the first suspension.
+    std::string bucket(bucket_in), prefix(prefix_in);
+    // Lists every page into memory: for bounded listings. Use the pager overload for a wide prefix.
+    bucket_paging pager(0);
+    utils::chunked_vector<object_info> all;
+    while (!pager.done) {
+        for (auto& info : co_await list_objects(bucket, prefix, pager, as)) {
+            all.emplace_back(std::move(info));
+        }
+    }
+    co_return all;
 }
 
 // See https://cloud.google.com/storage/docs/deleting-objects
