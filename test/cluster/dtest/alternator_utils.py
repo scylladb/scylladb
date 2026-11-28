@@ -30,7 +30,7 @@ import requests
 from deepdiff import DeepDiff
 from requests.exceptions import ConnectionError
 
-from test.cluster.dtest.alternator.utils import schemas
+from test.cluster.dtest.alternator_support.utils import schemas
 from test.cluster.dtest.dtest_class import Tester, get_ip_from_node
 from test.cluster.dtest.tools.cluster import new_node
 from test.cluster.dtest.tools.cluster_topology import generate_cluster_topology
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 type AttributeValueTypeDef = bytes | bytearray | str | int | Decimal | bool | set[int] | set[Decimal] | set[str] | \
                              set[bytes] | set[bytearray] | list[Any] | dict[str, Any] | None
 
-ALTERNATOR_SNAPSHOT_FOLDER = pathlib.Path(__file__).with_name("alternator") / "snapshot"
+ALTERNATOR_SNAPSHOT_FOLDER = pathlib.Path(__file__).with_name("alternator_support") / "snapshot"
 TABLE_NAME = "user_table"
 NUM_OF_NODES = 3
 NUM_OF_ITEMS = 100
