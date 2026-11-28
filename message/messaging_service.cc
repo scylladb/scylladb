@@ -829,6 +829,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::WAIT_FOR_SNAPSHOT_TRANSFER:
     case messaging_verb::SYNC_RAFT_GROUP_CONFIG:
     case messaging_verb::TRUNCATE_STRONGLY_CONSISTENT_TABLET:
+    case messaging_verb::TABLET_SPLIT_READY:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
@@ -1385,15 +1386,15 @@ rpc::sink<streaming::stream_mutation_fragments_status> messaging_service::make_s
 }
 
 future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<streaming::stream_mutation_fragments_status>>>
-messaging_service::make_sink_and_source_for_stream_mutation_fragments(table_schema_version schema_id, streaming::plan_id plan_id, table_id cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, service::session_id session, locator::host_id id) {
+messaging_service::make_sink_and_source_for_stream_mutation_fragments(table_schema_version schema_id, streaming::plan_id plan_id, table_id cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, service::session_id session, service::fencing_token fence, locator::host_id id) {
     using value_type = std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<streaming::stream_mutation_fragments_status>>;
     if (is_shutting_down()) {
         return make_exception_future<value_type>(rpc::closed_error("local node is shutting down"));
     }
     auto rpc_client = get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, addr_for_host_id(id), id);
-    return rpc_client->make_stream_sink<netw::serializer, frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>().then([this, session, plan_id, schema_id, cf_id, estimated_partitions, reason, rpc_client] (rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd> sink) mutable {
-        auto rpc_handler = rpc()->make_client<rpc::source<streaming::stream_mutation_fragments_status> (streaming::plan_id, table_schema_version, table_id, uint64_t, streaming::stream_reason, rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, service::session_id)>(messaging_verb::STREAM_MUTATION_FRAGMENTS);
-        return rpc_handler(*rpc_client , plan_id, schema_id, cf_id, estimated_partitions, reason, sink, session).then_wrapped([sink, rpc_client] (future<rpc::source<streaming::stream_mutation_fragments_status>> source) mutable {
+    return rpc_client->make_stream_sink<netw::serializer, frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>().then([this, session, fence, plan_id, schema_id, cf_id, estimated_partitions, reason, rpc_client] (rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd> sink) mutable {
+        auto rpc_handler = rpc()->make_client<rpc::source<streaming::stream_mutation_fragments_status> (streaming::plan_id, table_schema_version, table_id, uint64_t, streaming::stream_reason, rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, service::session_id, service::fencing_token)>(messaging_verb::STREAM_MUTATION_FRAGMENTS);
+        return rpc_handler(*rpc_client , plan_id, schema_id, cf_id, estimated_partitions, reason, sink, session, fence).then_wrapped([sink, rpc_client] (future<rpc::source<streaming::stream_mutation_fragments_status>> source) mutable {
             return (source.failed() ? sink.close() : make_ready_future<>()).then([sink = std::move(sink), source = std::move(source)] () mutable {
                 return make_ready_future<value_type>(value_type(std::move(sink), source.get()));
             });
@@ -1401,7 +1402,7 @@ messaging_service::make_sink_and_source_for_stream_mutation_fragments(table_sche
     });
 }
 
-void messaging_service::register_stream_mutation_fragments(std::function<future<rpc::sink<streaming::stream_mutation_fragments_status>> (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions, rpc::optional<streaming::stream_reason>, rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>> source, rpc::optional<service::session_id>)>&& func) {
+void messaging_service::register_stream_mutation_fragments(std::function<future<rpc::sink<streaming::stream_mutation_fragments_status>> (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions, rpc::optional<streaming::stream_reason>, rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>> source, rpc::optional<service::session_id>, rpc::optional<service::fencing_token>)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_FRAGMENTS, std::move(func));
 }
 

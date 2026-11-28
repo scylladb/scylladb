@@ -34,6 +34,9 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
     stream_reason reason,
     sstables::offstrategy offstrategy,
     service::frozen_topology_guard,
-    std::function<void (sstables::shared_sstable sst)> on_sstable_written = {});
+    std::function<void (sstables::shared_sstable sst)> on_sstable_written = {},
+    // Throws if the sstable must not be attached. Called before the attach and again under
+    // the sstable_add_gate of the target group.
+    std::function<void ()> check_fence = {});
 
 }
