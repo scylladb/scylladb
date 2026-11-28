@@ -14,7 +14,7 @@ import glob
 import shutil
 import stat
 import re
-from scylla_util import colorprint, is_valid_nic, is_offline, is_debian_variant, is_redhat_variant, out, is_unused_disk, scriptsdir, is_nonroot, systemd_unit, swap_exists, get_product, etcdir
+from scylla_util import colorprint, is_valid_nic, is_offline, is_debian_variant, is_redhat_variant, out, is_unused_disk, scriptsdir, is_nonroot, systemd_unit, swap_exists, get_product, etcdir, kho_enabled
 from subprocess import run
 
 PRODUCT = get_product(etcdir())
@@ -239,6 +239,8 @@ if __name__ == '__main__':
                         help='skip fstrim setup')
     parser.add_argument('--no-memory-setup', action='store_true', default=False,
                         help='skip memory setup')
+    parser.add_argument('--no-kernel-memory-setup', action='store_true', default=False,
+                        help='skip kernel memory setup')
     parser.add_argument('--no-swap-setup', action='store_true', default=False,
                         help='skip swap setup')
     parser.add_argument('--no-rsyslog-setup', action='store_true', default=False,
@@ -286,6 +288,7 @@ if __name__ == '__main__':
     cpuscaling_setup = not args.no_cpuscaling_setup
     fstrim_setup = not args.no_fstrim_setup
     memory_setup = not args.no_memory_setup
+    kernel_memory_setup = not args.no_kernel_memory_setup
     swap_setup = not args.no_swap_setup
     rsyslog_setup = not args.no_rsyslog_setup
     perf_collector_setup = not args.no_perf_collector_setup
@@ -448,6 +451,11 @@ if __name__ == '__main__':
         if memory_setup:
             run_setup_script('memory', 'scylla_memory_setup --lock-memory')
 
+        kernel_memory_setup = interactive_ask_service('Do you want to disable Kexec HandOver (kho=off on the kernel command line) and the low memory zone reserve (vm.lowmem_reserve_ratio)?', 'Both keep memory that the kernel cannot use for its own allocations, out of the small part ScyllaDB leaves to it. Yes - adds kho=off, which needs a reboot when Kexec HandOver is enabled now, and sets vm.lowmem_reserve_ratio to 0. No - skip this step.', kernel_memory_setup)
+        args.no_kernel_memory_setup = not kernel_memory_setup
+        if kernel_memory_setup:
+            run_setup_script('kernel memory', 'scylla_kernel_memory_setup')
+
         if not swap_exists():
             colorprint('{red}No swap is configured, it is highly recommended to setup swap on Scylla node.{nocolor}')
             swap_setup = interactive_ask_service('Do you want to configure swapfile?', 'Answer yes to setup swapfile to Scylla, Answer no to do nothing.', swap_setup)
@@ -504,3 +512,7 @@ if __name__ == '__main__':
         if selinux_reboot_required:
             print('Please restart your machine before using ScyllaDB, as you have disabled')
             print(' SELinux.')
+
+        if kernel_memory_setup and kho_enabled():
+            print('Kexec HandOver is enabled in the running kernel. Please make sure kho=off is on the kernel command line')
+            print(' (see the kernel memory setup output above) and restart your machine before using ScyllaDB.')

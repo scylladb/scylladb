@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2026-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+
+# Scylla locks almost all memory and leaves a small reserve to the kernel.
+# Make sure the kernel can use that reserve for its own allocations.
+
+import os
+import re
+import sys
+import argparse
+import platform
+import shutil
+from subprocess import run, CalledProcessError
+from scylla_util import is_debian_variant, kho_enabled
+
+GRUB_DROPIN = '/etc/default/grub.d/99-scylla-kho.cfg'
+KHO_OFF = 'kho=off'
+LOWMEM_RESERVE_RATIO = '/proc/sys/vm/lowmem_reserve_ratio'
+SYSCTL_CONF = '/etc/sysctl.d/99-scylla-lowmem-reserve.conf'
+
+
+def disable_kho():
+    """Add kho=off to the kernel command line of every boot entry.
+
+    Written whether or not the running kernel has KHO enabled, so the setting
+    is already there if the machine later boots a kernel that enables it.
+    """
+    if is_debian_variant() and shutil.which('update-grub'):
+        # A drop-in, not an edit of grub.cfg: update-grub regenerates grub.cfg on every kernel upgrade.
+        os.makedirs(os.path.dirname(GRUB_DROPIN), exist_ok=True)
+        with open(GRUB_DROPIN, 'w') as f:
+            f.write('# Added by scylla_kernel_memory_setup: Kexec HandOver keeps memory the kernel needs next to Scylla.\n')
+            f.write(f'GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX {KHO_OFF}"\n')
+        run('update-grub', shell=True, check=True)
+    elif shutil.which('grubby'):
+        run(f'grubby --update-kernel=ALL --args={KHO_OFF}', shell=True, check=True)
+    else:
+        if kho_enabled():
+            print(f'Kexec HandOver is enabled, and the bootloader is not supported: add {KHO_OFF} to the kernel command line manually.')
+        return
+    if kho_enabled():
+        print(f'Kexec HandOver is enabled in the running kernel. Reboot the machine to apply {KHO_OFF}.')
+
+
+def disable_lowmem_reserve():
+    """Let allocations that may use any zone fall back to the low zones (DMA, DMA32) without a reserve.
+
+    The reserve keeps hundreds of MB of the low zones out of reach of kernel
+    allocations, which matters when Scylla leaves the kernel a small reserve.
+    The sysctl takes one ratio per zone, and the number of zones depends on
+    the kernel configuration, so it is written for the zones of the running
+    kernel.  Before Linux 4.17 a ratio below 1 was raised to 1, which reserves
+    the whole of the higher zones instead, so older kernels are left alone.
+    """
+    version = re.match(r'(\d+)\.(\d+)', platform.release())
+    if not version or tuple(map(int, version.groups())) < (4, 17):
+        print(f'Kernel {platform.release()} is older than Linux 4.17 or unknown, keeping vm.lowmem_reserve_ratio.')
+        return
+    with open(LOWMEM_RESERVE_RATIO) as f:
+        zones = len(f.read().split())
+    with open(SYSCTL_CONF, 'w') as f:
+        f.write('# Added by scylla_kernel_memory_setup: let the kernel use the low zones next to Scylla.\n')
+        f.write(f'vm.lowmem_reserve_ratio = {" ".join(["0"] * zones)}\n')
+    run(f'sysctl -p {SYSCTL_CONF}', shell=True, check=True)
+
+
+def try_step(name, step):
+    """Run a step; a failure is reported but doesn't fail the setup, which goes on with its other steps."""
+    try:
+        step()
+    except (CalledProcessError, OSError) as e:
+        print(f'{name} failed: {e}')
+
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Configure the kernel to keep the memory Scylla leaves to it usable.')
+    parser.parse_args()
+
+    try_step('Disabling Kexec HandOver', disable_kho)
+    try_step('Removing the low zone reserve', disable_lowmem_reserve)

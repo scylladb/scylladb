@@ -30,7 +30,7 @@ def test_syntax(name):
 
 ROOT_SCRIPTS = {name: [] for name in ['scylla_coredump_setup', 'scylla_cpuscaling_setup', 'scylla_cpuset_setup',
                                       'scylla_dev_mode_setup', 'scylla_fstrim_setup', 'scylla_io_setup',
-                                      'scylla_kernel_check', 'scylla_memory_setup', 'scylla_ntp_setup', 'scylla_prepare',
+                                      'scylla_kernel_check', 'scylla_kernel_memory_setup', 'scylla_memory_setup', 'scylla_ntp_setup', 'scylla_prepare',
                                       'scylla_rsyslog_setup', 'scylla_selinux_setup', 'scylla_stop', 'scylla_swap_setup',
                                       'scylla_sysconfig_setup']}
 ROOT_SCRIPTS |= {'scylla_raid_setup': ['--disks', '/dev/sdb'], 'scylla_setup': ['--no-raid-setup']}
