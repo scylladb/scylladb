@@ -1377,7 +1377,8 @@ The ``ALTER TABLE`` statement can:
   below. Due to lazy removal, the altering itself is a constant (in the amount of data removed or contained in the
   cluster) time operation. A column that an index or a materialized view uses cannot be removed; drop the index or
   the view first.
-- Change data type of the column to a compatible type.
+- Change data type of the column to a compatible type (through the ``ALTER`` instruction). See
+  :ref:`Changing the Type of a Column <alter-table-column-type>` for the supported type changes.
 - Change some of the table options (through the ``WITH`` instruction). The :ref:`supported options
   <create-table-options>` are the same that when creating a table (outside of ``COMPACT STORAGE`` and ``CLUSTERING
   ORDER`` that cannot be changed after creation). Note that setting any ``compaction`` sub-options has the effect of
@@ -1412,6 +1413,56 @@ Otherwise, you can resurrect your data (if you skip ``ALTER ... DROP/ADD ...`` e
 or you can lose data inserted after column re-addition (if you drop the column without the timestamp).
 
 .. warning:: Dropping a column with specified timestamp should only be used to restore schema from description (``DESCRIBE SCHEMA WITH INTERNALS``).
+
+.. _alter-table-column-type:
+
+Changing the Type of a Column
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``ALTER TABLE ... ALTER column_name TYPE cql_type`` changes the type of an existing column.
+The data already stored in the column is not rewritten. The following changes are supported,
+because the new type reads the stored values exactly as they are:
+
+.. list-table::
+   :widths: 30 30 40
+   :header-rows: 1
+
+   * - Current type
+     - New type
+     - Supported for
+   * - ``ascii``
+     - ``text`` (``varchar``)
+     - All columns
+   * - ``ascii``, ``text``
+     - ``blob``
+     - All columns
+   * - Any other native type, except ``counter``
+     - ``blob``
+     - Partition key, regular, and static columns
+   * - ``timeuuid``
+     - ``uuid``
+     - Partition key, regular, and static columns
+   * - ``bigint``
+     - ``timestamp``
+     - Partition key, regular, and static columns
+   * - ``timestamp``
+     - ``bigint``
+     - Partition key, regular, and static columns
+
+If the column is part of the primary key of a
+:doc:`materialized view </features/materialized-views>`, the change must also be supported for
+the column's role in the view. For example, if a regular column of the base table is a
+clustering column of a view, only the changes supported for all columns are allowed.
+
+Examples:
+
+.. code-block:: cql
+
+   CREATE TABLE events (id int, day text, at timestamp, note text, PRIMARY KEY (id, day));
+
+   ALTER TABLE events ALTER note TYPE blob;
+   ALTER TABLE events ALTER at TYPE bigint;
+   ALTER TABLE events ALTER day TYPE blob;
 
 .. _drop-table-statement:
 
