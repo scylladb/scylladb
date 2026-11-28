@@ -13,6 +13,9 @@
 #include "utils/serialization.hh"
 #include "test/lib/random_utils.hh"
 #include <boost/test/unit_test.hpp>
+#include <seastar/util/defer.hh>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <iterator>
 #include <memory>
 #include <unordered_set>
@@ -81,6 +84,50 @@ BOOST_AUTO_TEST_CASE(test_constructor_from_bytes) {
             BOOST_CHECK_EQUAL(to_bytes(m), b);
         }
     });
+}
+
+BOOST_AUTO_TEST_CASE(test_constructor_from_bytes_inline_sizes) {
+    auto buf = tests::random::get_bytes(64);
+    for (size_t offset : {0, 1, 7, 13}) {
+        for (size_t size = 0; size <= 17; ++size) {
+            auto b = bytes_view(buf).substr(offset, size);
+            auto m = managed_bytes(b);
+            BOOST_CHECK_EQUAL(m.size(), size);
+            BOOST_CHECK_EQUAL(to_bytes(m), bytes(b));
+            auto copy = m;
+            BOOST_CHECK_EQUAL(to_bytes(copy), bytes(b));
+            auto moved = std::move(copy);
+            BOOST_CHECK_EQUAL(to_bytes(moved), bytes(b));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_constructor_from_literal) {
+    // The compiler sees the whole source object, shorter than 16 bytes.
+    auto m = managed_bytes(bytes_view(reinterpret_cast<const int8_t*>("abcd"), 4));
+    BOOST_CHECK_EQUAL(m.size(), 4);
+    BOOST_CHECK_EQUAL(to_bytes(m), bytes(reinterpret_cast<const int8_t*>("abcd"), 4));
+}
+
+BOOST_AUTO_TEST_CASE(test_constructor_from_bytes_at_page_end) {
+    // Builds values which end close to an inaccessible page.
+    const size_t page = ::sysconf(_SC_PAGESIZE);
+    auto mem = static_cast<int8_t*>(::mmap(nullptr, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    BOOST_REQUIRE(mem != MAP_FAILED);
+    auto unmap = seastar::defer([&] () noexcept { ::munmap(mem, 2 * page); });
+    BOOST_REQUIRE_EQUAL(::mprotect(mem + page, page, PROT_NONE), 0);
+    auto random = tests::random::get_bytes(page);
+    std::memcpy(mem, random.data(), page);
+    BOOST_CHECK_EQUAL(managed_bytes(bytes_view()).size(), 0);
+    BOOST_CHECK_EQUAL(managed_bytes(bytes_view(mem + page, 0)).size(), 0);
+    for (size_t gap = 0; gap <= 16; ++gap) {
+        for (size_t size = 0; size <= 17; ++size) {
+            auto b = bytes_view(mem + page - gap - size, size);
+            auto m = managed_bytes(b);
+            BOOST_CHECK_EQUAL(m.size(), size);
+            BOOST_CHECK_EQUAL(to_bytes(m), bytes(b));
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(test_copy_constructor) {

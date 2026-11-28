@@ -17,7 +17,7 @@ class murmur3_partitioner final : public i_partitioner {
 public:
     murmur3_partitioner() = default;
     virtual const sstring name() const override { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
-    virtual token get_token(const schema& s, partition_key_view key) const override;
+    virtual token get_token(const schema& s, const partition_key_view& key) const override;
     virtual token get_token(const sstables::key_view& key) const override;
 private:
     token get_token(bytes_view key) const;

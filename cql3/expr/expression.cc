@@ -280,7 +280,7 @@ bool_or_null not_equal(const expression& lhs, const expression& rhs, const evalu
 }
 
 /// True iff lhs is limited by rhs in the manner prescribed by op.
-bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abstract_type& type) {
+bool limits(const managed_bytes_view& lhs, oper_t op, const managed_bytes_view& rhs, const abstract_type& type) {
     const auto cmp = type.compare(lhs, rhs);
     switch (op) {
     case oper_t::LT:

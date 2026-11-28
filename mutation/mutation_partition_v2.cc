@@ -576,7 +576,7 @@ mutation_partition_v2::apply_delete(const schema& schema, clustering_key&& prefi
 }
 
 void
-mutation_partition_v2::apply_delete(const schema& schema, clustering_key_prefix_view prefix, tombstone t) {
+mutation_partition_v2::apply_delete(const schema& schema, const clustering_key_prefix_view& prefix, tombstone t) {
     check_schema(schema);
     if (prefix.is_empty(schema)) {
         apply(t);
@@ -588,10 +588,10 @@ mutation_partition_v2::apply_delete(const schema& schema, clustering_key_prefix_
 }
 
 void
-mutation_partition_v2::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at) {
+mutation_partition_v2::apply_insert(const schema& s, const clustering_key_view& key, api::timestamp_type created_at) {
     clustered_row(s, key).apply(row_marker(created_at));
 }
-void mutation_partition_v2::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at,
+void mutation_partition_v2::apply_insert(const schema& s, const clustering_key_view& key, api::timestamp_type created_at,
         gc_clock::duration ttl, gc_clock::time_point expiry) {
     clustered_row(s, key).apply(row_marker(created_at, ttl, expiry));
 }
@@ -645,7 +645,7 @@ mutation_partition_v2::clustered_row(const schema& s, const clustering_key& key)
 }
 
 deletable_row&
-mutation_partition_v2::clustered_row(const schema& s, clustering_key_view key) {
+mutation_partition_v2::clustered_row(const schema& s, const clustering_key_view& key) {
     check_schema(s);
     check_row_key(s, key, is_dummy::no);
     auto i = _rows.find(key, rows_entry::tri_compare(s));

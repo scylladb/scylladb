@@ -493,7 +493,7 @@ mutation_partition::apply_delete(const schema& schema, clustering_key&& prefix, 
 }
 
 void
-mutation_partition::apply_delete(const schema& schema, clustering_key_prefix_view prefix, tombstone t) {
+mutation_partition::apply_delete(const schema& schema, const clustering_key_prefix_view& prefix, tombstone t) {
     check_schema(schema);
     if (prefix.is_empty(schema)) {
         apply(t);
@@ -505,10 +505,10 @@ mutation_partition::apply_delete(const schema& schema, clustering_key_prefix_vie
 }
 
 void
-mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at) {
+mutation_partition::apply_insert(const schema& s, const clustering_key_view& key, api::timestamp_type created_at) {
     clustered_row(s, key).apply(row_marker(created_at));
 }
-void mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at,
+void mutation_partition::apply_insert(const schema& s, const clustering_key_view& key, api::timestamp_type created_at,
         gc_clock::duration ttl, gc_clock::time_point expiry) {
     clustered_row(s, key).apply(row_marker(created_at, ttl, expiry));
 }
@@ -562,7 +562,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key& key) {
 }
 
 deletable_row&
-mutation_partition::clustered_row(const schema& s, clustering_key_view key) {
+mutation_partition::clustered_row(const schema& s, const clustering_key_view& key) {
     check_schema(s);
     check_row_key(s, key, is_dummy::no);
     auto i = _rows.find(key, rows_entry::tri_compare(s));
@@ -668,7 +668,7 @@ void mutation_partition::for_each_row(const schema& schema, const query::cluster
 }
 
 template<typename RowWriter>
-void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
+void write_cell(RowWriter& w, const query::partition_slice& slice, const ::atomic_cell_view& c) {
     SCYLLA_ASSERT(c.is_live());
     auto wr = w.add().write();
     auto after_timestamp = [&, wr = std::move(wr)] () mutable {
@@ -713,7 +713,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, data_type typ
 }
 
 template<typename RowWriter>
-void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
+void write_counter_cell(RowWriter& w, const query::partition_slice& slice, const ::atomic_cell_view& c) {
     SCYLLA_ASSERT(c.is_live());
     auto ccv = counter_cell_view(c);
     auto wr = w.add().write();

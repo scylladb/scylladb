@@ -148,7 +148,7 @@ public:
         { }
 
         // @k1 and @k2 must be serialized using @type, which was passed to the constructor.
-        std::strong_ordering operator()(managed_bytes_view k1, managed_bytes_view k2) const {
+        std::strong_ordering operator()(const managed_bytes_view& k1, const managed_bytes_view& k2) const {
             if (_type.is_singular()) {
                 return compare_unsigned(*_type.begin(k1), *_type.begin(k2));
             }

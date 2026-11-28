@@ -73,7 +73,7 @@ atomic_cell::atomic_cell(const abstract_type& type, atomic_cell_view other)
 // except that the cell value is used to break a tie in case all other attributes are equal.
 // See compare_row_marker_for_merge.
 std::strong_ordering
-compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
+compare_atomic_cell_for_merge(const atomic_cell_view& left, const atomic_cell_view& right) {
     // Largest write timestamp wins.
     if (left.timestamp() != right.timestamp()) {
         return left.timestamp() <=> right.timestamp();

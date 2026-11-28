@@ -17,6 +17,8 @@
 #include "utils/serialization.hh"
 #include "exceptions/exceptions.hh"
 #include <seastar/util/backtrace.hh>
+#include <seastar/core/byteorder.hh>
+#include <optional>
 
 enum class allow_prefixes { no, yes };
 
@@ -192,18 +194,30 @@ public:
             return i;
         }
         value_type operator*() const { return _current; }
+        // Refers to the current component, which changes when the iterator advances.
+        const managed_bytes_view& current() const noexcept { return _current; }
         bool operator==(const iterator& i) const { return _remaining == i._remaining; }
     };
-    static iterator begin(managed_bytes_view v) {
+    static iterator begin(const managed_bytes_view& v) {
         return iterator(v);
     }
-    static iterator end(managed_bytes_view v) {
+    static iterator end(const managed_bytes_view& v) {
         return iterator(typename iterator::end_iterator_tag(), v);
     }
-    static std::ranges::subrange<iterator> components(managed_bytes_view v) {
+    static std::ranges::subrange<iterator> components(const managed_bytes_view& v) {
         return std::ranges::subrange(begin(v), end(v));
     }
-    value_type deserialize_value(managed_bytes_view v) const {
+    // Returns the only component of the representation v, if v holds a single component
+    // and its bytes are contiguous.
+    static std::optional<bytes_view> single_contiguous_component(const managed_bytes_view& v) noexcept {
+        bytes_view frag = v.current_fragment();
+        if (frag.size() == v.size_bytes() && frag.size() >= sizeof(size_type)
+                && seastar::read_be<size_type>(reinterpret_cast<const char*>(frag.data())) == frag.size() - sizeof(size_type)) [[likely]] {
+            return frag.substr(sizeof(size_type));
+        }
+        return std::nullopt;
+    }
+    value_type deserialize_value(const managed_bytes_view& v) const {
         std::vector<bytes> result;
         result.reserve(_types.size());
         std::transform(begin(v), end(v), std::back_inserter(result), [] (auto&& v) {
@@ -211,7 +225,7 @@ public:
         });
         return result;
     }
-    bool less(managed_bytes_view b1, managed_bytes_view b2) const {
+    bool less(const managed_bytes_view& b1, const managed_bytes_view& b2) const {
         return with_linearized(b1, [&] (bytes_view bv1) {
             return with_linearized(b2, [&] (bytes_view bv2) {
                 return less(bv1, bv2);
@@ -221,7 +235,7 @@ public:
     bool less(bytes_view b1, bytes_view b2) const {
         return compare(b1, b2) < 0;
     }
-    size_t hash(managed_bytes_view v) const{
+    size_t hash(const managed_bytes_view& v) const{
         return with_linearized(v, [&] (bytes_view v) {
             return hash(v);
         });
@@ -238,7 +252,7 @@ public:
         }
         return h;
     }
-    std::strong_ordering compare(managed_bytes_view b1, managed_bytes_view b2) const {
+    std::strong_ordering compare(const managed_bytes_view& b1, const managed_bytes_view& b2) const {
         return with_linearized(b1, [&] (bytes_view bv1) {
             return with_linearized(b2, [&] (bytes_view bv2) {
                 return compare(bv1, bv2);
@@ -259,7 +273,7 @@ public:
             });
     }
     // Returns true iff given prefix has no missing components
-    bool is_full(managed_bytes_view v) const {
+    bool is_full(const managed_bytes_view& v) const {
         SCYLLA_ASSERT(AllowPrefixes == allow_prefixes::yes);
         if (_types.size() == 0) {
             return v.empty();
@@ -275,21 +289,25 @@ public:
     bool is_empty(bytes_view v) const {
         return begin(v) == end(v);
     }
-    void validate(managed_bytes_view v) const {
-        std::vector<managed_bytes_view> values(begin(v), end(v));
-        if (AllowPrefixes == allow_prefixes::no && values.size() < _types.size()) {
+    void validate(const managed_bytes_view& v) const {
+        size_t n_values = 0;
+        for (auto it = begin(v), e = end(v); it != e; ++it) {
+            ++n_values;
+        }
+        if (AllowPrefixes == allow_prefixes::no && n_values < _types.size()) {
             throw marshal_exception(fmt::format("compound::validate(): non-prefixable compound cannot be a prefix"));
         }
-        if (values.size() > _types.size()) {
+        if (n_values > _types.size()) {
             throw marshal_exception(fmt::format("compound::validate(): cannot have more values than types, have {} values but only {} types",
-                        values.size(), _types.size()));
+                        n_values, _types.size()));
         }
-        for (size_t i = 0; i != values.size(); ++i) {
+        auto type = _types.begin();
+        for (auto it = begin(v), e = end(v); it != e; ++it, ++type) {
             //FIXME: is it safe to assume internal serialization-format format?
-            _types[i]->validate(values[i]);
+            (*type)->validate(it.current());
         }
     }
-    bool equal(managed_bytes_view v1, managed_bytes_view v2) const {
+    bool equal(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
         return with_linearized(v1, [&] (bytes_view bv1) {
             return with_linearized(v2, [&] (bytes_view bv2) {
                 return equal(bv1, bv2);

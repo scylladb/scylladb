@@ -1327,10 +1327,10 @@ public:
     void apply_delete(const schema& schema, const clustering_key_prefix& prefix, tombstone t);
     void apply_delete(const schema& schema, range_tombstone rt);
     void apply_delete(const schema& schema, clustering_key_prefix&& prefix, tombstone t);
-    void apply_delete(const schema& schema, clustering_key_prefix_view prefix, tombstone t);
+    void apply_delete(const schema& schema, const clustering_key_prefix_view& prefix, tombstone t);
     // Equivalent to applying a mutation with an empty row, created with given timestamp
-    void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
-    void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at,
+    void apply_insert(const schema& s, const clustering_key_view&, api::timestamp_type created_at);
+    void apply_insert(const schema& s, const clustering_key_view&, api::timestamp_type created_at,
                       gc_clock::duration ttl, gc_clock::time_point expiry);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
@@ -1458,7 +1458,7 @@ public:
 public:
     deletable_row& clustered_row(const schema& s, const clustering_key& key);
     deletable_row& clustered_row(const schema& s, clustering_key&& key);
-    deletable_row& clustered_row(const schema& s, clustering_key_view key);
+    deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
     deletable_row& clustered_row(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
     rows_entry& clustered_rows_entry(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
     // Throws if the row already exists or if the row was not inserted to the

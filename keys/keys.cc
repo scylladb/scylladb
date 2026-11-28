@@ -22,13 +22,13 @@ partition_key_view::legacy_form(const schema& s) const {
 }
 
 std::strong_ordering
-partition_key_view::legacy_tri_compare(const schema& s, partition_key_view o) const {
+partition_key_view::legacy_tri_compare(const schema& s, const partition_key_view& o) const {
     auto cmp = legacy_compound_view<c_type>::tri_comparator(*get_compound_type(s));
     return cmp(this->representation(), o.representation());
 }
 
 std::strong_ordering
-partition_key_view::ring_order_tri_compare(const schema& s, partition_key_view k2) const {
+partition_key_view::ring_order_tri_compare(const schema& s, const partition_key_view& k2) const {
     auto t1 = dht::get_token(s, *this);
     auto t2 = dht::get_token(s, k2);
     if (t1 != t2) {

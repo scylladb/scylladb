@@ -444,15 +444,15 @@ public:
     serialized_tri_compare as_tri_comparator() const ;
     static data_type parse_type(const sstring& name);
     size_t hash(bytes_view v) const;
-    size_t hash(managed_bytes_view v) const;
+    size_t hash(const managed_bytes_view& v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
-    bool equal(managed_bytes_view v1, managed_bytes_view v2) const;
-    bool equal(managed_bytes_view v1, bytes_view v2) const;
-    bool equal(bytes_view v1, managed_bytes_view v2) const;
+    bool equal(const managed_bytes_view& v1, const managed_bytes_view& v2) const;
+    bool equal(const managed_bytes_view& v1, bytes_view v2) const;
+    bool equal(bytes_view v1, const managed_bytes_view& v2) const;
     std::strong_ordering compare(bytes_view v1, bytes_view v2) const;
-    std::strong_ordering compare(managed_bytes_view v1, managed_bytes_view v2) const;
-    std::strong_ordering compare(managed_bytes_view v1, bytes_view v2) const;
-    std::strong_ordering compare(bytes_view v1, managed_bytes_view v2) const;
+    std::strong_ordering compare(const managed_bytes_view& v1, const managed_bytes_view& v2) const;
+    std::strong_ordering compare(const managed_bytes_view& v1, bytes_view v2) const;
+    std::strong_ordering compare(bytes_view v1, const managed_bytes_view& v2) const;
 private:
     // Explicitly instantiated in .cc
     template <FragmentedView View> data_value deserialize_impl(View v) const;
@@ -691,13 +691,13 @@ using bytes_view_opt = std::optional<bytes_view>;
 using managed_bytes_view_opt = std::optional<managed_bytes_view>;
 
 inline
-std::strong_ordering tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
+std::strong_ordering tri_compare(data_type t, const managed_bytes_view& e1, const managed_bytes_view& e2) {
     return t->compare(e1, e2);
 }
 
 inline
 std::strong_ordering
-tri_compare_opt(data_type t, managed_bytes_view_opt v1, managed_bytes_view_opt v2) {
+tri_compare_opt(data_type t, const managed_bytes_view_opt& v1, const managed_bytes_view_opt& v2) {
     if (!v1 || !v2) {
         return bool(v1) <=> bool(v2);
     } else {
@@ -706,7 +706,7 @@ tri_compare_opt(data_type t, managed_bytes_view_opt v1, managed_bytes_view_opt v
 }
 
 inline
-bool equal(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
+bool equal(data_type t, const managed_bytes_view& e1, const managed_bytes_view& e2) {
     return t->equal(e1, e2);
 }
 

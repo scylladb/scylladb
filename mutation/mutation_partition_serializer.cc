@@ -20,7 +20,7 @@ using namespace db;
 namespace {
 
 template<typename Writer>
-auto write_live_cell(Writer&& writer, atomic_cell_view c)
+auto write_live_cell(Writer&& writer, const atomic_cell_view& c)
 {
     return std::move(writer).write_created_at(c.timestamp())
                             .write_fragmented_value(fragment_range(c.value()))
@@ -28,7 +28,7 @@ auto write_live_cell(Writer&& writer, atomic_cell_view c)
 }
 
 template<typename Writer>
-auto write_counter_cell(Writer&& writer, atomic_cell_view c)
+auto write_counter_cell(Writer&& writer, const atomic_cell_view& c)
 {
     auto value = std::move(writer).write_created_at(c.timestamp());
     return [&c, value = std::move(value)] () mutable {
@@ -50,7 +50,7 @@ auto write_counter_cell(Writer&& writer, atomic_cell_view c)
 }
 
 template<typename Writer>
-auto write_expiring_cell(Writer&& writer, atomic_cell_view c)
+auto write_expiring_cell(Writer&& writer, const atomic_cell_view& c)
 {
     return std::move(writer).write_ttl(c.ttl())
                             .write_expiry(c.expiry())
@@ -62,7 +62,7 @@ auto write_expiring_cell(Writer&& writer, atomic_cell_view c)
 }
 
 template<typename Writer>
-auto write_dead_cell(Writer&& writer, atomic_cell_view c)
+auto write_dead_cell(Writer&& writer, const atomic_cell_view& c)
 {
     return std::move(writer).start_tomb()
                                 .write_timestamp(c.timestamp())
@@ -72,7 +72,7 @@ auto write_dead_cell(Writer&& writer, atomic_cell_view c)
 }
 
 template<typename Writer>
-auto write_collection_cell(Writer&& collection_writer, collection_mutation_view cmv, const column_definition& def)
+auto write_collection_cell(Writer&& collection_writer, const collection_mutation_view& cmv, const column_definition& def)
 {
   auto cells_writer = std::move(collection_writer).write_tomb(cmv.tomb()).start_elements();
     for (auto&& [key, cell] : cmv) {

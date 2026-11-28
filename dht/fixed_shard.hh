@@ -52,7 +52,7 @@ struct fixed_shard_partitioner final : public dht::i_partitioner {
 
     fixed_shard_partitioner() = default;
     virtual const sstring name() const override;
-    virtual dht::token get_token(const schema& s, partition_key_view key) const override;
+    virtual dht::token get_token(const schema& s, const partition_key_view& key) const override;
     virtual dht::token get_token(const sstables::key_view& key) const override;
 
     static dht::token token_for_shard(uint16_t shard, uint64_t hash_bits);

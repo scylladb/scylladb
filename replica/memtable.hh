@@ -183,7 +183,7 @@ private:
 
     public:
         memtable_encoding_stats_collector() noexcept;
-        void update(atomic_cell_view cell) noexcept;
+        void update(const atomic_cell_view& cell) noexcept;
 
         void update(tombstone tomb) noexcept;
 

@@ -24,7 +24,7 @@ collection_mutation::collection_mutation() : _data(managed_bytes::initialized_la
     write<int32_t>(out, 0); // No cells
 }
 
-collection_mutation::collection_mutation(collection_mutation_view v)
+collection_mutation::collection_mutation(const collection_mutation_view& v)
     : _data(v.data) {}
 
 collection_mutation::collection_mutation(managed_bytes data)
@@ -386,7 +386,7 @@ collection_mutation collection_mutation_writer::finish() && {
 template <typename C>
 requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>
 static collection_mutation
-merge(collection_mutation_view a, collection_mutation_view b, C&& key_type) {
+merge(const collection_mutation_view& a, const collection_mutation_view& b, C&& key_type) {
     using element_type = collection_mutation_view::iterator::value_type;
 
     auto compare = [&] (const element_type& e1, const element_type& e2) {
@@ -450,7 +450,7 @@ collection_mutation merge(const abstract_type& type, collection_mutation_view a,
 template <typename C>
 requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>
 static collection_mutation
-difference(collection_mutation_view a, collection_mutation_view b, C&& key_type)
+difference(const collection_mutation_view& a, const collection_mutation_view& b, C&& key_type)
 {
     using element_type = collection_mutation_view::iterator::value_type;
 

@@ -1497,7 +1497,7 @@ inline void skip(Input& v, std::type_identity<{t}>) {{
 template<typename Input>
 {t} deserialize(Input& v, std::type_identity<{t}>) {{
   return seastar::with_serialized_stream(v, [] (auto& v) {{
-    auto in = v;
+    auto in = ser::copy_stream(v);
     deserialize(in, std::type_identity<size_type>());
     size_type o = deserialize(in, std::type_identity<size_type>());
     """)
@@ -1522,8 +1522,10 @@ def add_view(cout, cls):
     if not is_stub(cls.name) and is_local_writable_type(cls.name):
         fprintln(cout, reindent(4, f"""
             operator {cls.name}() const {{
-               auto in = v;
-               return deserialize(in, std::type_identity<{cls.name}>());
+               return seastar::with_serialized_stream(v, [] (auto& v) {{
+                   auto in = ser::copy_stream(v);
+                   return deserialize(in, std::type_identity<{cls.name}>());
+               }});
             }}
         """))
 
@@ -1552,7 +1554,7 @@ def add_view(cout, cls):
             fprintln(cout, reindent(4, """
                 auto {name}() const {{
                   return seastar::with_serialized_stream(v, [] (auto& v) {{
-                   auto in = v;
+                   auto in = ser::copy_stream(v);
                    {skip}
                    return vector_deserializer<{elem_type}>(in);
                   }});
@@ -1563,7 +1565,7 @@ def add_view(cout, cls):
                 auto {name}() const {{
                   return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), std::type_identity<{full_type}>())) {{
                    std::ignore = this;
-                   auto in = v;
+                   auto in = ser::copy_stream(v);
                    {skip}
                    return {deser};
                   }});
@@ -1609,7 +1611,7 @@ def add_view(cout, cls):
             using all_type = std::tuple<{types}>;
             all_type read_all() const {{
               return seastar::with_serialized_stream(v, [] (auto& v) -> all_type {{
-               auto in = v;
+               auto in = ser::copy_stream(v);
                {body}
                return all_type({locals});
               }});
@@ -1627,7 +1629,7 @@ struct serializer<{cls.name}_view> {{
     template<typename Input>
     static {cls.name}_view read(Input& v) {{
       return seastar::with_serialized_stream(v, [] (auto& v) {{
-        auto v_start = v;
+        auto v_start = ser::copy_stream(v);
         auto start_size = v.size();
         skip(v);
         return {cls.name}_view{{v_start.read_substream(start_size - v.size())}};

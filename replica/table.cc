@@ -800,7 +800,7 @@ public:
         ret.push_back(_single_sg);
         return ret;
     }
-    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override {
+    compaction_group& compaction_group_for_key(const partition_key_view& key, const schema_ptr& s) const override {
         return get_compaction_group();
     }
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override {
@@ -1003,7 +1003,7 @@ public:
     compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_ranges(noncopyable_function<std::optional<dht::token_range>()> next_token_range) const override;
-    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
+    compaction_group& compaction_group_for_key(const partition_key_view& key, const schema_ptr& s) const override;
     compaction_group& compaction_group_for_token_range(sstring desc, dht::token first_token, dht::token last_token) const;
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
     compaction_group& compaction_group_for_logstor_segment(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) const override;
@@ -1611,11 +1611,11 @@ table::storage_groups_for_token_ranges(noncopyable_function<std::optional<dht::t
     return _sg_manager->storage_groups_for_token_ranges(std::move(next_token_range));
 }
 
-compaction_group& tablet_storage_group_manager::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const {
+compaction_group& tablet_storage_group_manager::compaction_group_for_key(const partition_key_view& key, const schema_ptr& s) const {
     return compaction_group_for_token(dht::get_token(*s, key));
 }
 
-compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const {
+compaction_group& table::compaction_group_for_key(const partition_key_view& key, const schema_ptr& s) const {
     return _sg_manager->compaction_group_for_key(key, s);
 }
 
