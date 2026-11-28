@@ -411,12 +411,11 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
             auto info = get_peer_info_for_update(id);
             if (info) {
                 // And then amend with the info from raft
-                info->tokens = rs.ring.value().tokens;
                 info->data_center = rs.datacenter;
                 info->rack = rs.rack;
                 info->release_version = rs.release_version;
-                info->supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
-                sys_ks_futures.push_back(_sys_ks.local().update_peer_info(ip, id, *info));
+                sys_ks_futures.push_back(_sys_ks.local().update_peer_info(ip, id, std::move(*info),
+                        &rs.ring.value().tokens, &rs.supported_features));
             }
 
             if (nodes_to_notify) {
@@ -507,7 +506,11 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         // Also ip -> id mapping is needed for address map recreation on reboot
         if (is_me(host_id)) {
             sys_ks_futures.push_back(_sys_ks.local().update_tokens(rs.ring.value().tokens));
-            co_await _gossiper.add_local_application_state(std::pair(gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens)));
+            auto status = gms::versioned_value::normal(rs.ring.value().tokens);
+            auto* cur = _gossiper.get_application_state_ptr(host_id, gms::application_state::STATUS);
+            if (!cur || cur->value() != status.value()) {
+                co_await _gossiper.add_local_application_state(std::pair(gms::application_state::STATUS, std::move(status)));
+            }
         }
         update_topology(host_id, rs);
         co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
@@ -1925,7 +1928,7 @@ future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id
         if (!is_me(endpoint)) {
             slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
             if (auto info = get_peer_info_for_update(host_id, states)) {
-                co_await _sys_ks.local().update_peer_info(endpoint, host_id, *info);
+                co_await _sys_ks.local().update_peer_info(endpoint, host_id, std::move(*info));
             }
         }
         if (states.contains(application_state::RPC_READY)) {
