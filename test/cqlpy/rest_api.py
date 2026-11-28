@@ -25,11 +25,12 @@ def get_request(cql, *path):
         skip_env("REST API not available")
 
 # Sends POST request to REST API. Response is returned as JSON or None
-# if the response body was empty (this is typical).
+# if the response body was empty (this is typical). The optional "json" is
+# sent as the request's body.
 # If API isn't available, `skip_env()` is called.
-def post_request(cql, *path):
+def post_request(cql, *path, json=None):
     if nodetool.has_rest_api(cql):
-        response = requests.post(f"{nodetool.rest_api_url(cql)}/{'/'.join(path)}")
+        response = requests.post(f"{nodetool.rest_api_url(cql)}/{'/'.join(path)}", json=json)
         if not response.text:
             return None
         return response.json()
@@ -68,9 +69,10 @@ def get_column_family_metric(cql, metric, table=None):
 # Scylla. Also, only works in specific build modes (dev, debug, sanitize).
 # When Cassandra or non-supporting build of Scylla is being tested, using
 # this function will cause the calling test to be skipped.
+# The optional "parameters" is a dict of string parameters for the injection.
 @contextmanager
-def scylla_inject_error(cql, err, one_shot=False):
-    post_request(cql, f'v2/error_injection/injection/{err}?one_shot={one_shot}')
+def scylla_inject_error(cql, err, one_shot=False, parameters=None):
+    post_request(cql, f'v2/error_injection/injection/{err}?one_shot={one_shot}', json=parameters)
     response = get_request(cql, f'v2/error_injection/injection')
     print("Enabled error injections:", response)
     if not err in response:
@@ -90,6 +92,17 @@ def wait_for_injection_enter(cql, err, timeout=60):
     while get_request(cql, f'v2/error_injection/injection/{err}/enters') == 0:
         assert time.monotonic() < deadline, f'timed out waiting for injection {err}'
         tick.wait(0.01)
+
+# Waits until the code of the given error injection sets the given parameter,
+# on any shard. Unlike wait_for_injection_enter(), this works for injections
+# whose code pauses only some of the fibers that reach it, and sets a parameter
+# (e.g., "suspended") when it does.
+def wait_for_injection_parameter(cql, err, parameter, timeout=60):
+    deadline = time.monotonic() + timeout
+    while not any(p['key'] == parameter for shard in get_request(cql, f'v2/error_injection/injection/{err}')
+                  for p in shard.get('parameters', [])):
+        assert time.monotonic() < deadline, f'timed out waiting for injection {err} to set {parameter}'
+        time.sleep(0.01)
 
 # Sends a message to a fiber paused on the given error injection, resuming it.
 def message_injection(cql, err):

@@ -1062,12 +1062,30 @@ private:
             return can_never_purge;
         }
         return [this] (const dht::decorated_key& dk, is_shadowable is_shadowable) {
+<<<<<<< HEAD
             return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, !_tombstone_gc_state.is_commitlog_check_enabled(),
                     _skip_memtable_for_tombstone_gc, is_shadowable);
+||||||| parent of 439d1322b5 (compaction: don't purge tombstones over data flushed during compaction)
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp,
+                    _gc_scope, is_shadowable);
+=======
+            // The compactor asks this before it hands the partition to the writer
+            // (and never hands over a fully purged partition), so on_new_partition()
+            // hasn't yet applied the replacements and flushes queued since the
+            // previous partition.
+            update_pending_ranges();
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp,
+                    _gc_scope, is_shadowable);
+>>>>>>> 439d1322b5 (compaction: don't purge tombstones over data flushed during compaction)
         };
     }
 
     virtual void on_new_partition() {}
+
+    // Applies to the snapshot of sstables, which the compaction consults for
+    // data that tombstones delete, the sstable replacements and flushes that
+    // happened since it was taken (see compaction_manager::propagate_replacement()).
+    virtual void update_pending_ranges() {}
 
     virtual void on_end_of_compaction() {};
 
@@ -1463,7 +1481,7 @@ private:
         }
     }
 
-    void update_pending_ranges() {
+    void update_pending_ranges() override {
         auto pending_replacements = std::exchange(_cdata.pending_replacements, {});
         if (!_sstable_set || _sstable_set->all()->empty() || pending_replacements.empty()) { // set can be empty for testing scenario.
             return;
@@ -1478,6 +1496,34 @@ private:
                     continue;
                 }
                 _sstable_set->erase(sst);
+<<<<<<< HEAD
+||||||| parent of 439d1322b5 (compaction: don't purge tombstones over data flushed during compaction)
+                replaces_snapshot_sstable = true;
+            }
+            // If none of the removed sstables is in the snapshot, the added ones hold only data
+            // which was not in it either: data written or flushed after the snapshot was taken.
+            // A compaction with a narrowed gc scope has established that no GC-eligible tombstone
+            // can shadow such data, see tombstone_gc_scope, so it has no reason to consult them.
+            // Adding them anyway lets data written during a long compaction block the purge of
+            // tombstones, once another compaction happens to rewrite it.
+            // Otherwise the added sstables must be consulted: they hold data of the snapshot.
+            if (!replaces_snapshot_sstable && _gc_scope != tombstone_gc_scope::all) {
+                continue;
+=======
+                replaces_snapshot_sstable = true;
+            }
+            // If none of the removed sstables is in the snapshot, the added ones hold only data
+            // which was not in it either: data written or flushed after the snapshot was taken.
+            // A compaction with a narrowed gc scope has established that no GC-eligible tombstone
+            // can shadow such data, see tombstone_gc_scope, so it has no reason to consult them.
+            // Adding them anyway lets data written during a long compaction block the purge of
+            // tombstones, once another compaction happens to rewrite it.
+            // Otherwise the added sstables must be consulted: they hold data of the snapshot, or
+            // data flushed from the memtables, which get_max_purgeable_timestamp() consulted
+            // instead (see table::update_cache()).
+            if (!replaces_snapshot_sstable && _gc_scope != tombstone_gc_scope::all) {
+                continue;
+>>>>>>> 439d1322b5 (compaction: don't purge tombstones over data flushed during compaction)
             }
             for (auto& sst : pending_replacement.added) {
                 _sstable_set->insert(sst);
