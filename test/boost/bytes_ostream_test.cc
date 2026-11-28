@@ -621,6 +621,16 @@ BOOST_AUTO_TEST_CASE(test_reserve_untouched_equality) {
     BOOST_REQUIRE(bytes_ostream() == reserved);
 }
 
+BOOST_AUTO_TEST_CASE(test_write_place_holder_past_4g_throws) {
+    bytes_ostream buf;
+    buf.write(bytes("a"));
+    BOOST_REQUIRE_THROW(buf.write_place_holder(0xFFFFFFFF), std::length_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_write_place_holder_over_32bit_throws) {
+    BOOST_REQUIRE_THROW(bytes_ostream{}.write_place_holder((size_t(1) << 32) + 1), std::length_error);
+}
+
 // Deserializing a bytes field into a bytes_ostream must yield one chunk.
 BOOST_AUTO_TEST_CASE(test_deserialize_bytes_ostream_single_chunk) {
     for (size_t n : {size_t(600), size_t(5000), size_t(100000), size_t(300000)}) {
