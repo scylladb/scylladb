@@ -116,6 +116,31 @@ future<> default_authorizer::revoke(std::string_view role_name, permission_set s
     return modify(role_name, std::move(set), resource, "-", mc);
 }
 
+future<std::vector<permission_details>> default_authorizer::list_granted_to(std::string_view role_name) const {
+    const sstring query = seastar::format("SELECT {}, {} FROM {}.{} WHERE {} = ?",
+            RESOURCE_NAME,
+            PERMISSIONS_NAME,
+            db::system_keyspace::NAME,
+            PERMISSIONS_CF,
+            ROLE_NAME);
+
+    const auto results = co_await _qp.execute_internal(
+            query,
+            db::consistency_level::ONE,
+            internal_distributed_query_state(),
+            {sstring(role_name)},
+            cql3::query_processor::cache_internal::yes);
+
+    std::vector<permission_details> details;
+    for (const auto& row : *results) {
+        if (row.has(PERMISSIONS_NAME)) {
+            details.push_back(permission_details{sstring(role_name), parse_resource(row.get_as<sstring>(RESOURCE_NAME)),
+                    permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME))});
+        }
+    }
+    co_return details;
+}
+
 future<std::vector<permission_details>> default_authorizer::list_all() const {
     const sstring query = seastar::format("SELECT {}, {}, {} FROM {}.{}",
             ROLE_NAME,
@@ -156,8 +181,11 @@ future<> default_authorizer::revoke_all(std::string_view role_name, ::service::g
 }
 
 future<> default_authorizer::revoke_all(const resource& resource, ::service::group0_batch& mc) {
-    if (resource.kind() == resource_kind::data &&
-            data_resource_view(resource).is_keyspace()) {
+    // A keyspace owns its tables, and a table, datacenter, rack or node can have config
+    // option sub-resources. All of them are below the resource's name.
+    const bool has_children = (resource.kind() == resource_kind::data && data_resource_view(resource).keyspace())
+            || (resource.kind() == resource_kind::cluster && cluster_resource_view(resource).datacenter());
+    if (has_children && !resource.config_option()) {
         revoke_all_keyspace_resources(resource, mc);
         co_return;
     }

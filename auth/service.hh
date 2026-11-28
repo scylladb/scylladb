@@ -367,6 +367,9 @@ future<> revoke_permissions(
         ::service::group0_batch&);
 
 ///
+/// Revoke the CONFIGURE permissions that are narrowed to a cluster config option of the resource.
+future<> revoke_config_option_permissions(const service&, std::string_view role_name, const resource&, ::service::group0_batch&);
+
 /// Revoke all permissions granted to any role for a particular resource.
 ///
 /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.

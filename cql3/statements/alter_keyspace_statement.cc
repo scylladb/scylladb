@@ -22,6 +22,8 @@
 #include <seastar/coroutine/exception.hh>
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "cql3/statements/cluster_config_props.hh"
+#include "auth/resource.hh"
 #include "service/topology_mutation.hh"
 #include "db/system_keyspace.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -54,7 +56,20 @@ const sstring& cql3::statements::alter_keyspace_statement::keyspace() const {
 }
 
 future<> cql3::statements::alter_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_keyspace_access(_name, auth::permission::ALTER);
+    const auto& feat = qp.proxy().features();
+    const auto ensure_alter = [&] {
+        return state.has_keyspace_access(_name, auth::permission::ALTER);
+    };
+    const auto resource = auth::make_data_resource(_name);
+    // A statement that only sets cluster config options needs no ALTER on the keyspace,
+    // but the keyspace must still be one that may be altered.
+    if (!feat.cluster_config_rbac || !_attrs->has_keyspace_config_properties(feat) || _attrs->has_non_keyspace_config_properties(feat)) {
+        co_await ensure_alter();
+    } else {
+        co_await state.check_alter_rules(_name, resource);
+    }
+    co_await cluster_config_props::ensure_config_access(state, feat, resource,
+            _attrs->get_keyspace_config_names(feat), ensure_alter);
 }
 
 static unsigned get_abs_rf_diff(const locator::replication_strategy_config_option& curr_rf, const locator::replication_strategy_config_option& new_rf) {

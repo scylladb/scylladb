@@ -25,6 +25,8 @@
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "cql3/statements/cluster_config_props.hh"
+#include "auth/resource.hh"
 #include "mutation/timestamp.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
@@ -81,7 +83,23 @@ future<> alter_table_statement::check_access(query_processor& qp, const service:
             type = cdt::ALTER_WITH_OPTS;
         }
     }
-    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER, type);
+    const auto ensure_alter = [&] {
+        return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER, type);
+    };
+    if (_type != type::opts) {
+        co_return co_await ensure_alter();
+    }
+    const auto& feat = qp.proxy().features();
+    const auto resource = auth::make_data_resource(keyspace(), column_family());
+    // A statement that only sets cluster config options needs no ALTER on the table, but
+    // the table must still be one that may be altered.
+    if (!feat.cluster_config_rbac || !_properties->has_table_config_properties(feat) || _properties->has_non_table_config_properties(feat)) {
+        co_await ensure_alter();
+    } else {
+        co_await state.check_alter_rules(keyspace(), resource, type);
+    }
+    co_await cluster_config_props::ensure_config_access(state, feat, resource,
+            _properties->get_config_names(feat), ensure_alter);
 }
 
 static data_type validate_alter(const schema& schema, const column_definition& def, const cql3_type& validator)

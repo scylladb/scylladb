@@ -83,6 +83,15 @@ enum class option_kind : uint8_t {
     db_config,
 };
 
+// Who may set a table-oriented option at KEYSPACE or TABLE scope.
+//   restricted: only a role with the CONFIGURE permission for the option.
+//   owner_settable: also a role with ALTER on the keyspace or table.
+// At every other scope CONFIGURE is always required.
+enum class option_access : uint8_t {
+    restricted,
+    owner_settable,
+};
+
 // Inclusive bounds on the value of an integer option.
 struct integer_range {
     int64_t min;
@@ -109,6 +118,7 @@ struct option {
     // an integer option, and the default must fall within it. A db_config option bound to an
     // integral db::config entry narrower than int64_t must declare one that fits the entry's type.
     std::optional<integer_range> valid_range = std::nullopt;
+    option_access access = option_access::restricted;
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());

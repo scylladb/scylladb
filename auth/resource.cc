@@ -11,8 +11,12 @@
 #include "auth/resource.hh"
 
 #include <algorithm>
-#include <fmt/core.h>
+#include <cctype>
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <iterator>
+#include <ranges>
+#include <string>
 #include <unordered_map>
 
 #include <boost/algorithm/string/split.hpp>
@@ -33,14 +37,52 @@ static const std::unordered_map<resource_kind, std::string_view> roots{
         {resource_kind::role, "roles"},
         {resource_kind::service_level, "service_levels"},
         {resource_kind::functions, "functions"},
-        {resource_kind::object_storage, "object_storage"}};
+        {resource_kind::object_storage, "object_storage"},
+        {resource_kind::cluster, "cluster"}};
 
 static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::data, 2},
         {resource_kind::role, 1},
         {resource_kind::service_level, 0},
         {resource_kind::functions, 2},
-        {resource_kind::object_storage, 0}};
+        {resource_kind::object_storage, 0},
+        {resource_kind::cluster, 3}};
+
+// The last part of the name of a config option sub-resource is this prefix followed by
+// the option name. No keyspace or table name contains '@' (CQL names are word characters;
+// Alternator adds '.', '-', and ':' and '!' in view names), and datacenter and rack names
+// are stored encoded, so the part cannot be mistaken for one of those.
+static constexpr std::string_view config_option_prefix = "@config:";
+
+// Datacenter and rack names are free-form, while '/' separates the parts of a resource
+// name. Everything outside [A-Za-z0-9_.-] is percent-encoded in the stored name.
+static sstring encode_part(std::string_view s) {
+    std::string out;
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '_' || c == '.' || c == '-') {
+            out.push_back(c);
+        } else {
+            fmt::format_to(std::back_inserter(out), "%{:02X}", unsigned(c));
+        }
+    }
+    return sstring(out);
+}
+
+static sstring decode_part(std::string_view s, std::string_view name) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] != '%') {
+            out.push_back(s[i]);
+            continue;
+        }
+        if (i + 2 >= s.size() || !std::isxdigit(static_cast<unsigned char>(s[i + 1])) || !std::isxdigit(static_cast<unsigned char>(s[i + 2]))) {
+            throw invalid_resource_name(name);
+        }
+        out.push_back(static_cast<char>(std::stoi(std::string(s.substr(i + 1, 2)), nullptr, 16)));
+        i += 2;
+    }
+    return sstring(out);
+}
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
 
@@ -51,7 +93,8 @@ static permission_set applicable_permissions(const data_resource_view& dv) {
                 permission::DROP,
                 permission::SELECT,
                 permission::MODIFY,
-                permission::AUTHORIZE>();
+                permission::AUTHORIZE,
+                permission::CONFIGURE>();
 
     if (!dv.table()) {
         set.add(permission_set::of<permission::CREATE>());
@@ -110,6 +153,10 @@ static permission_set applicable_permissions(const object_storage_resource_view&
             permission::AUTHORIZE>();
 }
 
+static permission_set applicable_permissions(const cluster_resource_view&) {
+    return permission_set::of<permission::CONFIGURE, permission::AUTHORIZE>();
+}
+
 resource::resource(resource_kind kind) : _kind(kind) {
     _parts.emplace_back(roots.at(kind));
 }
@@ -159,11 +206,54 @@ resource::resource(functions_resource_t, std::string_view keyspace, std::string_
     }
 }
 
+resource::resource(cluster_resource_t) : resource(resource_kind::cluster) {
+}
+
+resource::resource(cluster_resource_t, std::string_view dc) : resource(resource_kind::cluster) {
+    _parts.emplace_back(dc);
+}
+
+resource::resource(cluster_resource_t, std::string_view dc, std::string_view rack) : resource(resource_kind::cluster) {
+    _parts.emplace_back(dc);
+    _parts.emplace_back(rack);
+}
+
+resource::resource(cluster_resource_t, std::string_view dc, std::string_view rack, std::string_view host_id) : resource(resource_kind::cluster) {
+    _parts.emplace_back(dc);
+    _parts.emplace_back(rack);
+    _parts.emplace_back(host_id);
+}
+
 sstring resource::name() const {
-    return fmt::to_string(fmt::join(_parts, "/"));
+    sstring base;
+    if (_kind == resource_kind::cluster) {
+        base = fmt::to_string(fmt::join(_parts | std::views::transform(encode_part), "/"));
+    } else {
+        base = fmt::to_string(fmt::join(_parts, "/"));
+    }
+    if (_config_option) {
+        return seastar::format("{}/{}{}", base, config_option_prefix, *_config_option);
+    }
+    return base;
+}
+
+resource resource::with_config_option(std::string_view option) const {
+    resource copy = *this;
+    copy._config_option = sstring(option);
+    return copy;
+}
+
+resource resource::without_config_option() const {
+    resource copy = *this;
+    copy._config_option.reset();
+    return copy;
 }
 
 std::optional<resource> resource::parent() const {
+    if (_config_option) {
+        return without_config_option();
+    }
+
     if (_parts.size() == 1) {
         return {};
     }
@@ -174,6 +264,10 @@ std::optional<resource> resource::parent() const {
 }
 
 permission_set resource::applicable_permissions() const {
+    if (_config_option) {
+        return permission_set::of<permission::CONFIGURE>();
+    }
+
     permission_set ps;
 
     switch (_kind) {
@@ -182,6 +276,7 @@ permission_set resource::applicable_permissions() const {
         case resource_kind::service_level: ps = ::auth::applicable_permissions(service_level_resource_view(*this)); break;
         case resource_kind::functions: ps = ::auth::applicable_permissions(functions_resource_view(*this)); break;
         case resource_kind::object_storage: ps = ::auth::applicable_permissions(object_storage_resource_view(*this)); break;
+        case resource_kind::cluster: ps = ::auth::applicable_permissions(cluster_resource_view(*this)); break;
     }
 
     return ps;
@@ -192,11 +287,42 @@ bool operator<(const resource& r1, const resource& r2) {
         return r1._kind < r2._kind;
     }
 
-    return std::lexicographical_compare(
-            r1._parts.cbegin() + 1,
-            r1._parts.cend(),
-            r2._parts.cbegin() + 1,
-            r2._parts.cend());
+    if (!std::ranges::equal(r1._parts, r2._parts)) {
+        return std::lexicographical_compare(
+                r1._parts.cbegin() + 1,
+                r1._parts.cend(),
+                r2._parts.cbegin() + 1,
+                r2._parts.cend());
+    }
+
+    return r1._config_option < r2._config_option;
+}
+
+cluster_resource_view::cluster_resource_view(const resource& r) : _resource(r) {
+    if (r._kind != resource_kind::cluster) {
+        throw resource_kind_mismatch(resource_kind::cluster, r._kind);
+    }
+}
+
+std::optional<std::string_view> cluster_resource_view::datacenter() const {
+    if (_resource._parts.size() <= 1) {
+        return {};
+    }
+    return _resource._parts[1];
+}
+
+std::optional<std::string_view> cluster_resource_view::rack() const {
+    if (_resource._parts.size() <= 2) {
+        return {};
+    }
+    return _resource._parts[2];
+}
+
+std::optional<std::string_view> cluster_resource_view::host_id() const {
+    if (_resource._parts.size() <= 3) {
+        return {};
+    }
+    return _resource._parts[3];
 }
 
 service_level_resource_view::service_level_resource_view(const resource &r) {
@@ -362,11 +488,27 @@ resource parse_resource(std::string_view name) {
     const auto kind = iter->second;
     parts.erase(parts.begin());
 
+    // Other kinds have no config options; a role or a function may be called "@config:...".
+    std::optional<sstring> config_option;
+    if ((kind == resource_kind::data || kind == resource_kind::cluster)
+            && !parts.empty() && parts.back().starts_with(config_option_prefix)) {
+        config_option = parts.back().substr(config_option_prefix.size());
+        parts.pop_back();
+    }
+
     if (parts.size() > max_parts.at(kind)) {
         throw invalid_resource_name(name);
     }
 
-    return resource(kind, std::move(parts));
+    if (kind == resource_kind::cluster) {
+        for (auto& part : parts) {
+            part = decode_part(part, name);
+        }
+    }
+
+    resource r(kind, std::move(parts));
+    r._config_option = std::move(config_option);
+    return r;
 }
 
 static const resource the_root_data_resource{resource_kind::data};
@@ -391,6 +533,22 @@ static const resource the_root_object_storage_resource{resource_kind::object_sto
 
 const resource& root_object_storage_resource() {
     return the_root_object_storage_resource;
+}
+
+static const resource the_root_cluster_resource{resource_kind::cluster};
+
+const resource& root_cluster_resource() {
+    return the_root_cluster_resource;
+}
+
+std::optional<resource> config_scope_parent(const resource& r) {
+    if (auto p = r.parent()) {
+        return p;
+    }
+    if (r.kind() == resource_kind::data) {
+        return the_root_cluster_resource;
+    }
+    return {};
 }
 
 resource_set expand_resource_family(const resource& rr) {
@@ -467,6 +625,22 @@ template <> struct fmt::formatter<auth::object_storage_resource_view> {
     }
 };
 
+template <> struct fmt::formatter<auth::cluster_resource_view> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const auth::cluster_resource_view& v, fmt::format_context& ctx) const {
+        if (const auto host_id = v.host_id()) {
+            return fmt::format_to(ctx.out(), "<node {}>", *host_id);
+        }
+        if (const auto rack = v.rack()) {
+            return fmt::format_to(ctx.out(), "<rack {} {}>", *v.datacenter(), *rack);
+        }
+        if (const auto dc = v.datacenter()) {
+            return fmt::format_to(ctx.out(), "<datacenter {}>", *dc);
+        }
+        return fmt::format_to(ctx.out(), "<all scopes>");
+    }
+};
+
 auto fmt::formatter<auth::data_resource_view>::format(const auth::data_resource_view& v,
                                                       fmt::format_context& ctx) const -> decltype(ctx.out()) {
     const auto keyspace = v.keyspace();
@@ -491,6 +665,7 @@ auto fmt::formatter<auth::resource>::format(const auth::resource& r,
     case service_level: return fmt::format_to(out, "{}", auth::service_level_resource_view(r));
     case functions: return fmt::format_to(out, "{}", auth::functions_resource_view(r));
     case object_storage: return fmt::format_to(out, "{}", auth::object_storage_resource_view(r));
+    case cluster: return fmt::format_to(out, "{}", auth::cluster_resource_view(r));
     }
     return out;
 }

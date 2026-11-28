@@ -24,7 +24,9 @@ cql3::statements::grant_statement::execute(query_processor&, service::query_stat
     auto& auth_service = *state.get_client_state().get_auth_service();
     try {
         service::group0_batch mc{std::move(guard)};
-        co_await auth::grant_permissions(auth_service, _role_name, _permissions, _resource, mc);
+        co_await for_each_resource([&] (const auth::resource& r) {
+            return auth::grant_permissions(auth_service, _role_name, _permissions, r, mc);
+        });
         co_await auth::commit_mutations(auth_service, std::move(mc));
     } catch (const auth::nonexistant_role& e) {
         throw exceptions::invalid_request_exception(e.what());

@@ -177,7 +177,7 @@ std::string_view transitional_authorizer::qualified_java_name() const {
     return "com.scylladb.auth.TransitionalAuthorizer";
 }
 
-future<permission_set> transitional_authorizer::authorize(const role_or_anonymous&, const resource&) const {
+future<permission_set> transitional_authorizer::authorize(const role_or_anonymous&, const resource& r) const {
     static const permission_set transitional_permissions =
             permission_set::of<
                     permission::CREATE,
@@ -185,8 +185,12 @@ future<permission_set> transitional_authorizer::authorize(const role_or_anonymou
                     permission::DROP,
                     permission::SELECT,
                     permission::MODIFY>();
+    // Whoever may ALTER a keyspace or a table may also set its cluster config options.
+    // The cluster and topology scopes stay with superusers.
+    static const permission_set transitional_data_permissions = permission_set::from_mask(
+            transitional_permissions.mask() | permission_set::mask_for(permission::CONFIGURE));
 
-    return make_ready_future<permission_set>(transitional_permissions);
+    return make_ready_future<permission_set>(r.kind() == resource_kind::data ? transitional_data_permissions : transitional_permissions);
 }
 
 future<> transitional_authorizer::grant(std::string_view s, permission_set ps, const resource& r, ::service::group0_batch& mc) {
@@ -195,6 +199,10 @@ future<> transitional_authorizer::grant(std::string_view s, permission_set ps, c
 
 future<> transitional_authorizer::revoke(std::string_view s, permission_set ps, const resource& r, ::service::group0_batch& mc) {
     return _authorizer->revoke(s, std::move(ps), r, mc);
+}
+
+future<std::vector<permission_details>> transitional_authorizer::list_granted_to(std::string_view role_name) const {
+    return _authorizer->list_granted_to(role_name);
 }
 
 future<std::vector<permission_details>> transitional_authorizer::list_all() const {

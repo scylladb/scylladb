@@ -113,14 +113,132 @@ the next broader scope, or to its default:
 Only the bare ``NULL`` keyword removes a value. The string ``'null'`` is an ordinary value and is
 validated like any other, so a boolean option rejects it.
 
+.. _cql-cluster-config-permissions:
+
 Permissions
 -----------
 
-The permission required depends on the scope, not on the option:
+Setting or removing a cluster configuration option requires the ``CONFIGURE`` permission.
+Superusers always have it. For other roles it is granted with the standard
+:ref:`GRANT <grant-permission-statement>` statement, on the place where the option may be set
+and, optionally, for named options only:
 
-* ``ALTER TABLE ... WITH`` requires ``ALTER`` permission on the table.
-* ``ALTER KEYSPACE ... WITH`` requires ``ALTER`` permission on the keyspace.
-* ``ALTER CLUSTER``, ``ALTER DATACENTER``, ``ALTER RACK`` and ``ALTER NODE`` require a superuser.
+.. code-block:: cql
+
+   grant_configure_statement: GRANT CONFIGURE [ '(' `option` ( ',' `option` )* ')' ] ON `config_resource` TO `role_name`
+   config_resource: ALL SCOPES
+                  :| DATACENTER `datacenter_name`
+                  :| RACK `datacenter_name` `rack_name`
+                  :| NODE `host_id`
+                  :| ALL KEYSPACES
+                  :| KEYSPACE `keyspace_name`
+                  :| [ TABLE ] `table_name`
+
+Without an option list the permission covers every option, including options added by later
+ScyllaDB versions. With a list it covers only the named options.
+
+``ALL SCOPES`` stands for the whole cluster: it covers every scope. A permission on any other
+resource covers that scope and every narrower one:
+
+* ``TABLE`` is covered by its ``KEYSPACE``, which is covered by ``ALL KEYSPACES``, which is
+  covered by ``ALL SCOPES``.
+* ``NODE`` is covered by its ``RACK``, which is covered by its ``DATACENTER``, which is covered by
+  ``ALL SCOPES``.
+
+``ALL KEYSPACES`` covers every keyspace and table but not ``ALTER CLUSTER``.
+
+.. list-table::
+   :widths: 45 55
+   :header-rows: 1
+
+   * - Statement
+     - Requires ``CONFIGURE`` for the option on
+   * - ``ALTER CLUSTER WITH``
+     - ``ALL SCOPES``
+   * - ``ALTER DATACENTER dc WITH``
+     - ``DATACENTER dc`` or ``ALL SCOPES``
+   * - ``ALTER RACK dc rack WITH``
+     - ``RACK dc rack``, ``DATACENTER dc`` or ``ALL SCOPES``
+   * - ``ALTER NODE host_id WITH``
+     - ``NODE host_id``, its rack, its datacenter or ``ALL SCOPES``
+   * - ``ALTER KEYSPACE ks WITH``, ``CREATE KEYSPACE ks WITH``
+     - ``KEYSPACE ks``, ``ALL KEYSPACES`` or ``ALL SCOPES``
+   * - ``ALTER TABLE ks.t WITH``, ``CREATE TABLE ks.t WITH``
+     - ``TABLE ks.t``, ``KEYSPACE ks``, ``ALL KEYSPACES`` or ``ALL SCOPES``
+
+Examples:
+
+.. code-block:: cql
+
+   -- A configuration administrator: every option, at every scope.
+   GRANT CONFIGURE ON ALL SCOPES TO config_admin;
+
+   -- A repair operator: two options, cluster-wide and on any keyspace or table.
+   GRANT CONFIGURE (auto_repair_enabled, auto_repair_threshold_in_seconds) ON ALL SCOPES TO repair_admin;
+
+   -- A tenant may tune one option inside its own keyspace.
+   GRANT CONFIGURE (auto_repair_enabled) ON KEYSPACE tenant_a_ks TO tenant_a;
+
+   -- An operator of one datacenter.
+   GRANT CONFIGURE ON DATACENTER dc1 TO dc1_ops;
+
+   REVOKE CONFIGURE (auto_repair_enabled) ON KEYSPACE tenant_a_ks FROM tenant_a;
+   LIST ALL PERMISSIONS OF tenant_a;
+
+With the grants above, ``tenant_a`` can run ``ALTER KEYSPACE tenant_a_ks WITH auto_repair_enabled = true``
+and ``ALTER TABLE tenant_a_ks.events WITH auto_repair_enabled = false``, but not
+``ALTER CLUSTER WITH auto_repair_enabled = true`` and not the same statements on another keyspace.
+
+The following rules apply:
+
+* ``CONFIGURE`` is separate from the data permissions. ``ALTER`` on a table or a keyspace does not
+  allow setting a cluster configuration option on it, and ``CONFIGURE`` does not allow any other
+  schema change. A statement that also changes other properties, such as
+  ``ALTER TABLE ks.t WITH comment = 'x' AND auto_repair_enabled = true``, needs both permissions,
+  and ``CREATE TABLE ... WITH <option>`` needs ``CREATE`` on the keyspace as well.
+* ``GRANT ALL`` does not include ``CONFIGURE``, and the creator of a keyspace or a table is not
+  granted it automatically. It is granted only by name. ``REVOKE ALL`` revokes it, together with
+  the grants for named options on the resource, when the role that runs it holds ``CONFIGURE``
+  on the resource itself; otherwise it leaves ``CONFIGURE`` grants in place.
+* A statement that only sets cluster configuration options is still refused on the system and
+  internal tables that cannot be altered.
+* Removing a value (``= NULL``) requires the same permission as setting one.
+* To grant or revoke ``CONFIGURE``, a role needs ``AUTHORIZE`` on the resource or on a resource
+  that covers it, and must itself hold what it grants. For example, a role with
+  ``CONFIGURE (auto_repair_enabled)`` and ``AUTHORIZE`` on ``ALL SCOPES`` can grant
+  ``CONFIGURE (auto_repair_enabled)`` on a keyspace, but no other option.
+* ``REVOKE CONFIGURE ON <resource>`` without an option list also revokes the grants for named
+  options on that resource.
+* The option in a grant must be one that can be set at the resource's scope or a narrower one. An
+  option that only supports the ``CLUSTER`` scope can be granted only on ``ALL SCOPES``.
+  ``REVOKE`` does not check this, nor that the option is known, so a grant can always be removed.
+* ``LIST PERMISSIONS`` shows a grant for a named option as ``CONFIGURE (option)``.
+  ``LIST CONFIGURE (option)`` shows the grants that cover the option.
+* Dropping a keyspace or a table removes the grants on it. A grant on a datacenter, rack or node
+  is not removed when it leaves the cluster; revoke it explicitly, which works after the
+  datacenter, rack or node is gone. A grant on a node does not carry over to a node that
+  replaces it.
+* ``CONFIGURE`` can be granted only when all nodes in the cluster run a ScyllaDB version that
+  supports it.
+* Reading the stored values and ``DESCRIBE`` require no permission beyond logging in.
+* ``DESCRIBE SCHEMA WITH INTERNALS`` lists the ``CONFIGURE`` grants except those on a node, whose
+  host ID exists in one cluster only.
+
+.. note::
+
+   In ScyllaDB 2026.4, ``ALTER`` on a keyspace or a table was enough to set a cluster
+   configuration option on it, and the other scopes required a superuser. These rules stay in
+   force during a rolling upgrade from 2026.4. Once every node is upgraded, ``CONFIGURE`` is
+   required and can be granted: grant it to the roles that set options, which until then only
+   superusers can do.
+
+A role that restores a schema dump containing cluster configuration options needs
+``CONFIGURE ON ALL SCOPES`` in addition to its data permissions.
+
+When authorization is disabled (``AllowAllAuthorizer``), there are no grants. Every user can set
+options on keyspaces and tables. If authentication is enabled, ``ALTER CLUSTER``,
+``ALTER DATACENTER``, ``ALTER RACK`` and ``ALTER NODE`` require a superuser; otherwise every user
+can run them.
 
 Inspecting effective values
 ---------------------------

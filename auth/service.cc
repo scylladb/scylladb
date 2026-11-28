@@ -59,6 +59,9 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "service/storage_service.hh"
+#include "service/storage_proxy.hh"
+#include "locator/token_metadata.hh"
+#include "locator/topology.hh"
 #include "service_permit.hh"
 #include "utils/managed_string.hh"
 
@@ -353,6 +356,36 @@ future<bool> service::exists(const resource& r) const {
             auto [name, function_args] = auth::decode_signature(*function_signature);
             return make_ready_future<bool>(cql3::functions::instance().find(db::functions::function_name{sstring(*keyspace), name}, function_args));
         }
+
+        case resource_kind::cluster: {
+            const auto tmptr = _qp.proxy().get_token_metadata_ptr();
+            const auto& topology = tmptr->get_topology();
+
+            cluster_resource_view v(r);
+            const auto dc = v.datacenter();
+            const auto rack = v.rack();
+            const auto host_id = v.host_id();
+
+            if (host_id) {
+                utils::UUID id;
+                try {
+                    id = utils::UUID(*host_id);
+                } catch (...) {
+                    return make_ready_future<bool>(false);
+                }
+                const auto* node = topology.find_node(locator::host_id(id));
+                return make_ready_future<bool>(node && node->dc_rack().dc == *dc && node->dc_rack().rack == *rack);
+            }
+            if (rack) {
+                const auto& dc_racks = topology.get_datacenter_racks();
+                const auto it = dc_racks.find(sstring(*dc));
+                return make_ready_future<bool>(it != dc_racks.end() && it->second.contains(sstring(*rack)));
+            }
+            if (dc) {
+                return make_ready_future<bool>(topology.get_datacenters().contains(sstring(*dc)));
+            }
+            return make_ready_future<bool>(true);
+        }
     }
 
     return make_ready_future<bool>(false);
@@ -418,7 +451,10 @@ future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_
 
 // The function doesn't assume anything about `role`.
 static sstring describe_data_resource(const permission& perm, const resource& r, std::string_view role) {
-    const auto permission = permissions::to_string(perm);
+    sstring permission = permissions::to_string(perm);
+    if (const auto& option = r.config_option()) {
+        permission = seastar::format("{} ({})", permission, cql3::util::maybe_quote(*option));
+    }
     const auto formatted_role = cql3::util::maybe_quote(role);
 
     const auto view = data_resource_view(r);
@@ -520,6 +556,29 @@ static sstring describe_udf_resource(const permission& perm, const resource& r, 
 }
 
 // The function doesn't assume anything about `role`.
+static sstring describe_cluster_resource(const permission& perm, const resource& r, std::string_view role) {
+    const auto formatted_role = cql3::util::maybe_quote(role);
+    const auto view = cluster_resource_view(r);
+
+    sstring permission = permissions::to_string(perm);
+    if (const auto& option = r.config_option()) {
+        permission = seastar::format("{} ({})", permission, cql3::util::maybe_quote(*option));
+    }
+
+    if (const auto host_id = view.host_id()) {
+        return seastar::format("GRANT {} ON NODE {} TO {};", permission, *host_id, formatted_role);
+    }
+    if (const auto rack = view.rack()) {
+        return seastar::format("GRANT {} ON RACK {} {} TO {};", permission,
+                cql3::util::maybe_quote(sstring(*view.datacenter())), cql3::util::maybe_quote(sstring(*rack)), formatted_role);
+    }
+    if (const auto dc = view.datacenter()) {
+        return seastar::format("GRANT {} ON DATACENTER {} TO {};", permission, cql3::util::maybe_quote(sstring(*dc)), formatted_role);
+    }
+    return seastar::format("GRANT {} ON ALL SCOPES TO {};", permission, formatted_role);
+}
+
+// The function doesn't assume anything about `role`.
 static sstring describe_resource_kind(const permission& perm, const resource& r, std::string_view role) {
     switch (r.kind()) {
         case resource_kind::data:
@@ -532,6 +591,8 @@ static sstring describe_resource_kind(const permission& perm, const resource& r,
             return describe_udf_resource(perm, r, role);
         case resource_kind::object_storage:
             return seastar::format("GRANT {} ON ALL OBJECT STORAGE TO {};", permissions::to_string(perm), cql3::util::maybe_quote(role));
+        case resource_kind::cluster:
+            return describe_cluster_resource(perm, r, role);
     }
 }
 
@@ -549,6 +610,11 @@ future<std::vector<cql3::description>> service::describe_permissions() const {
     });
 
     for (const auto& permissions : permission_list) {
+        // A grant on a node names a host ID, which no other cluster has. A replayed dump
+        // would fail on it, so it is left out, like the node's config overrides.
+        if (permissions.resource.kind() == resource_kind::cluster && cluster_resource_view(permissions.resource).host_id()) {
+            continue;
+        }
         for (const auto& permission : permissions.permissions) {
             sstring create_statement = describe_resource_kind(permission, permissions.resource, permissions.role_name);
 
@@ -706,7 +772,11 @@ future<> grant_permissions(
 }
 
 future<> grant_applicable_permissions(const service& ser, std::string_view role_name, const resource& r, ::service::group0_batch& mc) {
-    return grant_permissions(ser, role_name, r.applicable_permissions(), r, mc);
+    // CONFIGURE is never granted implicitly: the creator of a keyspace or a table must not
+    // get the restricted cluster config options of it.
+    auto perms = r.applicable_permissions();
+    perms.remove(permission::CONFIGURE);
+    return grant_permissions(ser, role_name, perms, r, mc);
 }
 
 future<> grant_applicable_permissions(const service& ser, const authenticated_user& u, const resource& r, ::service::group0_batch& mc) {
@@ -726,6 +796,16 @@ future<> revoke_permissions(
     co_await ser.underlying_authorizer().revoke(role_name, perms, r, mc);
 }
 
+future<> revoke_config_option_permissions(const service& ser, std::string_view role_name, const resource& r, ::service::group0_batch& mc) {
+    co_await validate_role_exists(ser, role_name);
+    const auto details = co_await ser.underlying_authorizer().list_granted_to(role_name);
+    for (const auto& pd : details) {
+        if (pd.resource.config_option() && pd.resource.without_config_option() == r) {
+            co_await ser.underlying_authorizer().revoke(role_name, permission_set::of<permission::CONFIGURE>(), pd.resource, mc);
+        }
+    }
+}
+
 future<> revoke_all(const service& ser, const resource& r, ::service::group0_batch& mc) {
     return ser.revoke_all(r, mc);
 }
@@ -741,12 +821,17 @@ future<std::vector<permission_details>> list_filtered_permissions(
         if (resource_filter) {
             const resource r = resource_filter->first;
 
-            const auto resources = resource_filter->second
+            auto resources = resource_filter->second
                     ? auth::expand_resource_family(r)
                     : auth::resource_set{r};
+            if (resource_filter->second && r.kind() == resource_kind::data) {
+                // CLUSTER is the broadest cluster config scope above a keyspace or a table.
+                resources.insert(root_cluster_resource());
+            }
 
+            // A grant narrowed to a config option is listed with the resource it is narrowed on.
             std::erase_if(all_details, [&resources](const permission_details& pd) {
-                return !resources.contains(pd.resource);
+                return !resources.contains(pd.resource.without_config_option());
             });
         }
 

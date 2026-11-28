@@ -14,6 +14,9 @@
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include "db/cql_type_parser.hh"
+#include "locator/token_metadata.hh"
+#include "locator/topology.hh"
+#include "service/storage_proxy.hh"
 
 uint32_t cql3::statements::authorization_statement::get_bound_terms() const {
     return 0;
@@ -68,6 +71,21 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
                 }) | std::ranges::to<std::vector>();
         }
         resource = auth::make_functions_resource(*keyspace, auth::encode_signature(function_name, parsed_types));
+    } else if (resource.kind() == auth::resource_kind::cluster) {
+        // The parser does not know a node's datacenter and rack, which are part of its name.
+        const auto view = auth::cluster_resource_view(resource);
+        const auto host_id = view.host_id();
+        if (host_id && view.datacenter()->empty()) {
+            // The stored name uses the canonical spelling of the host ID, as ALTER NODE does.
+            const auto id = utils::UUID(*host_id);
+            const auto canonical_id = fmt::to_string(id);
+            const auto tmptr = qp.proxy().get_token_metadata_ptr();
+            if (const auto* node = tmptr->get_topology().find_node(locator::host_id(id))) {
+                resource = auth::make_cluster_resource(node->dc_rack().dc, node->dc_rack().rack, canonical_id);
+            } else {
+                resource = auth::make_cluster_resource("", "", canonical_id);
+            }
+        }
     }
 }
 

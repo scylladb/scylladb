@@ -20,6 +20,8 @@
 #include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "cql3/statements/cluster_config_props.hh"
+#include "auth/resource.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/cql_config.hh"
 #include "db/config.hh"
@@ -52,7 +54,9 @@ const sstring& create_keyspace_statement::keyspace() const
 
 future<> create_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    return state.has_all_keyspaces_access(auth::permission::CREATE);
+    co_await state.has_all_keyspaces_access(auth::permission::CREATE);
+    co_await cluster_config_props::ensure_config_access(state, qp.proxy().features(), auth::make_data_resource(_name),
+            _attrs->get_keyspace_config_names(qp.proxy().features()), [] { return make_ready_future<>(); });
 }
 
 void create_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const

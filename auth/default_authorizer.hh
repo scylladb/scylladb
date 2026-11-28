@@ -50,6 +50,8 @@ public:
 
     virtual future<std::vector<permission_details>> list_all() const override;
 
+    virtual future<std::vector<permission_details>> list_granted_to(std::string_view role_name) const override;
+
     virtual future<> revoke_all(std::string_view, ::service::group0_batch&) override;
 
     virtual future<> revoke_all(const resource&, ::service::group0_batch&) override;

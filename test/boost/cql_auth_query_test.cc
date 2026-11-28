@@ -22,7 +22,9 @@
 #include "auth/authenticated_user.hh"
 #include "auth/permission.hh"
 #include "auth/service.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/config.hh"
+#include "locator/token_metadata.hh"
 #include "exceptions/exceptions.hh"
 #include "seastarx.hh"
 #include "service/client_state.hh"
@@ -285,9 +287,12 @@ static void verify_default_permissions(
             auth::authenticated_user(user),
             r).get();
 
+    // The creator gets every applicable permission except CONFIGURE, which is granted only by name.
+    auto expected_permissions = r.applicable_permissions();
+    expected_permissions.remove(auth::permission::CONFIGURE);
     BOOST_REQUIRE_EQUAL(
             auth::permissions::to_strings(default_permissions),
-            auth::permissions::to_strings(r.applicable_permissions()));
+            auth::permissions::to_strings(expected_permissions));
 }
 
 SEASTAR_TEST_CASE(create_role_default_permissions) {
@@ -666,6 +671,124 @@ SEASTAR_TEST_CASE(pattern_and_text_search_indexing_permissions_are_isolated) {
                 });
             },
             enable_tablets(db_config_with_auth()));
+}
+
+//
+// Cluster config: CONFIGURE
+//
+
+// Grants on a datacenter, a rack and a node authorize ALTER DATACENTER/RACK/NODE at and
+// below the granted target, and nothing above it.
+SEASTAR_TEST_CASE(configure_on_topology_targets) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        db::cluster_config_registry::add_test_only_option_on_all_shards(env.get_feature_service(), db::cluster_config_registry::option{
+            .name = "test_node_option",
+            .scopes = db::cluster_config_registry::scope_set::of<
+                    db::cluster_config_registry::scope::cluster,
+                    db::cluster_config_registry::scope::datacenter,
+                    db::cluster_config_registry::scope::rack,
+                    db::cluster_config_registry::scope::node>(),
+            .default_value = int64_t(0),
+        }).get();
+        auto clear_test_options = defer([] noexcept {
+            db::cluster_config_registry::clear_test_only_options_on_all_shards().get();
+        });
+
+        const auto& topo = env.shared_token_metadata().local().get()->get_topology();
+        const sstring dc = topo.get_datacenter();
+        const sstring rack = topo.get_rack();
+        const auto node = topo.my_host_id().uuid();
+
+        const auto alter_cluster = sstring("ALTER CLUSTER WITH test_node_option = 1");
+        const auto alter_dc = seastar::format("ALTER DATACENTER \"{}\" WITH test_node_option = 2", dc);
+        const auto alter_rack = seastar::format("ALTER RACK \"{}\" \"{}\" WITH test_node_option = 3", dc, rack);
+        const auto alter_node = seastar::format("ALTER NODE {} WITH test_node_option = 4", node);
+
+        const auto refused = [&env] (std::string_view user, const sstring& query) {
+            with_user(env, user, [&env, &query] {
+                BOOST_REQUIRE_THROW(env.execute_cql(query).get(), exceptions::unauthorized_exception);
+            });
+        };
+
+        // A grant narrowed to the option on the node covers the node only.
+        verify_unauthorized_then_ok(env, alice, alter_node, [&] {
+            env.execute_cql(seastar::format("GRANT CONFIGURE (test_node_option) ON NODE {} TO alice", node)).get();
+        });
+        refused(alice, alter_rack);
+        refused(alice, alter_dc);
+        refused(alice, alter_cluster);
+
+        // A grant on the datacenter covers the datacenter, its racks and its nodes.
+        refused(bob, alter_node);
+        refused(bob, alter_rack);
+        verify_unauthorized_then_ok(env, bob, alter_dc, [&] {
+            env.execute_cql(seastar::format("GRANT CONFIGURE ON DATACENTER \"{}\" TO bob", dc)).get();
+        });
+        with_user(env, bob, [&] {
+            env.execute_cql(alter_rack).get();
+            env.execute_cql(alter_node).get();
+        });
+        refused(bob, alter_cluster);
+
+        verify_unauthorized_then_ok(env, alice, alter_rack, [&] {
+            env.execute_cql(seastar::format("GRANT CONFIGURE (test_node_option) ON RACK \"{}\" \"{}\" TO alice", dc, rack)).get();
+        });
+        refused(alice, alter_dc);
+
+        verify_unauthorized_then_ok(env, alice, alter_cluster, [&] {
+            env.execute_cql("GRANT CONFIGURE (test_node_option) ON ALL SCOPES TO alice").get();
+        });
+        with_user(env, alice, [&] {
+            env.execute_cql(alter_dc).get();
+        });
+    }, db_config_with_auth());
+}
+
+// An owner-settable option can be set at keyspace and table scope with ALTER on the data
+// resource as well as with CONFIGURE. At cluster scope it needs CONFIGURE.
+SEASTAR_TEST_CASE(configure_owner_settable_option) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        db::cluster_config_registry::add_test_only_option_on_all_shards(env.get_feature_service(), db::cluster_config_registry::option{
+            .name = "test_owner_option",
+            .scopes = db::cluster_config_registry::scope_set::of<
+                    db::cluster_config_registry::scope::cluster,
+                    db::cluster_config_registry::scope::keyspace,
+                    db::cluster_config_registry::scope::table>(),
+            .default_value = int64_t(0),
+            .access = db::cluster_config_registry::option_access::owner_settable,
+        }).get();
+        auto clear_test_options = defer([] noexcept {
+            db::cluster_config_registry::clear_test_only_options_on_all_shards().get();
+        });
+
+        env.execute_cql("CREATE TABLE ks.owner_opt (pk int PRIMARY KEY)").get();
+        const auto alter_table = sstring("ALTER TABLE ks.owner_opt WITH test_owner_option = 1");
+        const auto alter_keyspace = sstring("ALTER KEYSPACE ks WITH test_owner_option = 2");
+        const auto alter_cluster = sstring("ALTER CLUSTER WITH test_owner_option = 3");
+
+        // ALTER on the table is enough for the table, and for nothing broader.
+        verify_unauthorized_then_ok(env, alice, alter_table, [&env] {
+            env.execute_cql("GRANT ALTER ON TABLE ks.owner_opt TO alice").get();
+        });
+        with_user(env, alice, [&] {
+            BOOST_REQUIRE_THROW(env.execute_cql(alter_keyspace).get(), exceptions::unauthorized_exception);
+            BOOST_REQUIRE_THROW(env.execute_cql(alter_cluster).get(), exceptions::unauthorized_exception);
+        });
+        verify_unauthorized_then_ok(env, alice, alter_keyspace, [&env] {
+            env.execute_cql("GRANT ALTER ON KEYSPACE ks TO alice").get();
+        });
+        with_user(env, alice, [&] {
+            BOOST_REQUIRE_THROW(env.execute_cql(alter_cluster).get(), exceptions::unauthorized_exception);
+        });
+
+        // CONFIGURE works without ALTER.
+        verify_unauthorized_then_ok(env, bob, alter_table, [&env] {
+            env.execute_cql("GRANT CONFIGURE (test_owner_option) ON TABLE ks.owner_opt TO bob").get();
+        });
+        verify_unauthorized_then_ok(env, bob, alter_cluster, [&env] {
+            env.execute_cql("GRANT CONFIGURE (test_owner_option) ON ALL SCOPES TO bob").get();
+        });
+    }, db_config_with_auth());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

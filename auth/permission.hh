@@ -43,6 +43,9 @@ enum class permission {
 
     // function/aggregate/procedure calls
     EXECUTE,
+
+    // cluster config
+    CONFIGURE, // required to set or remove a restricted cluster config option. Not part of ALL.
 };
 
 typedef enum_set<
@@ -60,13 +63,17 @@ typedef enum_set<
                 permission::EXECUTE,
                 permission::VECTOR_SEARCH_INDEXING,
                 permission::TEXT_SEARCH_INDEXING,
-                permission::PATTERN_SEARCH_INDEXING>> permission_set;
+                permission::PATTERN_SEARCH_INDEXING,
+                permission::CONFIGURE>> permission_set;
 
 bool operator<(const permission_set&, const permission_set&);
 
 namespace permissions {
 
+// What GRANT ALL means. It leaves out the permissions that are granted only by name.
 extern const permission_set ALL;
+// Every permission an authorizer that allows everything hands out.
+extern const permission_set ALL_AND_CONFIGURE;
 extern const permission_set NONE;
 
 const sstring& to_string(permission);

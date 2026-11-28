@@ -489,6 +489,10 @@ std::vector<std::pair<sstring, std::optional<sstring>>> ks_prop_defs::get_keyspa
     return cluster_config_props::config_updates(keyspace_scope, *this, feat);
 }
 
+std::vector<sstring> ks_prop_defs::get_keyspace_config_names(const gms::feature_service& feat) const {
+    return cluster_config_props::config_names(keyspace_scope, *this, feat);
+}
+
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
     auto sc = get_replication_strategy_class().value();
     // if tablets options have not been specified, but tablets are globally enabled, set the value to 0. The strategy will

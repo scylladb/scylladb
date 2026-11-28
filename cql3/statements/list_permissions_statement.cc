@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
+#include <algorithm>
 #include <vector>
 #include <seastar/core/future-util.hh>
 
@@ -16,6 +17,7 @@
 #include "auth/common.hh"
 #include "cql3/result_set.hh"
 #include "db/system_keyspace.hh"
+#include "exceptions/exceptions.hh"
 #include "transport/messages/result_message.hh"
 #include "service/raft/raft_group0_client.hh"
 
@@ -31,11 +33,19 @@ shared_ptr<const cql3::metadata> cql3::statements::list_permissions_statement::g
 cql3::statements::list_permissions_statement::list_permissions_statement(
         auth::permission_set permissions,
         std::optional<auth::resource> resource,
-        std::optional<sstring> role_name, bool recursive)
+        std::optional<sstring> role_name, bool recursive, std::vector<sstring> config_options)
             : _permissions(permissions)
             , _resource(std::move(resource))
             , _role_name(std::move(role_name))
-            , _recursive(recursive) {
+            , _recursive(recursive)
+            , _config_options(std::move(config_options)) {
+    if (!_config_options.empty() && _permissions.mask() != auth::permission_set::of<auth::permission::CONFIGURE>().mask()) {
+        throw exceptions::syntax_exception("Only the CONFIGURE permission takes a list of cluster config options.");
+    }
+    // CONFIGURE is not part of ALL when granting, but a listing of all permissions shows it.
+    if (_permissions.mask() == auth::permissions::ALL.mask()) {
+        _permissions = auth::permissions::ALL_AND_CONFIGURE;
+    }
 }
 
 std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_permissions_statement::prepare(
@@ -109,7 +119,14 @@ cql3::statements::list_permissions_statement::execute(
                 as,
                 _permissions,
                 _role_name,
-                resource_filter).then([metadata = std::move(metadata)](std::vector<auth::permission_details> all_details) mutable {
+                resource_filter).then([this, metadata = std::move(metadata)](std::vector<auth::permission_details> all_details) mutable {
+            if (!_config_options.empty()) {
+                // A grant for all options covers the listed ones too.
+                std::erase_if(all_details, [this] (const auth::permission_details& pd) {
+                    const auto& option = pd.resource.config_option();
+                    return option && !std::ranges::contains(_config_options, *option);
+                });
+            }
             std::sort(all_details.begin(), all_details.end());
 
             auto rs = std::make_unique<result_set>(std::move(metadata));
@@ -130,6 +147,8 @@ cql3::statements::list_permissions_statement::execute(
 
                 const auto decomposed_role_name = utf8_type->decompose(pd.role_name);
                 const auto decomposed_resource = utf8_type->decompose(sstring(format("{}", pd.resource)));
+                // A permission narrowed to a cluster config option is shown as "CONFIGURE (option)".
+                const auto& option = pd.resource.config_option();
 
                 for (const auto& ps : sorted_permission_names) {
                     rs->add_row(
@@ -137,7 +156,7 @@ cql3::statements::list_permissions_statement::execute(
                                     decomposed_role_name,
                                     decomposed_role_name,
                                     decomposed_resource,
-                                    utf8_type->decompose(ps)});
+                                    utf8_type->decompose(option ? sstring(format("{} ({})", ps, *option)) : ps)});
                 }
             }
 
