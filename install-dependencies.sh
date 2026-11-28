@@ -71,7 +71,10 @@ fedora_packages=(
     compiler-rt
     libasan
     libubsan
-    gdb
+    # gdb 18.1 needs ~16GB and ~2 minutes to load a release scylla binary
+    # (17.x: ~2.6GB, ~6s), so test/scylla_gdb runs push CI hosts out of memory.
+    # https://sourceware.org/bugzilla/show_bug.cgi?id=34990
+    'gdb < 18'
     lua-devel
     yaml-cpp-devel
     jsoncpp-devel
@@ -166,8 +169,8 @@ fedora_python3_packages=(
 
 # an associative array from packages to constrains
 #
-# These are packages also needed outside of test.py (e.g. by cqlsh, or by the
-# shipped python3 relocatable package / dist/common/scripts). test.py's own
+# These are packages also needed outside of test.py (e.g. by the shipped
+# python3 relocatable package / dist/common/scripts). test.py's own
 # dependencies (scylla-driver and everything else it or pytest needs to run)
 # live in test/pyproject.toml / test/uv.lock instead: test.py re-execs itself
 # under `uv run --locked` on startup (see _ensure_running_under_uv() in
@@ -177,7 +180,9 @@ fedora_python3_packages=(
 # relying on this image.
 declare -A pip_packages=(
     [conan]=""
-    [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
+    # Only for scripts/tablets (scylla-tablets reading a live cluster) and
+    # scripts/tablet-mon.py: cqlsh ships its own driver. Their owners bump it.
+    [scylla-driver]="==3.29.13"
     [geomet]=""
     [traceback-with-variables]=""
     [scylla-api-client]=""
