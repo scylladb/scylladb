@@ -43,7 +43,7 @@ public:
     collection_mutation_view as_collection_mutation() const;
     bytes_view serialize() const;
     bool equals(const abstract_type& type, const atomic_cell_or_collection& other) const;
-    size_t external_memory_usage(const abstract_type&) const;
+    size_t external_memory_usage() const;
 
     class printer {
         const column_definition& _cdef;
