@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import asyncio
 import time
 
 import pytest
@@ -48,6 +49,54 @@ async def test_create_role_visible_on_all_nodes(manager: ScyllaClusterManager) -
             f"Role {role} not visible on {host.address} immediately after creation. "
             f"Visible roles: {roles}"
         )
+
+
+
+@pytest.mark.parametrize("create", ["ROLE", "SERVICE_LEVEL"])
+@pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
+async def test_noop_create_does_not_block_apply(manager: ScyllaClusterManager, create: str) -> None:
+    """Reproduces SCYLLADB-6047: a no-op CREATE ... IF NOT EXISTS kept its
+    group0 guard while it sent the read barrier to all live nodes. The
+    guard holds the read-apply mutex, so group0 could not apply on its
+    node until all nodes answered.
+
+    Node B cannot apply group0 entries, so the broadcast of a no-op
+    statement on node A waits for B. Check that a change made through
+    node C is applied on node A in the meantime.
+    """
+    servers = await manager.servers_add(3, config=auth_config)
+    cql, hosts = await manager.get_ready_cql(servers)
+    server_a, server_b, _ = servers
+    host_a, _, host_c = hosts
+    existing = "e" + unique_name()
+    behind_b = "b" + unique_name()
+    new = "n" + unique_name()
+    table, column = ("roles", "role") if create == "ROLE" else ("service_levels_v2", "service_level")
+
+    async def applied_on_a(name: str) -> bool | None:
+        rows = await cql.run_async(f"SELECT {column} FROM system.{table} WHERE {column} = '{name}'", host=host_a)
+        return True if rows else None
+
+    await cql.run_async(f"CREATE {create} {existing}", host=host_a)
+
+    block_apply = "group0_state_machine::block_apply"
+    await manager.api.enable_injection(server_b.ip_addr, block_apply, one_shot=False)
+    statements = []
+    try:
+        statements.append(cql.run_async(f"CREATE {create} {behind_b}", host=host_c))
+        await wait_for(lambda: applied_on_a(behind_b), time.time() + 60, period=0.1)
+
+        await manager.api.set_logger_level(server_a.ip_addr, "group0_client", "debug")
+        log_a = await manager.server_open_log(server_a.server_id)
+        mark = await log_a.mark()
+        statements.append(cql.run_async(f"CREATE {create} IF NOT EXISTS {existing}", host=host_a))
+        await log_a.wait_for("broadcast_group0_read_barrier: sending read barrier", from_mark=mark, timeout=60)
+
+        statements.append(cql.run_async(f"CREATE {create} {new}", host=host_c))
+        await wait_for(lambda: applied_on_a(new), time.time() + 30, period=0.1)
+    finally:
+        await manager.api.disable_injection(server_b.ip_addr, block_apply)
+        await asyncio.gather(*statements)
 
 
 async def test_create_role_mixed_cluster(manager: ScyllaClusterManager,

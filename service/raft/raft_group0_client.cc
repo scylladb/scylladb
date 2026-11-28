@@ -515,6 +515,10 @@ future<> group0_batch::materialize_mutations() {
 
 future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
     if (_muts.size() == 0 && _generators.size() == 0) {
+        // Release the guard as add_entry() would. The batch outlives commit()
+        // in the caller, so the guard would otherwise block group0 operations
+        // and apply on this node during whatever the caller does next.
+        _guard.reset();
         co_return;
     }
     if (!_guard) {
@@ -530,6 +534,7 @@ future<> group0_batch::commit(::service::raft_group0_client& group0_client, seas
     // raft doesn't support streaming so we need to materialize all mutations in memory
     co_await materialize_mutations();
     if (_muts.empty()) {
+        _guard.reset();
         co_return;
     }
     utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
