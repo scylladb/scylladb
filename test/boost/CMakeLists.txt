@@ -14,6 +14,8 @@ add_scylla_test(alternator_unit_test
   LIBRARIES alternator)
 add_scylla_test(anchorless_list_test
   KIND BOOST)
+add_scylla_test(atomic_cell_or_collection_block_test
+  KIND SEASTAR)
 add_scylla_test(audit_rule_test
   KIND SEASTAR
   LIBRARIES audit)
@@ -217,8 +219,6 @@ add_scylla_test(partitioner_test
   KIND SEASTAR)
 add_scylla_test(pretty_printers_test
   KIND BOOST)
-add_scylla_test(radix_tree_test
-  KIND SEASTAR)
 add_scylla_test(range_tombstone_list_test
   KIND BOOST)
 add_scylla_test(rate_limiter_test

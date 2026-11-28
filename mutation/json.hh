@@ -18,6 +18,7 @@
  */
 
 class atomic_cell_or_collection;
+class atomic_cell_or_collection_view;
 class atomic_cell_view;
 class counter_cell_view;
 class row;
@@ -87,7 +88,7 @@ public:
     void write(counter_cell_view cv);
     void write(const atomic_cell_view& cell, data_type type, bool include_value = true);
     void write(collection_mutation_view cmv, data_type type, bool include_value = true);
-    void write(const atomic_cell_or_collection& cell, const column_definition& cdef, bool include_value = true);
+    void write(atomic_cell_or_collection_view cell, const column_definition& cdef, bool include_value = true);
     void write(const row& r, column_kind kind, bool include_value = true);
 };
 

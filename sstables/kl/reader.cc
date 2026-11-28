@@ -248,32 +248,84 @@ private:
             return false;
         };
 
-        void flush(const schema& s, mutation_fragment& mf) {
-            if (!_cdef) {
-                return;
-            }
+        const column_definition* cdef() const noexcept { return _cdef; }
+
+        atomic_cell_or_collection finish() const {
             collection_mutation_writer writer(tomb);
             for (const auto& [k, v] : cells) {
                 writer.push_back(bytes_view(k), atomic_cell_view(v));
             }
-            auto ac = atomic_cell_or_collection::from_collection_mutation(std::move(writer).finish());
-            if (_cdef->is_static()) {
-                mf.mutate_as_static_row(s, [&] (static_row& sr) mutable {
-                    sr.set_cell(*_cdef, std::move(ac));
-                });
-            } else {
-                mf.mutate_as_clustering_row(s, [&] (clustering_row& cr) {
-                    cr.set_cell(*_cdef, std::move(ac));
-                });
-            }
+            return atomic_cell_or_collection::from_collection_mutation(std::move(writer).finish());
         }
     };
     std::optional<collection_mutation> _pending_collection = {};
 
+    // Builds the cells of the row in _in_progress a block at a time. Cells come
+    // sorted by name, so in column id order.
+    std::optional<row::cell_appender> _cells;
+    // The column of the last cell added to the row in _in_progress.
+    std::optional<column_id> _last_column;
+
+    row& in_progress_cells(const column_definition& cdef) {
+        row* r = nullptr;
+        if (cdef.is_static()) {
+            _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) { r = &sr.cells(); });
+        } else {
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) { r = &cr.cells(); });
+        }
+        return *r;
+    }
+
+    void append_cell(const column_definition& cdef, atomic_cell_or_collection&& cell) {
+        // The elements of a collection are contiguous, so a cell of another column
+        // ends the pending collection, which comes before it.
+        if (_pending_collection && _pending_collection->cdef() != &cdef) {
+            flush_pending_collection();
+        }
+        if (_last_column && cdef.id <= *_last_column) {
+            // Only possible in a malformed sstable, with a column repeated within
+            // a row: merge the cell into the row, rather than append it.
+            finish_cells();
+            in_progress_cells(cdef).apply(cdef, std::move(cell));
+            return;
+        }
+        if (!_cells) {
+            _cells.emplace(in_progress_cells(cdef), *_schema, cdef.kind);
+        }
+        _cells->append(cdef.id, std::move(cell));
+        _last_column = cdef.id;
+    }
+
+    // Adds the appended cells to the row in _in_progress.
+    void finish_cells() {
+        if (!_cells) {
+            return;
+        }
+        auto finish = [&] (auto&) { _cells->finish(); };
+        if (_in_progress->is_static_row()) {
+            _in_progress->mutate_as_static_row(*_schema, finish);
+        } else {
+            _in_progress->mutate_as_clustering_row(*_schema, finish);
+        }
+        _cells.reset();
+    }
+
+    void end_row_cells() {
+        flush_pending_collection();
+        finish_cells();
+        _last_column.reset();
+    }
+
+    void discard_row_cells() {
+        _pending_collection = {};
+        _cells.reset();
+        _last_column.reset();
+    }
+
     collection_mutation& pending_collection(const column_definition *cdef) {
         parse_assert(cdef->is_multi_cell(), _sst->get_filename(), "frozen set should behave like a cell");
         if (!_pending_collection || _pending_collection->is_new_collection(cdef)) {
-            flush_pending_collection(*_schema);
+            flush_pending_collection();
             _pending_collection = collection_mutation(cdef);
         }
         return *_pending_collection;
@@ -319,10 +371,10 @@ private:
         pending_collection(cdef).tomb = std::move(t);
     }
 
-    void flush_pending_collection(const schema& s) {
+    void flush_pending_collection() {
         if (_pending_collection) {
-            _pending_collection->flush(s, *_in_progress);
-            _pending_collection = {};
+            auto pending = std::exchange(_pending_collection, std::nullopt);
+            append_cell(*pending->cdef(), pending->finish());
         }
     }
 
@@ -436,14 +488,15 @@ public:
             _in_progress ? std::optional<mutation_fragment::printer>(std::in_place, *_schema, *_in_progress) : std::optional<mutation_fragment::printer>(),
             _ready ? std::optional<mutation_fragment::printer>(std::in_place, *_schema, *_ready) : std::optional<mutation_fragment::printer>(),
             _skip_in_progress);
-        flush_pending_collection(*_schema);
         // If _ready is already set we have a bug: get_mutation_fragment()
         // was not called, and below we will lose one clustering row!
         parse_assert(!_ready, _sst->get_filename());
         if (!_skip_in_progress) {
+            end_row_cells();
             _ready = std::exchange(_in_progress, { });
             return push_ready_fragments_with_ready_set();
         } else {
+            discard_row_cells();
             _in_progress = { };
             _ready = { };
             _skip_in_progress = false;
@@ -550,17 +603,7 @@ public:
     // to be deserialized according to the schema.
     proceed consume_counter_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp) {
         return do_consume_cell(col_name, timestamp, 0, 0, [&] (auto&& col) {
-            auto ac = make_counter_cell(timestamp, value);
-
-            if (col.is_static) {
-                _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) mutable {
-                    sr.set_cell(*(col.cdef), std::move(ac));
-                });
-            } else {
-                _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
-                    cr.set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
-                });
-            }
+            append_cell(*col.cdef, make_counter_cell(timestamp, value));
         });
     }
 
@@ -613,15 +656,7 @@ public:
                                        gc_clock::duration(ttl),
                                        gc_clock::time_point(gc_clock::duration(expiration)),
                                        atomic_cell::collection_member::no);
-            if (col.is_static) {
-                _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) mutable {
-                    sr.set_cell(*(col.cdef), std::move(ac));
-                });
-                return;
-            }
-            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
-                cr.set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
-            });
+            append_cell(*col.cdef, std::move(ac));
         });
     }
 
@@ -660,14 +695,8 @@ public:
 
         if (is_multi_cell) {
             update_pending_collection(col.cdef, to_bytes(col.collection_extra_data), std::move(ac));
-        } else if (col.is_static) {
-            _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) {
-                sr.set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
-            });
         } else {
-            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
-                cr.set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
-            });
+            append_cell(*col.cdef, std::move(ac));
         }
         return ret;
     }
@@ -818,7 +847,7 @@ public:
         sstlog.trace("mp_row_consumer_k_l {}: reset({})", fmt::ptr(this), static_cast<int>(el));
         _ready = {};
         if (el == indexable_element::partition) {
-            _pending_collection = {};
+            discard_row_cells();
             _in_progress = {};
             _is_mutation_end = true;
             _out_of_range = true;

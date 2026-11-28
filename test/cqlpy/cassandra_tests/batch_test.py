@@ -78,9 +78,11 @@ def testOversizedBatch(cql, test_keyspace):
         noncounter = cql.prepare(f"insert into {table_noncounter}(id, val)values(?,?)")
         with pytest.raises(InvalidRequest):
             # In Scylla, the default batch_size_fail_threshold_in_kb is bigger
-            # so I increased the size of the string s
+            # so I increased the size of the string s, so that the values alone
+            # (2500 * 600 bytes) exceed it, regardless of the overhead in the
+            # in-memory representation of the batch, which Scylla measures.
             SIZE_FOR_FAILURE = 2500
-            s = "foobar" * 30
+            s = "foobar" * 100
             b = BatchStatement(batch_type=BatchType.UNLOGGED)
             for i in range(SIZE_FOR_FAILURE):
                 b.add(noncounter.bind([i, s]))
