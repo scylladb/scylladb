@@ -1470,3 +1470,20 @@ async def test_registry_sealed_state_survives_ungraceful_restart(manager: Scylla
         res = await cql.run_async(
             SimpleStatement(f"SELECT * FROM {ks}.test;", consistency_level=ConsistencyLevel.ONE), host=host)
         assert {r.name: r.value for r in res} == rows, 'Unexpected table content after restart'
+
+
+async def test_alter_keyspace_cluster_config_option(manager: ScyllaClusterManager, object_storage):
+    '''ALTER KEYSPACE which sets only cluster-config options keeps the keyspace's
+    storage options, so it works for a keyspace on object storage - although
+    the statement, which doesn't mention storage, would otherwise ask to move
+    the keyspace to local storage, which isn't supported.'''
+    cfg = {'object_storage_endpoints': object_storage.create_endpoint_conf()}
+    await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        storage = cql.execute(f"SELECT storage_type, storage_options FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'").one()
+        await cql.run_async(f'ALTER KEYSPACE {ks} WITH auto_repair_enabled = true')
+        row = cql.execute(f"SELECT configs, storage_type, storage_options FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'").one()
+        # Check that the option was set, and the storage options kept.
+        assert row.configs == {'auto_repair_enabled': 'true'}
+        assert (row.storage_type, row.storage_options) == (storage.storage_type, storage.storage_options)
